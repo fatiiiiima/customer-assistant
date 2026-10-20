@@ -74,6 +74,20 @@ def cars_listed(cars: list[CarView]) -> str:
     return f"I have {joined}. Which one would you like to hear more about?"
 
 
+def narrowing_situation(total: int, f: dict, asked: int = 0) -> tuple[str, dict]:
+    """Which narrowing situation applies (see phrasebook.py) and the values to fill into it."""
+    desc = describe_filters(f)
+    if asked >= 1:
+        sid = "narrow_again"
+    elif not f.get("make") and not f.get("model"):
+        sid = "narrow_make_mileage"
+    elif not f.get("max_price"):
+        sid = "narrow_budget"
+    else:
+        sid = "narrow_year_mileage"
+    return sid, {"total": total, "desc": desc}
+
+
 def narrowing_question(total: int, f: dict, asked: int = 0) -> str:
     desc = describe_filters(f)
     if asked >= 1:      # second time round: do not repeat the same words

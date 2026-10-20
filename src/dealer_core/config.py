@@ -149,6 +149,11 @@ class SendDetailsCfg(_Strict):
     mock: bool = True
 
 
+class DialogueCfg(_Strict):
+    variants: Literal["off", "on"] = "off"       # "on": use human-approved wording variants (config/phrase_variants.yaml)
+    variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
+
+
 class Config(_Strict):
     app: AppCfg = Field(default_factory=AppCfg)
     latency_log: LatencyLogCfg = Field(default_factory=LatencyLogCfg)
@@ -160,6 +165,7 @@ class Config(_Strict):
     test_drive: TestDriveCfg = Field(default_factory=TestDriveCfg)
     negotiation: NegotiationCfg
     send_details: SendDetailsCfg = Field(default_factory=SendDetailsCfg)
+    dialogue: DialogueCfg = Field(default_factory=DialogueCfg)
 
     @property
     def cloud_active(self) -> bool:

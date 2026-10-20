@@ -10,6 +10,7 @@ templated, every number comes from the tools / policy engine, and every state ch
 from __future__ import annotations
 
 import re
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from ..tools.phones import speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 from . import templates as T
+from .phrasebook import Phrasebook
 from . import voice_rules
 from .session import Pending, Session
 from .states import Intent, State
@@ -53,22 +55,27 @@ class TurnResult:
 
 
 class DialogueEngine:
-    def __init__(self, svc: DealerService, nlu: NluPipeline) -> None:
+    def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7) -> None:
         self.svc, self.nlu = svc, nlu
+        self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
+
+    def _say(self, s: Session, sid: str, **values: object) -> str:
+        """Base wording or an approved variant for a low-risk situation (see phrasebook.py)."""
+        return self.phrases.say(s.rng, s.last_variant, sid, **values)
 
     # ------------------------------------------------------------------------------------------------ entry points
     def new_session(self) -> Session:
-        return Session()
+        return Session(rng=random.Random(self.variant_seed))
 
     def opening(self, s: Session) -> str:
-        return T.OPENING
+        return self._say(s, "opening")
 
     def handle(self, s: Session, text: str) -> TurnResult:
         t0 = time.perf_counter()
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
             dbg.note = "session already ended"
-            return TurnResult(T.HANDOFF_WAIT if s.handoff else T.GOODBYE, dbg, True)
+            return TurnResult(T.HANDOFF_WAIT if s.handoff else self._say(s, "goodbye"), dbg, True)
         try:
             u = self.nlu.understand(s.state, s.car, text)
         except (BackendError, RuntimeError) as e:        # every NLU backend failed: never leave the caller hanging
@@ -141,11 +148,11 @@ class DialogueEngine:
             return self._handoff(s, dbg, EscalationReason.REQUESTED_HUMAN, "Of course. I'm connecting you with a colleague now.")
         if intent is Intent.GOODBYE:
             s.ended, s.state = True, State.GOODBYE
-            return T.GOODBYE
+            return self._say(s, "goodbye")
         if intent is Intent.OUT_OF_SCOPE:
             if s.filters and ex.mentions_unfilterable(text):       # "make it automatic": a car wish we cannot search on, not off-topic
                 dbg.note = "car requirement we cannot filter on: said so instead of treating it as off-topic"
-                return T.CANNOT_FILTER
+                return self._say(s, "cannot_filter")
             return self._off_topic(s)
         if intent is Intent.CLAIM_AUTHORITY:
             dbg.note = "authority claim ignored: limits are unchanged"
@@ -155,8 +162,8 @@ class DialogueEngine:
         if intent is Intent.GREET:
             if s.state is State.GREETING:
                 s.state = State.INTEREST
-                return T.OPENING
-            return "Hello again! How can I help?"
+                return self._say(s, "opening")
+            return self._say(s, "hello_again")
         # ---- state-specific
         if intent is Intent.SEARCH_CARS:
             return self._search(s, text, dbg)
@@ -180,7 +187,7 @@ class DialogueEngine:
             return self._yes(s, dbg)
         if intent is Intent.CONFIRM_NO:
             return self._no(s, text, dbg)
-        return "Sorry, could you say that again?"
+        return self._say(s, "didnt_catch")
 
     # ------------------------------------------------------------------------------------------------ pending yes/no
     def _pending(self, s: Session, intent: Intent, text: str, dbg: TurnDebug) -> str | None:
@@ -216,8 +223,7 @@ class DialogueEngine:
         if s.oos_streak >= 2:
             s.pending = Pending("handoff_offer")
             return "I can only help with our used cars. Would you like me to connect you with a colleague?"
-        return "Sorry, I can only help with our used cars. What kind of car are you looking for?" if s.car is None \
-            else "Sorry, I can only help with our used cars. Is there anything else you'd like to know about this one?"
+        return self._say(s, "off_topic_ask_car" if s.car is None else "off_topic_this_one")
 
     def _policy(self, s: Session, text: str) -> str:
         topic = next((t for t, rx in TOPICS.items() if re.search(rx, " ".join(ex.tokens_of(text)))), None)
@@ -236,7 +242,7 @@ class DialogueEngine:
             new = {}
         elif not new and not others and s.filters:
             dbg.note = "search request with no filter I can apply: said so instead of repeating the last answer"
-            return T.CANNOT_FILTER
+            return self._say(s, "cannot_filter")
         # A named model, or a make said out of the blue, starts a fresh search ("do you have a Land Cruiser?"). A make said as the
         # answer to a narrowing question ("Toyota please") refines the current one instead.
         if new.get("model") or (new.get("make") and s.narrow_asks == 0):
@@ -245,7 +251,7 @@ class DialogueEngine:
         else:
             s.filters.update(new)
         if not s.filters and not others:
-            return "What kind of car are you after, and roughly what budget?"
+            return self._say(s, "ask_what_car")
         if others:
             s.excluded |= {c.stock_id for c in s.shown}
         f = SearchFilters(max_price=s.filters.get("max_price"), make=s.filters.get("make"), model=s.filters.get("model"),
@@ -257,11 +263,12 @@ class DialogueEngine:
         s.state = State.ANSWERING
         if res.total == 0:
             s.state, s.shown, s.car = State.INTEREST, [], None
-            return T.no_match(s.filters)
+            return self._say(s, "no_match", desc=T.describe_filters(s.filters))
         if res.needs_narrowing and s.narrow_asks < 2:
             s.narrow_asks += 1
             s.state, s.shown, s.car = State.INTEREST, [], None
-            return T.narrowing_question(res.total, s.filters, s.narrow_asks - 1)
+            sid, vals = T.narrowing_situation(res.total, s.filters, s.narrow_asks - 1)
+            return self._say(s, sid, **vals)
         s.narrow_asks = 0
         s.shown = list(res.cars)
         s.car = res.cars[0].stock_id if len(res.cars) == 1 else None
@@ -509,7 +516,7 @@ class DialogueEngine:
         if s.state is State.CONFIRM and s.booking:
             s.ended = True
             s.state = State.GOODBYE
-            return T.GOODBYE
+            return self._say(s, "goodbye")
         if s.state is State.SLOT:
             return "No problem. Which day would suit you better?"
         if s.state is State.CONTACT:

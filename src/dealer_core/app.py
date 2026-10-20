@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Config
 from .dialogue.machine import DialogueEngine
+from .dialogue.phrasebook import Phrasebook
 from .nlu.chain import BackendChain
 from .nlu.pipeline import IntentClassifier, NluPipeline
 from .nlu.rules import RuleEngine, load_enabled_intents
@@ -63,5 +64,6 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         chain = chain or BackendChain.from_config(cfg, primary=backend or cfg.llm.text_backend)
         classifier = chain
     rules = RuleEngine(inv.vocabulary, load_enabled_intents(ROOT / "config" / "nlu_gates.yaml"))
-    engine = DialogueEngine(svc, NluPipeline(classifier, rules))
+    phrasebook = Phrasebook.from_file(ROOT / "config" / "phrase_variants.yaml") if cfg.dialogue.variants == "on" else Phrasebook()
+    engine = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed)
     return App(engine, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

@@ -1,6 +1,7 @@
 """Per-call state. One Session per call; nothing is shared between calls."""
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -27,6 +28,8 @@ class Session:
     excluded: set[str] = field(default_factory=set)          # cars already shown, excluded from "other models" searches
     filters: dict = field(default_factory=dict)              # accumulated search filters
     narrow_asks: int = 0
+    rng: random.Random = field(default_factory=lambda: random.Random(7))      # picks among approved wording variants
+    last_variant: dict[str, int] = field(default_factory=dict)
     negotiation: dict[str, NegotiationState] = field(default_factory=dict)
     offered_slots: list[datetime] = field(default_factory=list)
     draft_slot: datetime | None = None

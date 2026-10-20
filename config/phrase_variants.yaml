@@ -1,0 +1,219 @@
+# Wording variants for low-risk replies. Written offline by the local model (scripts/gen_phrase_variants.py).
+#
+# REVIEW: for each entry set  status: approved  (use it), leave  proposed  (not used yet) or  rejected  (never use / do not regenerate).
+# You may edit the text of an entry, but keep its {placeholders} exactly as in the base wording. Edited entries are re-checked
+# when the agent starts; an invalid approved entry stops start-up with a message naming it.
+# Only entries marked approved are used, and only when  dialogue.variants: on  in config/default.yaml (currently off).
+
+opening:
+- text: Hello, this is the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hi, you’ve reached the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Good day, this is our dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hello, we’re the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hi, welcome to the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hello, you’re at the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hi, this is the dealership. What kind of car are you looking for?
+  status: proposed
+- text: Hello, we’re the car dealership. What kind of car are you looking for?
+  status: proposed
+goodbye:
+- text: Thank you for calling. Have a nice day.
+  status: proposed
+- text: Thanks for your call. Enjoy your day.
+  status: proposed
+- text: You’re welcome. Have a good day.
+  status: proposed
+- text: Thanks for calling. Wishing you a great day.
+  status: proposed
+- text: Thanks for reaching out. Have a wonderful day.
+  status: proposed
+- text: Thank you for calling. Hope you have a great day.
+  status: proposed
+- text: Thanks for your call. Have a great day.
+  status: proposed
+- text: You're welcome. Have a great day.
+  status: proposed
+hello_again:
+- text: Hello again. How can I help you?
+  status: proposed
+- text: Hi again. How can I assist?
+  status: proposed
+- text: Hello once more. How can I help?
+  status: proposed
+- text: Hi again. What can I do for you?
+  status: proposed
+- text: Good to hear from you. How can I help?
+  status: proposed
+- text: Again, how can I help you?
+  status: proposed
+- text: Hello again. How can I assist?
+  status: proposed
+- text: Hi again. How can I help?
+  status: proposed
+ask_what_car:
+- text: What car are you looking for, and how much will you spend?
+  status: proposed
+- text: Which car do you have in mind, and what’s your budget?
+  status: proposed
+- text: What type of car are you thinking about, and about how much?
+  status: proposed
+- text: What car are you interested in, and what’s your budget range?
+  status: proposed
+- text: Which car are you considering, and what’s your spending limit?
+  status: proposed
+- text: What car do you want, and how much are you ready to spend?
+  status: proposed
+- text: What kind of car are you thinking of, and what budget do you have?
+  status: proposed
+- text: What car are you after, and what’s your money range?
+  status: proposed
+didnt_catch:
+- text: Could you say that again?
+  status: proposed
+- text: Please repeat that.
+  status: proposed
+- text: Could you say it once more?
+  status: proposed
+- text: Can you repeat that?
+  status: proposed
+- text: Could you say that again, please?
+  status: proposed
+- text: Could you repeat that please?
+  status: proposed
+- text: Sorry, could you say that once more?
+  status: proposed
+- text: Could you repeat that?
+  status: proposed
+narrow_make_mileage:
+- text: I have {total} {desc}. Do you like a specific make or max mileage?
+  status: proposed
+- text: I have {total} {desc}. Would you prefer a certain make or a max mileage?
+  status: proposed
+- text: I have {total} {desc}. Do you have a make in mind or a mileage limit?
+  status: proposed
+- text: I have {total} {desc}. Is there a make you're thinking of or a mileage cap?
+  status: proposed
+- text: I have {total} {desc}. Do you want a specific make or a maximum mileage?
+  status: proposed
+- text: I have {total} {desc}. Would you pick a make or a mileage limit?
+  status: proposed
+- text: I have {total} {desc}. Do you have a make you're looking for or a max mileage?
+  status: proposed
+- text: I have {total} {desc}. Do you prefer a make or a mileage limit?
+  status: proposed
+narrow_budget:
+- text: I have {total} {desc}. Tell me your budget.
+  status: proposed
+- text: I have {total} {desc}. How much are you looking for?
+  status: proposed
+- text: I have {total} {desc}. Can I know your budget?
+  status: proposed
+- text: I have {total} {desc}. What’s your budget?
+  status: proposed
+- text: I have {total} {desc}. Could you tell me your budget?
+  status: proposed
+- text: I have {total} {desc}. What budget do you have?
+  status: proposed
+- text: I have {total} {desc}. Can I ask your budget?
+  status: proposed
+narrow_year_mileage:
+- text: I have {total} {desc}. Do you have a year or mileage in mind?
+  status: proposed
+- text: I have {total} {desc}. What year or mileage are you looking for?
+  status: proposed
+- text: I have {total} {desc}. Is there a year or mileage you're interested in?
+  status: proposed
+- text: I have {total} {desc}. Can you tell me a year or mileage you’d like?
+  status: proposed
+- text: I have {total} {desc}. Do you want to stick to a certain year or mileage?
+  status: proposed
+- text: I have {total} {desc}. Is there a year or mileage you’d like to consider?
+  status: proposed
+- text: I have {total} {desc}. What year or mileage would you like to keep?
+  status: proposed
+- text: I have {total} {desc}. Are there specific year or mileage limits you'd like?
+  status: proposed
+narrow_again:
+- text: That's still {total} {desc}. Tell me a make, a model or a mileage limit, or say 'just show me' and I's read out the first three.
+  status: proposed
+- text: That's still {total} {desc}. Tell me a make, a model or a mileage limit, or say 'just show me' and I we'll read out the first
+    three.
+  status: proposed
+- text: That's still {total} {desc}. Say a make, a model or a mileage limit, or say 'just show me' and I'll read out the first three.
+  status: proposed
+- text: That's still {total} {desc}. Give me a make, a model or a mileage limit, or say 'just show me' and I'll read out the first three.
+  status: proposed
+cannot_filter:
+- text: I don't have that in the search, only make, model, body type, colour, budget, year and mileage. What would you like to change?
+  status: proposed
+- text: The search doesn't include that, just make, model, body type, colour, budget, year and mileage. What else would you like?
+  status: proposed
+- text: We can't filter on that, only make, model, body type, colour, budget, year and mileage. What would you like to adjust?
+  status: proposed
+- text: That's not in the search options, only make, model, body type, colour, budget, year and mileage. What would you like to change?
+  status: proposed
+- text: The search doesn't cover that, only make, model, body type, colour, budget, year and mileage. What would you like to modify?
+  status: proposed
+- text: We can’t search on that, just make, model, body type, colour, budget, year and mileage. What would you like to adjust?
+  status: proposed
+- text: I don’t have that in the search, only make, model, body or type, colour, budget, year and mileage. What would you like to change?
+  status: proposed
+- text: The search won't show that, only make, model, body type, colour, budget, year and mileage. What would you like to change?
+  status: proposed
+no_match:
+- text: I don't have any {desc} at the moment. Would you like to change the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} currently. Would you like to change the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} right now. Could you change the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} right now. Would you prefer to adjust the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} right now. Would you like to modify the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} at the moment. Would you like to adjust the budget or the car type?
+  status: proposed
+- text: I don't have any {desc} now. Would you like to change the budget or the type of car?
+  status: proposed
+- text: I don't have any {desc} today. Would you like to modify the budget or the car type?
+  status: proposed
+off_topic_ask_car:
+- text: I’m only able to assist with used cars. What kind of car are you looking for?
+  status: proposed
+- text: Our services are for used cars only. What kind of car are you looking for?
+  status: proposed
+- text: I can only help with used cars. What kind of car are you looking for?
+  status: proposed
+- text: We only work with used cars. What kind of car are you looking for?
+  status: proposed
+- text: I'm only able to assist with used cars. What kind of car are you looking for?
+  status: proposed
+- text: We focus on used cars. What kind of car are you looking for?
+  status: proposed
+- text: I’m only available for used cars. What kind of car are you looking for?
+  status: proposed
+- text: We only assist with used cars. What type of car are you looking for?
+  status: proposed
+off_topic_this_one:
+- text: I’m here to assist with our used cars. Can I help with anything else about this one?
+  status: proposed
+- text: I only assist with used cars. Is there anything else you’d like to know about this one?
+  status: proposed
+- text: Our service is for used cars only. Any other questions about this one?
+  status: proposed
+- text: I can only help with used cars. Do you have any other questions about this one?
+  status: proposed
+- text: We focus on used cars. Is there anything else you’d like to know about this one?
+  status: proposed
+- text: I’m limited to used cars. Do you have any other questions about this one?
+  status: proposed
+- text: I only support used cars. Is there anything else you’d like to know about this one?
+  status: proposed
+- text: I'm here to help with our used cars. Can I assist you with anything else about this one?
+  status: proposed
