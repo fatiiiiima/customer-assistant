@@ -80,6 +80,7 @@ class SearchFilters(_Frozen):
     make: str | None = None
     model: str | None = None
     body_type: BodyType | None = None
+    color: str | None = None
     year_min: int | None = None
     max_km: int | None = None
     branch_id: str | None = None

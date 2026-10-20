@@ -111,7 +111,7 @@ class SqliteInventoryRepo:
             if val is not None:
                 where.append(f"{col} {op} ?")
                 args.append(val)
-        for col, val in (("make", f.make), ("model", f.model)):
+        for col, val in (("make", f.make), ("model", f.model), ("color", f.color)):
             if val:
                 where.append(f"LOWER({col}) = ?")
                 args.append(val.strip().lower())

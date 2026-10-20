@@ -25,7 +25,10 @@ BODY = {"suv": "suv", "suvs": "suv", "crossover": "suv", "4x4": "suv", "sedan": 
 WELL_KNOWN_MAKES = ["bentley", "ferrari", "lamborghini", "rolls royce", "aston martin", "maserati", "bugatti", "mclaren", "porsche",
                     "jaguar", "volvo", "tesla", "mitsubishi", "subaru", "mazda", "suzuki", "isuzu", "peugeot", "renault", "citroen",
                     "jeep", "dodge", "cadillac", "lincoln", "genesis", "infiniti", "lexus", "acura", "volkswagen", "hyundai", "kia"]
+COLORS = {"white": "white", "black": "black", "silver": "silver", "grey": "grey", "gray": "grey", "red": "red", "blue": "blue",
+          "brown": "brown", "green": "green", "yellow": "yellow", "orange": "orange", "gold": "gold", "beige": "beige", "maroon": "maroon"}
 KM_TOKENS = {"km", "kms", "kilometre", "kilometres", "kilometer", "kilometers", "miles"}
+_SHOW_ME = re.compile(r"\b(?:just show|show me|read (?:them|it)|go ahead|any of them|whichever|doesn't matter|does not matter)\b")
 _OTHERS = re.compile(r"\b(other|others|different|else|another|more|alternatives?|something like|not that|not those)\b")
 
 
@@ -78,12 +81,14 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
 
 
 def search_filters(text: str, vocab: dict[str, list[str]]) -> dict:
-    """Filters the caller asked for: make, model, body_type, year_min, max_price, max_km (only those actually said)."""
+    """Filters the caller asked for: make, model, body_type, color, year_min, max_price, max_km (only those actually said)."""
     toks = tokens_of(text)
     f = find_vehicle(toks, vocab)
     for t in toks:
         if t in BODY:
             f["body_type"] = BODY[t]
+        elif t in COLORS:
+            f["color"] = COLORS[t]
     for val, i, j in number_spans(toks):
         n = int(val) if val.isdigit() else 0
         nxt = toks[j] if j < len(toks) else ""
@@ -94,6 +99,20 @@ def search_filters(text: str, vocab: dict[str, list[str]]) -> dict:
         elif n >= 5000 and not val.startswith("0"):
             f["max_price"] = n
     return f
+
+
+_UNFILTERABLE = re.compile(r"\b(?:automatic|manual|petrol|diesel|hybrid|electric|sunroof|leather|turbo|4wd|awd|seats|seater|doors?|"
+                           r"diesel|cylinder|v6|v8|horsepower|camera|navigation|bluetooth|warranty|accident free)\b")
+
+
+def mentions_unfilterable(text: str) -> bool:
+    """Car attributes people ask for that the search cannot filter on yet (the agent should say so, not call it off-topic)."""
+    return bool(_UNFILTERABLE.search(" ".join(tokens_of(text))))
+
+
+def wants_listing(text: str) -> bool:
+    """'just show me' after a narrowing question: stop asking and read out the first matches."""
+    return bool(_SHOW_ME.search(" ".join(tokens_of(text))))
 
 
 def wants_others(text: str) -> bool:

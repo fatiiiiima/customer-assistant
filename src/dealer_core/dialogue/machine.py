@@ -143,6 +143,9 @@ class DialogueEngine:
             s.ended, s.state = True, State.GOODBYE
             return T.GOODBYE
         if intent is Intent.OUT_OF_SCOPE:
+            if s.filters and ex.mentions_unfilterable(text):       # "make it automatic": a car wish we cannot search on, not off-topic
+                dbg.note = "car requirement we cannot filter on: said so instead of treating it as off-topic"
+                return T.CANNOT_FILTER
             return self._off_topic(s)
         if intent is Intent.CLAIM_AUTHORITY:
             dbg.note = "authority claim ignored: limits are unchanged"
@@ -228,6 +231,12 @@ class DialogueEngine:
         vocab = self.svc.inventory.vocabulary()
         new = ex.search_filters(text, vocab)
         others = ex.wants_others(text)
+        if ex.wants_listing(text) and s.filters and s.narrow_asks > 0:
+            s.narrow_asks = 2                       # the caller does not want more questions: read out the matches
+            new = {}
+        elif not new and not others and s.filters:
+            dbg.note = "search request with no filter I can apply: said so instead of repeating the last answer"
+            return T.CANNOT_FILTER
         # A named model, or a make said out of the blue, starts a fresh search ("do you have a Land Cruiser?"). A make said as the
         # answer to a narrowing question ("Toyota please") refines the current one instead.
         if new.get("model") or (new.get("make") and s.narrow_asks == 0):
@@ -240,7 +249,7 @@ class DialogueEngine:
         if others:
             s.excluded |= {c.stock_id for c in s.shown}
         f = SearchFilters(max_price=s.filters.get("max_price"), make=s.filters.get("make"), model=s.filters.get("model"),
-                          body_type=s.filters.get("body_type"), year_min=s.filters.get("year_min"), max_km=s.filters.get("max_km"),
+                          body_type=s.filters.get("body_type"), color=s.filters.get("color"), year_min=s.filters.get("year_min"), max_km=s.filters.get("max_km"),
                           exclude_stock_ids=tuple(sorted(s.excluded)))
         res = self.svc.search_cars(f, limit=3)
         self._tool(dbg, f"search_cars({', '.join(f'{k}={v}' for k, v in s.filters.items())}{', exclude=' + str(len(s.excluded)) if s.excluded else ''})",
@@ -252,7 +261,7 @@ class DialogueEngine:
         if res.needs_narrowing and s.narrow_asks < 2:
             s.narrow_asks += 1
             s.state, s.shown, s.car = State.INTEREST, [], None
-            return T.narrowing_question(res.total, s.filters)
+            return T.narrowing_question(res.total, s.filters, s.narrow_asks - 1)
         s.narrow_asks = 0
         s.shown = list(res.cars)
         s.car = res.cars[0].stock_id if len(res.cars) == 1 else None

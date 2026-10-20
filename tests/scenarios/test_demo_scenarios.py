@@ -166,3 +166,35 @@ def test_policy_questions_are_not_invented(call):
     c = call({})
     r = c.say("do you offer a warranty on these cars")
     assert "warranty" in r.reply and "connect you with a colleague" in r.reply
+
+
+def test_colour_is_a_real_filter_and_an_honest_no_match(call):
+    c = call({"it should be red": "search_cars", "make it automatic": "search_cars", "what about black": "search_cars"})
+    c.say("SUV under 150 thousand")
+    r = c.say("it should be red")
+    assert "don't have any red SUVs under 150,000" in r.reply and c.s.filters["color"] == "red"
+    r = c.say("what about black")
+    assert c.s.filters["color"] == "black" and "Patrol" in r.reply          # the only black SUV under 150,000
+
+
+def test_a_requirement_we_cannot_filter_on_is_said_not_ignored(call):
+    c = call({"make it automatic": "search_cars"})
+    r1 = c.say("SUV under 150 thousand")
+    r2 = c.say("make it automatic")
+    assert r2.reply != r1.reply and "can't search on that" in r2.reply and "colour" in r2.reply
+
+
+def test_the_narrowing_question_is_not_repeated_word_for_word(call):
+    c = call({"just show me": "search_cars"})
+    r1 = c.say("SUV under 150 thousand")
+    r2 = c.say("SUV under 150 thousand")
+    assert r2.reply != r1.reply and "just show me" in r2.reply
+    r3 = c.say("just show me")
+    assert r3.debug.state_after == "answering" and "Pajero" in r3.reply
+
+
+def test_an_unsearchable_car_wish_is_not_called_off_topic(call):
+    c = call({"make it automatic": "out_of_scope", "what is the weather like": "out_of_scope"})
+    c.say("SUV under 150 thousand")
+    assert "can't search on that" in c.say("make it automatic").reply
+    assert "only help with our used cars" in c.say("what is the weather like").reply
