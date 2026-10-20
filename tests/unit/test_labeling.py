@@ -160,7 +160,7 @@ def test_ambiguity_survives_csv_round_trip_and_lenient_intent_accepts_alternates
                                     "slots": {"offer_amount": "48000"}}, ids))
     store.save(core.validate_label({"id": items[1].id, "state": "answering", "intent": "ask_car_info"}, ids))
     header = (tmp_path / "mine.csv").read_text(encoding="utf-8-sig").splitlines()[0]
-    assert header.endswith("notes,ambiguous,also_ok_intents")
+    assert header.endswith("notes,ambiguous,also_ok_intents,state_guess,other_plausible_states")
     rows = load_csv_set(tmp_path / "mine.csv")
     assert (rows[0].ambiguous, rows[0].also_ok) == (True, ("ask_lowest_price",))
     assert (rows[1].ambiguous, rows[1].also_ok) == (False, ())
@@ -207,3 +207,30 @@ def test_http_accepts_an_ambiguous_label(items, tmp_path):
         assert ok["ok"] and json.load(urllib.request.urlopen(base + "/api/item/0"))["label"]["also_ok"] == ["send_details"]
     finally:
         httpd.shutdown()
+
+
+def test_state_guess_flag_and_other_plausible_states(items, tmp_path):
+    ids = {i.id for i in items}
+    base = {"id": items[0].id, "state": "interest", "intent": "out_of_scope"}
+    plain = core.validate_label({**base, "other_states": ["answering"]}, ids)
+    assert not plain.state_guess and plain.other_states == []                       # ignored unless the flag is ticked
+    g = core.validate_label({**base, "state_guess": True, "other_states": ["answering", "interest", "answering", "slot"]}, ids)
+    assert g.state_guess and g.other_states == ["answering", "slot"]                # de-duplicated, primary state excluded
+    assert core.validate_label({**base, "state_guess": True}, ids).other_states == []     # the flag alone is allowed
+    with pytest.raises(ValueError, match="unknown state"):
+        core.validate_label({**base, "state_guess": True, "other_states": ["lobby"]}, ids)
+    with pytest.raises(ValueError, match="terminal"):
+        core.validate_label({**base, "state_guess": True, "other_states": ["goodbye"]}, ids)
+    store = core.LabelStore(items, tmp_path / "l.jsonl", tmp_path / "mine.csv")
+    store.save(g)
+    assert (tmp_path / "mine.csv").read_text(encoding="utf-8-sig").splitlines()[0].endswith("state_guess,other_plausible_states")
+    row = load_csv_set(tmp_path / "mine.csv")[0]
+    assert row.state_guess and row.other_states == ("answering", "slot")
+
+
+def test_labels_saved_before_the_state_guess_field_still_load(items, tmp_path):
+    old = {"id": items[0].id, "state": "greeting", "car": "", "intent": "greet", "slots": {}, "notes": "", "discard": False,
+           "labeled_at": "x", "ambiguous": False, "also_ok": []}
+    (tmp_path / "l.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+    lb = core.LabelStore(items, tmp_path / "l.jsonl", tmp_path / "mine.csv").labels[items[0].id]
+    assert lb.state_guess is False and lb.other_states == []

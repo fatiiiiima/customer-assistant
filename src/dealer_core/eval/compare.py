@@ -82,7 +82,7 @@ def summarise(label: str, examples: list[Example], preds: dict[str, dict]) -> di
         agree = [preds[e.id]["intent_only"] == preds[e.id]["json"].get("intent") for e in exs]
         n = len(exs)
         out["sets"][name] = {
-            "n": n, "n_ambiguous": sum(e.ambiguous for e in exs), "intent_lenient": sum(lenient) / n,
+            "n": n, "n_ambiguous": sum(e.ambiguous for e in exs), "n_state_guess": sum(e.state_guess for e in exs), "intent_lenient": sum(lenient) / n,
             "intent": sum(s.intent_ok for s in sc) / n, "exact": sum(s.exact for s in raw) / n,
             "exact_ground": sum(s.exact for s in sc) / n, "intent_only_acc": sum(io) / n, "intent_only_agrees": sum(agree) / n,
             "json_ms_p50": statistics.median(preds[e.id]["json_ms"] for e in exs),

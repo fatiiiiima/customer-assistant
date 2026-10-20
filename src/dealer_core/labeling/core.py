@@ -2,7 +2,7 @@
 
 Labels are HUMAN-CONFIRMED only: nothing here predicts, suggests or pre-fills a label.
 Output CSV matches dealer_core.eval.datasets.load_csv_set:
-    id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes,ambiguous,also_ok_intents
+    id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes,ambiguous,also_ok_intents,state_guess,other_plausible_states
 """
 from __future__ import annotations
 
@@ -85,6 +85,8 @@ class Label:
     labeled_at: str = ""
     ambiguous: bool = False                       # the utterance holds more than one intent, or the primary is a judgment call
     also_ok: list = field(default_factory=list)   # other intents that would also be an acceptable reading
+    state_guess: bool = False                     # the state is an assumption: the utterance fits more than one state
+    other_states: list = field(default_factory=list)   # other states where it would be equally natural (only when state_guess)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -202,8 +204,21 @@ def validate_label(raw: dict, known_ids: set[str]) -> Label:
                 also_ok.append(other.value)
         if not also_ok and not notes:
             raise ValueError("ambiguous needs at least one 'also acceptable' intent or a note explaining why")
+    state_guess = bool(raw.get("state_guess"))
+    other_states: list[str] = []
+    if state_guess:
+        for v in raw.get("other_states") or []:
+            try:
+                other = State(str(v))
+            except ValueError as e:
+                raise ValueError(f"unknown state in 'other plausible states': {v!r}") from e
+            if other is State.GOODBYE:
+                raise ValueError("goodbye is a terminal state; it cannot be a plausible state")
+            if other is not state and other.value not in other_states:
+                other_states.append(other.value)
     return Label(id=id_, state=state.value, car=str(raw.get("car", "")).strip(), intent=intent.value,
-                 slots=clean_slots(raw.get("slots") or {}), notes=notes, labeled_at=_now(), ambiguous=ambiguous, also_ok=also_ok)
+                 slots=clean_slots(raw.get("slots") or {}), notes=notes, labeled_at=_now(), ambiguous=ambiguous, also_ok=also_ok,
+                 state_guess=state_guess, other_states=other_states)
 
 
 def _now() -> str:
@@ -237,12 +252,13 @@ class LabelStore:
         with self.csv_path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow(["id", "state", "car_in_focus", "utterance", "gold_intent", "gold_slots_json", "source", "notes",
-                        "ambiguous", "also_ok_intents"])
+                        "ambiguous", "also_ok_intents", "state_guess", "other_plausible_states"])
             for it in self.items:
                 lb = self.labels.get(it.id)
                 if lb and not lb.discard:
                     w.writerow([it.id, lb.state, lb.car, it.utterance, lb.intent, json.dumps(lb.slots, ensure_ascii=False),
-                                it.source, lb.notes, int(lb.ambiguous), ";".join(lb.also_ok)])
+                                it.source, lb.notes, int(lb.ambiguous), ";".join(lb.also_ok), int(lb.state_guess),
+                                ";".join(lb.other_states)])
                     n += 1
         return n
 

@@ -163,8 +163,10 @@ button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}button:d
 <div class="card" id="main">
   <div class="top"><h1 id="prog">Loading...</h1><div><button id="back">Back</button> <button id="jump">First unlabeled</button></div></div>
   <div id="badges"></div><div class="utt" id="utt"></div><audio id="audio" controls style="width:100%;display:none"></audio>
-  <div class="row"><div><label for="state">State the agent was in</label><select id="state"></select><div class="help" id="statehelp"></div></div>
+  <div class="row"><div><label for="state">State the agent was in (for these clips: where it would most naturally occur)</label><select id="state"></select><div class="help" id="statehelp"></div></div>
   <div><label for="car">Car in focus (stock id, blank = none)</label><input type="text" id="car" list="stocks" placeholder="e.g. S1042"><datalist id="stocks"></datalist></div></div>
+  <label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="sg"> The state is a guess: this utterance would fit more than one state (or any state)</label>
+  <div id="sgbox" style="display:none"><label for="others">Other states where it would be equally natural (Ctrl/Cmd-click to pick several; optional)</label><select id="others" multiple size="7"></select></div>
   <label for="intent">What the caller meant (gold intent)</label><select id="intent"></select><div class="help" id="intenthelp"></div>
   <div id="slotsbox"><div style="font-size:13px;color:var(--mute);margin:12px 0 4px">Slots the caller actually said <label style="display:inline;margin:0 0 0 8px"><input type="checkbox" id="allslots"> show all slots</label></div><div class="slots" id="slots"></div></div>
   <label for="notes">Notes (required if you mark it ambiguous without an "also acceptable" intent)</label><input type="text" id="notes">
@@ -189,6 +191,8 @@ async function init(){
   st.onchange=()=>{renderIntent();$('statehelp').textContent=(S.states.find(s=>s.value==st.value)||{}).help||'';validate()};
   $('intent').onchange=()=>{renderSlots();validate()}; $('allslots').onchange=renderSlots;
   $('amb').onchange=()=>{$('alsobox').style.display=$('amb').checked?'':'none'};
+  $('sg').onchange=()=>{$('sgbox').style.display=$('sg').checked?'':'none'};
+  S.states.forEach(s=>$('others').append(opt(s.value,s.value)));
   S.intents.forEach(i=>$('also').append(opt(i.value,i.value)));
   $('guidebody').innerHTML='<b>States</b> (what the agent was doing)<br>'+S.states.map(s=>`<div style="margin:4px 0"><b>${s.value}</b>: ${s.help}<br><i>e.g. "${s.example}"</i></div>`).join('')+'<br><b>Intents</b> (what the caller meant)<br>'+S.intents.map(i=>`<div style="margin:4px 0"><b>${i.value}${i.state_changing?' *':''}</b>: ${i.doc}<br><i>e.g. "${i.example}"</i></div>`).join('');
   $('save').onclick=save; $('skip').onclick=()=>go(idx+1); $('back').onclick=()=>go(idx-1);
@@ -217,10 +221,12 @@ function validate(){ $('save').disabled=!($('state').value&&$('intent').value) }
 async function go(n){
   if(n<0||n>=items) return; idx=n; cur=await api('/api/item/'+n); $('err').textContent='';
   $('prog').textContent=`Utterance ${n+1} of ${items}`; $('utt').textContent=cur.utterance;
-  $('badges').innerHTML=`<span class="badge">${cur.source}</span><span class="badge">${cur.id}</span>`+(cur.label?`<span class="badge ok">${cur.label.discard?'discarded':'labeled'}</span>`:'')+(cur.label&&cur.label.ambiguous?'<span class="badge warn">ambiguous</span>':'')+(cur.duplicate_of?`<span class="badge warn">already in the "${cur.duplicate_of}" set: skip or discard to avoid leakage</span>`:'');
+  $('badges').innerHTML=`<span class="badge">${cur.source}</span><span class="badge">${cur.id}</span>`+(cur.label?`<span class="badge ok">${cur.label.discard?'discarded':'labeled'}</span>`:'')+(cur.label&&cur.label.ambiguous?'<span class="badge warn">ambiguous</span>':'')+(cur.label&&cur.label.state_guess?'<span class="badge warn">state is a guess</span>':'')+(cur.duplicate_of?`<span class="badge warn">already in the "${cur.duplicate_of}" set: skip or discard to avoid leakage</span>`:'');
   const au=$('audio'); if(cur.audio){au.src='/audio/'+cur.id; au.style.display='block'} else {au.removeAttribute('src'); au.style.display='none'}
   const lb=cur.label&&!cur.label.discard?cur.label:null, keep=$('keep').checked;
   $('amb').checked=!!(lb&&lb.ambiguous); $('alsobox').style.display=$('amb').checked?'':'none';
+  $('sg').checked=!!(lb&&lb.state_guess); $('sgbox').style.display=$('sg').checked?'':'none';
+  [...$('others').options].forEach(o=>o.selected=!!(lb&&lb.other_states&&lb.other_states.includes(o.value)));
   [...$('also').options].forEach(o=>o.selected=!!(lb&&lb.also_ok&&lb.also_ok.includes(o.value)));
   const prevState=$('state').value, prevCar=$('car').value;
   $('state').value=lb?lb.state:(keep?prevState:''); $('car').value=lb?lb.car:(keep?prevCar:''); $('notes').value=cur.label?cur.label.notes:'';
@@ -228,7 +234,7 @@ async function go(n){
   renderIntent(lb?lb.intent:''); if(lb) renderSlots(Object.fromEntries(Object.entries(lb.slots).map(([k,v])=>[k,String(v)]))); validate();
 }
 async function save(discard){
-  const body={id:cur.id,discard:discard===true,state:$('state').value,car:$('car').value,intent:$('intent').value,slots:currentSlots(),notes:$('notes').value,ambiguous:$('amb').checked,also_ok:[...$('also').selectedOptions].map(o=>o.value)};
+  const body={id:cur.id,discard:discard===true,state:$('state').value,car:$('car').value,intent:$('intent').value,slots:currentSlots(),notes:$('notes').value,ambiguous:$('amb').checked,also_ok:[...$('also').selectedOptions].map(o=>o.value),state_guess:$('sg').checked,other_states:[...$('others').selectedOptions].map(o=>o.value)};
   const r=await fetch('/api/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json();
   if(!j.ok){$('err').textContent=j.error;return} sum=j; renderCov(); go(Math.min(idx+1,items-1));
 }

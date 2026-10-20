@@ -30,8 +30,23 @@ utterances show, they stop being held-out and we should record a replacement set
 
 ## How to label one utterance
 
-1. **State**: the state the agent was in when the caller said it. Spontaneous clips have no conversation around them, so pick the state where
-   the utterance would most naturally occur; if two are plausible, choose the likelier one and say so in Notes.
+1. **State**: for these spontaneous clips **nobody can know it**: there was no agent and no conversation. The state you pick is a *test
+   condition* ("assume the agent was here"), not a fact. Ask "what was the agent most plausibly just doing?":
+
+   | The caller is... | Pick |
+   |---|---|
+   | greeting | `greeting` |
+   | describing a car or budget they want | `interest` |
+   | asking about / reacting to one specific car ("it", "this one") | `answering` (put a stock id such as S1042 in the car box as a stand-in) |
+   | talking about price, discounts, offers | `negotiating` |
+   | giving a day or time | `slot` |
+   | giving a name or phone number | `contact` |
+   | answering yes or no to something the agent just asked | `confirm` (or `negotiating` for a price) and **tick "state is a guess"**: a bare yes/no has no meaning without context |
+   | off-topic, angry, asking for a person, saying goodbye, asking about warranty/financing | the state barely matters (these intents are valid in every state): pick `interest`, or `answering` if a car is implied, and **tick "state is a guess"** |
+
+   **Tick "The state is a guess"** whenever the utterance would be equally natural in more than one state, and optionally pick those other states.
+   It is stored in the CSV (`state_guess`, `other_plausible_states`); the evaluation will report guessed-state items separately so they cannot distort a
+   state-specific number.
 2. **Car in focus**: only if the utterance depends on a car already being discussed ("it", "this one", "the car"). Otherwise leave it blank.
 3. **Gold intent**: what the caller meant, from the menu. Intents valid in the chosen state come first; the group *"NOT valid in this
    state"* is for the case where the caller really meant something the agent cannot represent there. **Choose it anyway** if that is the truth:

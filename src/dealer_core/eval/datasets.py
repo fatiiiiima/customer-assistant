@@ -1,6 +1,6 @@
 """Labelled utterance sets for NLU evaluation: JSON (the built-in sets) and CSV (your labelled set).
 
-CSV columns: id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes[,ambiguous,also_ok_intents]
+CSV columns: id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes[,ambiguous,also_ok_intents,state_guess,other_plausible_states]
 (`source` is spoken|typed; `car_in_focus` empty = none). Only human-confirmed labels belong here.
 """
 from __future__ import annotations
@@ -25,6 +25,8 @@ class Example:
     source: str = "typed"
     ambiguous: bool = False
     also_ok: tuple[str, ...] = ()          # other intents that are also an acceptable reading (only when ambiguous)
+    state_guess: bool = False              # the state is an assumed test condition (spontaneous clips have no real context)
+    other_states: tuple[str, ...] = ()     # other states where the utterance would be equally natural
 
 
 def load_json_set(path: Path) -> list[Example]:
@@ -46,7 +48,9 @@ def load_csv_set(path: Path, set_name: str | None = None) -> list[Example]:
                                gold_slots=json.loads(r.get("gold_slots_json") or "{}"),
                                source=(r.get("source") or "typed").strip(),
                                ambiguous=(r.get("ambiguous") or "0").strip() in ("1", "true", "True"),
-                               also_ok=tuple(x for x in (r.get("also_ok_intents") or "").split(";") if x)))
+                               also_ok=tuple(x for x in (r.get("also_ok_intents") or "").split(";") if x),
+                               state_guess=(r.get("state_guess") or "0").strip() in ("1", "true", "True"),
+                               other_states=tuple(x for x in (r.get("other_plausible_states") or "").split(";") if x)))
     return out
 
 
