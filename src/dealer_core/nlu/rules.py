@@ -120,6 +120,8 @@ class RuleEngine:
         if searchish or (state in (State.INTEREST, State.GREETING) and spans and (SEARCH_CUE.search(norm) or has_km or PRICE_CUE.search(norm))):
             if ex.search_filters(text, vocab):
                 return ok(Intent.SEARCH_CARS, "filters")
+        if ex.claims_in_question(text) and (car or state is State.ANSWERING):          # "is it red?": a yes/no question about the car
+            return ok(Intent.ASK_CAR_INFO, "claim")
         if INFO_RE.search(norm) and (car or state is State.ANSWERING):
             return ok(Intent.ASK_CAR_INFO, "info")
         if state is State.ANSWERING and ORDINAL_RE.search(norm) and not money:      # "tell me about the second one"

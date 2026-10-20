@@ -272,7 +272,14 @@ class DialogueEngine:
         s.narrow_asks = 0
         s.shown = list(res.cars)
         s.car = res.cars[0].stock_id if len(res.cars) == 1 else None
-        return T.cars_listed(list(res.cars))
+        reply = T.cars_listed(list(res.cars))
+        if ex.asks_if_only_one(text):             # "do you only have one Camry?": answer the question first
+            if res.total == 1:
+                reply = (f"Yes, that's the only {T.car_name(res.cars[0])} I have right now. "
+                         "Would you like to hear more, or book a test drive?")
+            else:
+                reply = reply.replace("I have", "No, I have", 1)
+        return reply
 
     # ------------------------------------------------------------------------------------------------ car questions
     def _car_info(self, s: Session, text: str, dbg: TurnDebug) -> str:
@@ -283,6 +290,9 @@ class DialogueEngine:
         keys = ex.attributes_asked(text)
         self._tool(dbg, f"get_car({car.stock_id})", f"{car.status.value}, {car.km:,} km, {car.color}")
         branch = self._branch_name(car)
+        claims = ex.claims_in_question(text)
+        if claims:
+            return self._confirm_claims(car, claims)
         if not keys:
             return T.car_summary(car, branch)
         if "accident" in keys:
@@ -291,6 +301,19 @@ class DialogueEngine:
             return "I don't have accident records with me, but I can have a colleague confirm." + tail
         clauses = [c for k in keys[:2] if (c := T.attribute_clause(k, car, branch))]
         return T.cap(clauses[0]) + (f" and {clauses[1]}" if len(clauses) > 1 else "") + ". Anything else you'd like to know?"
+
+    @staticmethod
+    def _confirm_claims(car, claims: dict[str, str]) -> str:
+        """A yes/no question about the car ("is it red?"): answer yes or no first, then say what it actually is."""
+        actual = {"color": car.color, "year": str(car.year), "transmission": car.transmission.lower(), "fuel": car.fuel.lower(),
+                  "spec": car.regional_spec.upper()}
+        words = {"color": "{}", "year": "a {} model", "transmission": "{}", "fuel": "{}", "spec": "{} spec"}
+        wrong = [k for k, v in claims.items() if actual[k].lower() != v.lower()]
+        if wrong:
+            k = wrong[0]
+            return f"No, it's {words[k].format(actual[k])}, not {words[k].format(claims[k])}. Anything else you'd like to know?"
+        said = " and ".join(words[k].format(actual[k]) for k in list(claims)[:2])
+        return f"Yes, it's {said}. Anything else you'd like to know?"
 
     # ------------------------------------------------------------------------------------------------ price
     def _price(self, s: Session, intent: Intent, text: str, dbg: TurnDebug) -> str:

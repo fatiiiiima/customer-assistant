@@ -206,3 +206,22 @@ def test_no_preference_answers_to_a_narrowing_question_list_the_cars(call):
         c.say("toyota")
         r = c.say(answer)
         assert "can't search" not in r.reply and r.debug.state_after == "answering", (answer, r.reply)
+
+
+def test_yes_no_questions_about_the_car_are_answered_yes_or_no_first(call):
+    c = call({})
+    c.say("do you have a toyota camry")
+    assert c.say("is it red").reply.startswith("No, it's white, not red.")
+    assert c.say("is it white").reply.startswith("Yes, it's white.")
+    assert c.say("is it a 2019").reply.startswith("No, it's a 2021 model, not a 2019 model.")
+    assert c.say("is it a 2021").reply.startswith("Yes, it's a 2021 model.")
+    assert c.say("is it GCC").reply.startswith("Yes, it's GCC spec.")
+    assert c.say("what colour is it").reply.startswith("It's white")          # open questions still answered directly
+
+
+def test_only_one_questions_are_answered_directly(call):
+    c = call({})
+    r = c.say("do you only have one toyota camry")
+    assert r.reply.startswith("Yes, that's the only 2021 Toyota Camry I have right now.")
+    r = c.say("do you only have one toyota")
+    assert r.reply.startswith("I have") or r.reply.startswith("No, I have")

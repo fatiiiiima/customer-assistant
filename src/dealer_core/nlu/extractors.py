@@ -174,6 +174,41 @@ def attributes_asked(text: str) -> list[str]:
     return [k for k, rx in ATTRIBUTES if re.search(rx, t)]
 
 
+_YES_NO_Q = re.compile(r"^(?:is|are|does|has|was|isn't|is not)\b|\b(?:is it|is this|is that|does it|does this|has it|was it)\b")
+_FUEL = {"petrol", "diesel", "hybrid", "electric"}
+
+
+def claims_in_question(text: str) -> dict[str, str]:
+    """For a yes/no question about a car ("is it red", "is it automatic", "is it a 2021", "is it GCC"): what the caller guesses.
+    Returns {} when the text is not a yes/no question. Keys: color, transmission, fuel, year, spec."""
+    toks = tokens_of(text)
+    joined = " ".join(toks)
+    if not _YES_NO_Q.search(joined):
+        return {}
+    out: dict[str, str] = {}
+    for t in toks:
+        if t in COLORS:
+            out["color"] = COLORS[t]
+        elif t in ("automatic", "manual"):
+            out["transmission"] = t
+        elif t in _FUEL:
+            out["fuel"] = t
+        elif t == "gcc":
+            out["spec"] = "GCC"
+    for val, _, j in number_spans(toks):
+        if len(val) == 4 and 1990 <= int(val) <= 2030 and (toks[j] if j < len(toks) else "") not in KM_TOKENS:
+            out["year"] = val
+    return out
+
+
+_ONLY_ONE = re.compile(r"\b(?:only|just) (?:have |got )?(?:one|1|a single)\b|\bis that the only\b|\bthe only one\b|\bonly (?:have )?that\b")
+
+
+def asks_if_only_one(text: str) -> bool:
+    """"Do you only have one Camry?" / "is that the only one?"."""
+    return bool(_ONLY_ONE.search(" ".join(tokens_of(text))))
+
+
 # ---------------------------------------------------------------------------------------------------- contact details
 _NAME_CUE = re.compile(r"(?:my name is|this is|i am|i'm|it is|it's|its|name's|call me|name:)\s+([A-Za-z][A-Za-z' ]*?)"
                        r"(?=\s+(?:and|my|phone|number|mobile|call|reach|you can)\b|[,.;:\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)",
