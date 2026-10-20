@@ -28,7 +28,10 @@ WELL_KNOWN_MAKES = ["bentley", "ferrari", "lamborghini", "rolls royce", "aston m
 COLORS = {"white": "white", "black": "black", "silver": "silver", "grey": "grey", "gray": "grey", "red": "red", "blue": "blue",
           "brown": "brown", "green": "green", "yellow": "yellow", "orange": "orange", "gold": "gold", "beige": "beige", "maroon": "maroon"}
 KM_TOKENS = {"km", "kms", "kilometre", "kilometres", "kilometer", "kilometers", "miles"}
-_SHOW_ME = re.compile(r"\b(?:just show|show me|read (?:them|it)|go ahead|any of them|whichever|doesn't matter|does not matter)\b")
+# "No preference" answers to a narrowing question ("what's your budget?" -> "any budget") mean: stop asking, read out the matches.
+_SHOW_ME = re.compile(r"\b(?:just show|show me|read (?:them|it)|go ahead|any of them|whichever|does not matter|do not mind|"
+                      r"any (?:budget|make|model|mileage|kilometres|price|one|of those)|anything|"
+                      r"no (?:particular |specific )?(?:preference|budget|limit|make|mileage)|not fussy|not sure)\b|^(?:any|either)$")
 _OTHERS = re.compile(r"\b(other|others|different|else|another|more|alternatives?|something like|not that|not those)\b")
 
 

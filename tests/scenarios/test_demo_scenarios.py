@@ -198,3 +198,11 @@ def test_an_unsearchable_car_wish_is_not_called_off_topic(call):
     c.say("SUV under 150 thousand")
     assert "can't search on that" in c.say("make it automatic").reply
     assert "only help with our used cars" in c.say("what is the weather like").reply
+
+
+def test_no_preference_answers_to_a_narrowing_question_list_the_cars(call):
+    for answer in ("any budget", "no preference", "anything", "doesn't matter", "any"):
+        c = call({answer: "search_cars"})
+        c.say("toyota")
+        r = c.say(answer)
+        assert "can't search" not in r.reply and r.debug.state_after == "answering", (answer, r.reply)
