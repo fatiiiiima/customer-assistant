@@ -34,7 +34,7 @@ model is `qwen3:4b-instruct-2507-q4_K_M`; closed gates stay closed until measure
 | Ollama/llama.cpp for all LLM work | **Backend interface**; OpenVINO GenAI for the voice path, Ollama for the text core, website chat and as a fallback | iGPU prefill on a cache miss: 89-158 ms vs 1.2-4.7 s on CPU |
 | LLM emits ~20-token JSON | **Intent-only call (~6 tokens)**, slots extracted by code and grounded in the utterance | decode is 15-40 tok/s; small models invent slot values |
 | Rules as a nice-to-have | **Rules first, gated per intent** by measured precision | 83% of turns are rule-answerable, but state-changing keyword rules mis-fire on off-topic speech |
-| Everything in one process | **Defined process layout** (section 4) | `sherpa-onnx` and `onnxruntime` DLLs clash on Windows |
+| Everything in one process | **Defined process layout** (section 4) | crash isolation, barge-in cancel, GPL isolation (the DLL-clash reason I first gave was wrong: all runtimes load together, verified) |
 
 ## 1. Acceptance criteria
 
@@ -54,7 +54,7 @@ model is `qwen3:4b-instruct-2507-q4_K_M`; closed gates stay closed until measure
 
 **T0. FIRST: NLU backend interface + OpenVINO accuracy comparison (checkpoint A, a hard gate).**
 * Define `NluBackend` (section 3) with two real implementations (`OllamaBackend`, `OpenVinoBackend`) and the config switch.
-* Quick check, same hour: `import openvino_genai` and `onnxruntime` in one process and run both. If they clash, OpenVINO moves
+* Quick check (DONE: 12 of 12 orderings of OpenVINO, onnxruntime and sherpa-onnx work in one process, `scripts/check_runtime_coexistence.py`). If they clashed, OpenVINO would move
   into its own process (section 4) before anything else is built.
 * Run the three existing sets (dev 31, heldout 40, fresh 29) and, when you supply it, **your recorded + typed set**, through:
   Ollama Q4_K_M 4B and 1.7B vs OpenVINO int4 4B and 1.7B, same prompts, same grammar, temperature 0, full-JSON mode
@@ -140,16 +140,16 @@ the Phase 1 text core use `ollama` by default; the voice path defaults to `openv
 
 | Process | Contains | Why separate or together |
 |---|---|---|
-| **agent** (main) | Pipecat pipeline (Phase 3), Silero VAD + turn model (onnxruntime), state machine, rules, policy, repositories, **OpenVINO STT + LLM in-process** | one process keeps STT->NLU latency lowest; OpenVINO ships no `onnxruntime.dll`. **To verify in T0** that OpenVINO and onnxruntime coexist; if not, OpenVINO moves to a service process |
-| **tts** | sherpa-onnx Piper (owns its `onnxruntime.dll`) | the DLL clash; also isolates TTS crashes and lets barge-in cancel by killing a request, not the call |
+| **agent** (main) | Pipecat pipeline (Phase 3), Silero VAD + turn model (onnxruntime), state machine, rules, policy, repositories, **OpenVINO STT + LLM in-process** | one process keeps STT->NLU latency lowest. **Verified**: OpenVINO and onnxruntime (and sherpa) coexist in one process |
+| **tts** | sherpa-onnx Piper (+ its statically linked GPL-3 espeak-ng) | crash isolation; barge-in can cancel a request without touching the call; keeps the GPL component in its own process, which also eases a later swap (see `docs/LICENSES.md`) |
 | **ollama** (existing server) | Ollama models | already a separate process; used by the text core, website chat and the fallback |
 | website chat (later) | imports `dealer_core` or calls it over HTTP | out of scope for Phase 1 |
 
 TTS interface: `TtsEngine.synthesize(text) -> AsyncIterator[AudioChunk]` plus `cancel(request_id)` and `health()`. Transport: a
 local pipe now (measured round trip < 0.1 ms; time to first audio of a ~11-word REPLY sentence is 112-280 ms on the primary stack: this is the first meaningful word, not the ack clip).
 Chunk = one sentence from sherpa's callback. A supervisor in the agent process restarts the TTS process on crash and the
-current turn falls back to a cached "one moment" clip. No component loads both `sherpa_onnx` and an `onnxruntime` engine
-(Silero VAD, Kokoro, Moonshine) in one process; that rule gets a startup self-check.
+current turn falls back to a cached "one moment" clip. A startup self-check runs `scripts/check_runtime_coexistence.py`'s logic so a
+future runtime upgrade that breaks coexistence is caught immediately.
 
 ## 5. Fast path with precision gates (your condition 5)
 
@@ -218,7 +218,7 @@ New dependencies: none beyond Phase 0b's (`openvino-genai`, `rapidfuzz`, `pytest
 ## 8. Risks and unknowns
 
 * **OpenVINO accuracy on the int4 builds is unmeasured** (T0 gate). The Q4_K_M and OpenVINO int4 quantizations differ.
-* **OpenVINO + onnxruntime coexistence in one process is untested**; handled by the T0 check and the process fallback.
+* OpenVINO + onnxruntime + sherpa coexistence in one process: **tested, 12 of 12 orderings OK** (re-test after any upgrade).
 * 100 labelled utterances cannot settle a 5-point accuracy question; I will say so rather than guess.
 * Endpointing/turn-detection latency is unmeasured (Phase 3); the 0.6 s / 1.3 s / 1.8 s first-meaningful-word figures assume ~300 ms.
 * Real accented speech: all STT numbers are on synthetic audio. Your 37 recordings are still needed.

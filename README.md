@@ -54,8 +54,8 @@ Latency logs (`logs/latency.jsonl`) contain timings only. Transcripts and phone 
 excluded unless `latency_log.include_transcripts` is set to true.
 
 ## Windows gotchas found in Phase 0b
-- `sherpa-onnx` and the `onnxruntime` wheel each ship their own `onnxruntime.dll`; the first loaded in a process wins.
-  Keep sherpa engines (STT/Piper TTS) and onnxruntime engines (Silero VAD, Kokoro, Moonshine) in separate processes.
+- `sherpa-onnx` needs its `sherpa-onnx-core` package (which carries its own `onnxruntime.dll`); `uv` does not install it
+  transitively, so it is pinned. With it present, OpenVINO, onnxruntime and sherpa-onnx load and run together in ONE process in every import order (`scripts/check_runtime_coexistence.py`: 12 of 12 orderings, with real smoke tests). Earlier notes saying otherwise were wrong: they came from the period when `sherpa-onnx-core` was missing and sherpa picked up the old `System32` DLL. Re-run the script after any runtime upgrade.
 - `uv` does not install `sherpa-onnx-core` transitively; it is pinned in the `spike` extra.
 - Piper's `lessac`, `ryan` and `hfc_*` voices are not licensed for commercial use. See docs/LICENSES.md.
 

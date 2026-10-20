@@ -76,6 +76,15 @@ engine behind the `TtsEngine` interface so any row above can be swapped in, and 
 | Kokoro-82M | Apache-2.0 | OK, but not used |
 | Silero VAD / Pipecat smart-turn model | MIT / BSD | Verify in Phase 3 |
 
+### Our OpenVINO conversion of Qwen3-4B-Instruct-2507 (Phase 1, T0)
+
+| Item | License | Notes |
+|---|---|---|
+| Converted weights `models/ov/Qwen3-4B-Instruct-2507-int4-ov-nocal` (and `...-int4-ov` when the AWQ run finishes) | **Apache-2.0** (derivative of `Qwen/Qwen3-4B-Instruct-2507`, whose card says Apache-2.0) | produced locally, not redistributed; keep the Qwen licence/notice with the files if they are ever shared |
+| `optimum` 2.3.0, `optimum-intel` 2.2.0, `nncf` 3.4.0, `transformers` 5.5.4, `datasets` 5.0.1, `huggingface-hub`, `openvino`, `openvino-tokenizers`, `safetensors`, `accelerate` | Apache-2.0 | conversion-time only, in an isolated environment (`C:\dev\ov-convert\.venv`), never part of the runtime |
+| `torch` 2.14.1 | Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause (PyPI SPDX expression) | conversion-time only |
+| AWQ calibration text `Salesforce/wikitext` (`wikitext-2-raw-v1`, train split) | **CC-BY-SA-3.0 and GFDL (share-alike)** | used only to compute quantization statistics (128 windows of 32 tokens from the first 1,024 rows); the weights are not trained on it. Not a legal opinion: flag for the same legal/IT review as espeak-ng if the converted weights are ever distributed |
+
 ### Piper voices: license is set by the TRAINING DATA, and several popular voices are NOT usable
 Checked from each voice's MODEL_CARD (rhasspy/piper-voices):
 

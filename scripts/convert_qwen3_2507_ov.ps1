@@ -14,13 +14,13 @@ function Step($name, [scriptblock]$b) {
     "$name : $([math]::Round($d.TotalMinutes,1)) min" | Add-Content $t
 }
 if (-not (Test-Path "$env_dir\.venv")) { Step "create env"  { & $uv venv "$env_dir\.venv" --python 3.12 } }
-Step "install optimum-intel[openvino] (idempotent)" { & $uv pip install --python "$env_dir\.venv\Scripts\python.exe" "optimum-intel[openvino]" }
+Step "install optimum-intel[openvino] (idempotent)" { & $uv pip install --python "$env_dir\.venv\Scripts\python.exe" "optimum-intel[openvino]" datasets }  # datasets (Apache-2.0): AWQ calibration data
 & $uv pip freeze --python "$env_dir\.venv\Scripts\python.exe" | Select-String '^(optimum|optimum-intel|transformers|torch|nncf|openvino|datasets)==' | Set-Content logs\convert_versions.txt
 $cli = "$env_dir\.venv\Scripts\optimum-cli.exe"
-Step "export data-free int4 (no calibration)" {
+if (-not (Test-Path "models\ov\Qwen3-4B-Instruct-2507-int4-ov-nocal\openvino_model.xml")) { Step "export data-free int4 (no calibration)" {
     & $cli export openvino -m Qwen/Qwen3-4B-Instruct-2507 --weight-format int4 --sym --group-size 128 --ratio 1.0 --task text-generation-with-past "models\ov\Qwen3-4B-Instruct-2507-int4-ov-nocal"
-}
-Step "export AWQ + scale-estimation int4 (org recipe)" {
+} }
+if (-not (Test-Path "models\ov\Qwen3-4B-Instruct-2507-int4-ov\openvino_model.xml")) { Step "export AWQ + scale-estimation int4 (org recipe)" {
     & $cli export openvino -m Qwen/Qwen3-4B-Instruct-2507 --weight-format int4 --sym --group-size 128 --ratio 1.0 --awq --scale-estimation --dataset wikitext2 --task text-generation-with-past "models\ov\Qwen3-4B-Instruct-2507-int4-ov"
-}
+} }
 Write-Host "=== convert done $(Get-Date -Format HH:mm:ss)"

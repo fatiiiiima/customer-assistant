@@ -11,11 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-# WINDOWS DLL NOTE: sherpa_onnx (needs sherpa-onnx-core) and the onnxruntime wheel each ship an
-# "onnxruntime.dll" of a different version, and C:\Windows\System32 has an old third one (1.17.1).
-# Whichever loads first in a process wins by name, so DO NOT mix sherpa_onnx and onnxruntime-based
-# engines (Kokoro, Moonshine, faster-whisper) in one process. The benchmarks run one engine family
-# per process; the voice pipeline will need the same split (see docs/PHASE0B_REPORT.md).
+# DLL NOTE (corrected in Phase 1): an old onnxruntime.dll (1.17.1) sits in C:\Windows\System32 and is what sherpa loads if
+# `sherpa-onnx-core` is NOT installed. With it installed, sherpa, onnxruntime and openvino coexist in one process (verified:
+# scripts/check_runtime_coexistence.py), so no engine-per-process split is required for correctness.
 
 ROOT =Path(__file__).resolve().parents[1]
 MODELS = ROOT / "models"

@@ -1,6 +1,6 @@
 """Render the same sentences in each candidate Piper voice, as WAV files you can listen to and choose from.
 
-Runs in its own process and imports only sherpa_onnx (no onnxruntime engines): see the DLL note in README.md.
+Runs in its own process and imports only sherpa_onnx.
 Both voices are permissively licensed (libritts_r = CC BY 4.0, joe = CC0). libritts_r is a multi-speaker model; speaker 0 is
 rendered here and other speaker ids can be tried with --libritts-sid.
 """

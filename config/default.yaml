@@ -37,7 +37,7 @@ llm:
     openvino_gpu:
       runtime: openvino
       device: GPU
-      model: Qwen3-4B-Instruct-2507-int4-ov     # our conversion; falls back to the org's Qwen3-4B-int4-ov if absent
+      model: Qwen3-4B-Instruct-2507-int4-ov-nocal   # our data-free int4 conversion of the 2507 checkpoint (T0: matches Ollama Q4_K_M)
       prompt_mode: auto                          # -> per-state prompt on GPU
     openvino_gpu_small:
       runtime: openvino

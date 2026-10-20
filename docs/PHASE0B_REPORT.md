@@ -319,10 +319,9 @@ configurations wrongly because the machine drifted between runs.
 
 ## 10. Things that went wrong or are unverified
 
-* Windows DLL clash: `sherpa-onnx` and the `onnxruntime` wheel each ship `onnxruntime.dll` (and `System32` has a
-  third, v1.17.1). The first one loaded in a process wins, so **never mix sherpa and onnxruntime engines in one
-  process**. Silero VAD (onnxruntime) + sherpa TTS in one Pipecat process is a Phase 3 risk; likely fix: run TTS in
-  its own process. `uv` also failed to install `sherpa-onnx-core` transitively; it is now pinned.
+* **CORRECTION (found in Phase 1): the "Windows DLL clash" I reported here was wrong.** The failure I saw happened because `uv` did not
+  install `sherpa-onnx-core`, so sherpa loaded the old `System32` onnxruntime.dll (v1.17.1). With `sherpa-onnx-core` installed, OpenVINO, onnxruntime and sherpa-onnx load and run together in ONE process in every import order (`scripts/check_runtime_coexistence.py`: 12 of 12 orderings, with real smoke tests). Earlier notes saying otherwise were wrong, and the Silero-VAD-plus-sherpa risk I listed for Phase 3 does not exist on this machine. Keeping TTS in its own process is still
+  recommended, but for other reasons: crash isolation, cancelling a request for barge-in, and keeping GPL-3 espeak-ng in a separate process.
 * **My OpenVINO "94 ms prefill" claim in the first version of this report was wrong** (it measured KV-cache hits). I found
   it because the sequential test disagreed with the standalone one. Corrected in the headline and sections 8-9.
 * The first LLM timings (battery, with other scripts running) were contaminated and were all redone.
