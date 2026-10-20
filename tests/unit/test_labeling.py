@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from dealer_core.dialogue.states import Intent, State
+from dealer_core.dialogue.states import STATE_SPEC, Intent, State
 from dealer_core.eval.datasets import load_csv_set
 from dealer_core.labeling import core
 from dealer_core.labeling.server import App, make_handler, schema_json
@@ -114,5 +114,96 @@ def test_http_api_roundtrip(items, tmp_path):
         good = post({"id": items[0].id, "state": "negotiating", "intent": "make_offer", "slots": {"offer_amount": "48000"}})
         assert good["ok"] and good["labeled"] == 1 and good["coverage"]["make_offer"] == 1
         assert (tmp_path / "mine.csv").exists()
+    finally:
+        httpd.shutdown()
+
+
+# ---- folder loading, ambiguity, guide (added with the batch-1 spontaneous set) --------------------------------------------
+def test_load_items_from_dir_is_verbatim_and_never_touches_the_source_files(tmp_path):
+    raw = b"i didn't say that can you read my question properly\r\n"
+    (tmp_path / "spont001.txt").write_bytes(raw)
+    (tmp_path / "spont002.txt").write_bytes(b"  the weather is really hot today  \r\n")
+    (tmp_path / "spont002.wav").write_bytes(b"RIFF")
+    (tmp_path / "spont003.txt").write_bytes(b"\r\n")                      # empty -> skipped
+    (tmp_path / "README.txt").write_text("not an utterance")
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    items = core.load_items_from_dir(tmp_path)
+    assert [(i.id, i.utterance, i.source) for i in items] == [
+        ("spont001", "i didn't say that can you read my question properly", "typed"),
+        ("spont002", "  the weather is really hot today  ", "spoken")]       # inner and outer text untouched, only the line break goes
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before      # source files byte-identical afterwards
+    with pytest.raises(ValueError, match="no utterances matched"):
+        core.load_items_from_dir(tmp_path, "nothing*.txt")
+
+
+def test_ambiguous_label_rules(items):
+    ids = {i.id for i in items}
+    base = {"id": items[0].id, "state": "answering", "intent": "ask_policy", "ambiguous": True}
+    with pytest.raises(ValueError, match="ambiguous needs"):
+        core.validate_label(base, ids)                                          # a silent "ambiguous" flag is refused
+    with pytest.raises(ValueError, match="different from the primary"):
+        core.validate_label({**base, "also_ok": ["ask_policy"]}, ids)
+    with pytest.raises(ValueError, match="unknown intent"):
+        core.validate_label({**base, "also_ok": ["nonsense"]}, ids)
+    a = core.validate_label({**base, "also_ok": ["ask_car_info", "ask_car_info", "send_details"]}, ids)
+    assert a.ambiguous and a.also_ok == ["ask_car_info", "send_details"]       # de-duplicated, order kept
+    assert core.validate_label({**base, "notes": "asks two things"}, ids).ambiguous          # a note alone is enough
+    plain = core.validate_label({"id": items[0].id, "state": "answering", "intent": "ask_policy", "also_ok": ["send_details"]}, ids)
+    assert not plain.ambiguous and plain.also_ok == []                          # alternates are ignored unless ambiguous is ticked
+
+
+def test_ambiguity_survives_csv_round_trip_and_lenient_intent_accepts_alternates(items, tmp_path):
+    store = core.LabelStore(items, tmp_path / "l.jsonl", tmp_path / "mine.csv")
+    ids = {i.id for i in items}
+    store.save(core.validate_label({"id": items[0].id, "state": "negotiating", "intent": "make_offer", "ambiguous": True,
+                                    "also_ok": ["ask_lowest_price"], "notes": "offers a price and asks for the best one",
+                                    "slots": {"offer_amount": "48000"}}, ids))
+    store.save(core.validate_label({"id": items[1].id, "state": "answering", "intent": "ask_car_info"}, ids))
+    header = (tmp_path / "mine.csv").read_text(encoding="utf-8-sig").splitlines()[0]
+    assert header.endswith("notes,ambiguous,also_ok_intents")
+    rows = load_csv_set(tmp_path / "mine.csv")
+    assert (rows[0].ambiguous, rows[0].also_ok) == (True, ("ask_lowest_price",))
+    assert (rows[1].ambiguous, rows[1].also_ok) == (False, ())
+
+
+def test_old_label_files_without_the_new_fields_still_load(items, tmp_path):
+    old = {"id": items[0].id, "state": "greeting", "car": "", "intent": "greet", "slots": {}, "notes": "", "discard": False, "labeled_at": "x"}
+    (tmp_path / "l.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+    store = core.LabelStore(items, tmp_path / "l.jsonl", tmp_path / "mine.csv")
+    assert store.labels[items[0].id].ambiguous is False and store.labels[items[0].id].also_ok == []
+
+
+def test_guide_covers_every_state_and_intent_and_its_examples_are_invented(tmp_path):
+    from pathlib import Path
+    import re
+
+    assert set(core.STATE_GUIDE) == {s.value for s in STATE_SPEC} and set(core.INTENT_GUIDE) == {i.value for i in Intent}
+    norm = lambda t: re.sub(r"\W+", " ", t.lower()).strip()
+    in_sets = set()
+    for p in (Path(__file__).resolve().parents[2] / "data" / "nlu_sets").glob("*.json"):
+        in_sets |= {norm(r["utterance"]) for r in json.loads(p.read_text(encoding="utf-8"))}
+    examples = [e for _, e in core.STATE_GUIDE.values()] + [e for _, e in core.INTENT_GUIDE.values()]
+    assert all(norm(e) not in in_sets for e in examples), "a guide example duplicates a test-set utterance"
+    s = schema_json()
+    assert all(x["example"] and x["doc"] for x in s["intents"]) and all(x["example"] and x["help"] for x in s["states"])
+
+
+def test_http_accepts_an_ambiguous_label(items, tmp_path):
+    store = core.LabelStore(items, tmp_path / "l.jsonl", tmp_path / "mine.csv")
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(App(store, ["S1042"], {})))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        def post(body):
+            req = urllib.request.Request(base + "/api/label", json.dumps(body).encode(), {"Content-Type": "application/json"})
+            try:
+                return json.load(urllib.request.urlopen(req))
+            except urllib.error.HTTPError as e:
+                return json.load(e)
+
+        refused = post({"id": items[0].id, "state": "answering", "intent": "ask_car_info", "ambiguous": True})
+        assert refused["ok"] is False and "ambiguous needs" in refused["error"]
+        ok = post({"id": items[0].id, "state": "answering", "intent": "ask_car_info", "ambiguous": True, "also_ok": ["send_details"]})
+        assert ok["ok"] and json.load(urllib.request.urlopen(base + "/api/item/0"))["label"]["also_ok"] == ["send_details"]
     finally:
         httpd.shutdown()

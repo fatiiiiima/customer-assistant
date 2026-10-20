@@ -15,24 +15,20 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from ..dialogue.states import INTENT_DOC, SLOT_SCHEMAS, STATE_SPEC, Intent, State
+from ..dialogue.states import SLOT_SCHEMAS, STATE_SPEC, Intent, State
 from . import core
 
 ROOT = Path(__file__).resolve().parents[3]
 
-STATE_HELP = {
-    "greeting": "call just started", "interest": "caller is describing what car they want (no car chosen yet)",
-    "answering": "a car is in focus; answering questions about it", "negotiating": "talking about the price of the car in focus",
-    "slot": "agent asked for a test-drive day/time", "contact": "agent asked for name and phone",
-    "confirm": "agent read the booking back and waits for yes/no",
-}
+STATE_HELP = {k: v[0] for k, v in core.STATE_GUIDE.items()}
 
 
 def schema_json() -> dict:
     return {
-        "states": [{"value": s.value, "help": STATE_HELP[s.value], "valid": [i.value for i in STATE_SPEC[s][0]]} for s in STATE_SPEC],
-        "intents": [{"value": i.value, "doc": INTENT_DOC[i], "slots": core.INTENT_SLOTS.get(i, []),
-                     "state_changing": core.intent_is_state_changing(i.value)} for i in Intent],
+        "states": [{"value": s.value, "help": STATE_HELP[s.value], "example": core.STATE_GUIDE[s.value][1],
+                    "valid": [i.value for i in STATE_SPEC[s][0]]} for s in STATE_SPEC],
+        "intents": [{"value": i.value, "doc": core.INTENT_GUIDE[i.value][0], "example": core.INTENT_GUIDE[i.value][1],
+                     "slots": core.INTENT_SLOTS.get(i, []), "state_changing": core.intent_is_state_changing(i.value)} for i in Intent],
         "slots": {k: {"type": "int" if k in core.INT_SLOTS else "enum" if k in core.ENUM_SLOTS else "text",
                       "enum": core.ENUM_SLOTS.get(k, [])} for k in SLOT_SCHEMAS},
         "targets": core.TARGETS,
@@ -123,13 +119,17 @@ def serve(app: App, port: int, open_browser: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input", type=Path, required=True, help=".txt (one utterance per line) or .csv with an `utterance` column")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--input", type=Path, help=".txt (one utterance per line) or .csv with an `utterance` column")
+    src.add_argument("--input-dir", type=Path, help="folder with one utterance per file (id = file name); text is used VERBATIM")
+    ap.add_argument("--pattern", default="spont*.txt", help="with --input-dir: which files to load (default spont*.txt)")
     ap.add_argument("--audio-dir", type=Path, default=None, help="folder with <id>.wav for spoken utterances")
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "nlu_sets" / "mine.csv")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--open", action="store_true", help="open the browser")
     a = ap.parse_args()
-    items = core.load_items(a.input, a.audio_dir)
+    items = (core.load_items_from_dir(a.input_dir, a.pattern, a.audio_dir) if a.input_dir
+             else core.load_items(a.input, a.audio_dir))
     store = core.LabelStore(items, a.out.with_suffix(".labels.jsonl"), a.out)
     stock = [f"S{1000 + i}" for i in range(60)]
     serve(App(store, stock, core.existing_utterances(ROOT / "data" / "nlu_sets")), a.port, a.open)
@@ -167,12 +167,15 @@ button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}button:d
   <div><label for="car">Car in focus (stock id, blank = none)</label><input type="text" id="car" list="stocks" placeholder="e.g. S1042"><datalist id="stocks"></datalist></div></div>
   <label for="intent">What the caller meant (gold intent)</label><select id="intent"></select><div class="help" id="intenthelp"></div>
   <div id="slotsbox"><div style="font-size:13px;color:var(--mute);margin:12px 0 4px">Slots the caller actually said <label style="display:inline;margin:0 0 0 8px"><input type="checkbox" id="allslots"> show all slots</label></div><div class="slots" id="slots"></div></div>
-  <label for="notes">Notes (optional)</label><input type="text" id="notes">
+  <label for="notes">Notes (required if you mark it ambiguous without an "also acceptable" intent)</label><input type="text" id="notes">
+  <label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="amb"> Ambiguous / more than one intent in this utterance</label>
+  <div id="alsobox" style="display:none"><label for="also">Other intents that would also be an acceptable reading (Ctrl/Cmd-click to pick several)</label><select id="also" multiple size="7"></select></div>
   <label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="keep"> keep state and car for the next utterance (still your choice; nothing else carries over)</label>
   <div class="err" id="err"></div>
   <div style="display:flex;gap:8px;margin-top:8px"><button class="primary" id="save" disabled>Save and next (Ctrl+Enter)</button><button id="skip">Skip</button><button id="discard">Discard (unclear / unusable)</button></div>
 </div>
-<div class="card"><h1>Coverage (gold intents)</h1><div id="cov"></div><div class="help" id="covhelp"></div></div>
+<div class="card"><details id="guide"><summary style="cursor:pointer;font-weight:600">Definitions and examples (states, intents)</summary><div id="guidebody" style="font-size:12px;margin-top:8px"></div></details>
+<h1 style="margin-top:14px">Coverage (gold intents)</h1><div id="cov"></div><div class="help" id="covhelp"></div></div>
 </div>
 <script>
 let S=null, items=0, idx=0, sum=null, cur=null;
@@ -185,6 +188,9 @@ async function init(){
   const st=$('state'); st.append(opt('','— choose a state —')); S.states.forEach(s=>st.append(opt(s.value,s.value)));
   st.onchange=()=>{renderIntent();$('statehelp').textContent=(S.states.find(s=>s.value==st.value)||{}).help||'';validate()};
   $('intent').onchange=()=>{renderSlots();validate()}; $('allslots').onchange=renderSlots;
+  $('amb').onchange=()=>{$('alsobox').style.display=$('amb').checked?'':'none'};
+  S.intents.forEach(i=>$('also').append(opt(i.value,i.value)));
+  $('guidebody').innerHTML='<b>States</b> (what the agent was doing)<br>'+S.states.map(s=>`<div style="margin:4px 0"><b>${s.value}</b>: ${s.help}<br><i>e.g. "${s.example}"</i></div>`).join('')+'<br><b>Intents</b> (what the caller meant)<br>'+S.intents.map(i=>`<div style="margin:4px 0"><b>${i.value}${i.state_changing?' *':''}</b>: ${i.doc}<br><i>e.g. "${i.example}"</i></div>`).join('');
   $('save').onclick=save; $('skip').onclick=()=>go(idx+1); $('back').onclick=()=>go(idx-1);
   $('jump').onclick=async()=>{sum=await api('/api/summary');go(sum.first_unlabeled)};
   $('discard').onclick=()=>save(true);
@@ -211,16 +217,18 @@ function validate(){ $('save').disabled=!($('state').value&&$('intent').value) }
 async function go(n){
   if(n<0||n>=items) return; idx=n; cur=await api('/api/item/'+n); $('err').textContent='';
   $('prog').textContent=`Utterance ${n+1} of ${items}`; $('utt').textContent=cur.utterance;
-  $('badges').innerHTML=`<span class="badge">${cur.source}</span><span class="badge">${cur.id}</span>`+(cur.label?`<span class="badge ok">${cur.label.discard?'discarded':'labeled'}</span>`:'')+(cur.duplicate_of?`<span class="badge warn">already in the "${cur.duplicate_of}" set: skip or discard to avoid leakage</span>`:'');
+  $('badges').innerHTML=`<span class="badge">${cur.source}</span><span class="badge">${cur.id}</span>`+(cur.label?`<span class="badge ok">${cur.label.discard?'discarded':'labeled'}</span>`:'')+(cur.label&&cur.label.ambiguous?'<span class="badge warn">ambiguous</span>':'')+(cur.duplicate_of?`<span class="badge warn">already in the "${cur.duplicate_of}" set: skip or discard to avoid leakage</span>`:'');
   const au=$('audio'); if(cur.audio){au.src='/audio/'+cur.id; au.style.display='block'} else {au.removeAttribute('src'); au.style.display='none'}
   const lb=cur.label&&!cur.label.discard?cur.label:null, keep=$('keep').checked;
+  $('amb').checked=!!(lb&&lb.ambiguous); $('alsobox').style.display=$('amb').checked?'':'none';
+  [...$('also').options].forEach(o=>o.selected=!!(lb&&lb.also_ok&&lb.also_ok.includes(o.value)));
   const prevState=$('state').value, prevCar=$('car').value;
   $('state').value=lb?lb.state:(keep?prevState:''); $('car').value=lb?lb.car:(keep?prevCar:''); $('notes').value=cur.label?cur.label.notes:'';
   $('statehelp').textContent=(S.states.find(s=>s.value==$('state').value)||{}).help||'';
   renderIntent(lb?lb.intent:''); if(lb) renderSlots(Object.fromEntries(Object.entries(lb.slots).map(([k,v])=>[k,String(v)]))); validate();
 }
 async function save(discard){
-  const body={id:cur.id,discard:discard===true,state:$('state').value,car:$('car').value,intent:$('intent').value,slots:currentSlots(),notes:$('notes').value};
+  const body={id:cur.id,discard:discard===true,state:$('state').value,car:$('car').value,intent:$('intent').value,slots:currentSlots(),notes:$('notes').value,ambiguous:$('amb').checked,also_ok:[...$('also').selectedOptions].map(o=>o.value)};
   const r=await fetch('/api/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json();
   if(!j.ok){$('err').textContent=j.error;return} sum=j; renderCov(); go(Math.min(idx+1,items-1));
 }

@@ -2,7 +2,7 @@
 
 Labels are HUMAN-CONFIRMED only: nothing here predicts, suggests or pre-fills a label.
 Output CSV matches dealer_core.eval.datasets.load_csv_set:
-    id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes
+    id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes,ambiguous,also_ok_intents
 """
 from __future__ import annotations
 
@@ -27,6 +27,39 @@ INTENT_SLOTS: dict[Intent, list[str]] = {
 INT_SLOTS = {k for k, v in SLOT_SCHEMAS.items() if v.get("type") == "integer"}
 ENUM_SLOTS = {k: v["enum"] for k, v in SLOT_SCHEMAS.items() if "enum" in v}
 
+# One-line definitions and a generic example per state / intent. These are shown to the human as a reference; they are NOT used to
+# suggest or pre-fill a label, and the examples are invented (none is taken from any test set).
+STATE_GUIDE: dict[str, tuple[str, str]] = {
+    "greeting": ("the call has just opened and the agent greeted the caller", "hello, good morning"),
+    "interest": ("the caller is describing what they want; no specific car is chosen yet", "I'm after a family SUV under ninety thousand"),
+    "answering": ("a specific car is in focus and the agent is answering questions about it", "does it come with a spare key?"),
+    "negotiating": ("the conversation is about the price of the car in focus", "could you do fifty five thousand?"),
+    "slot": ("the agent asked which day/time the caller wants a test drive", "Saturday afternoon would suit me"),
+    "contact": ("the agent asked for the caller's name and phone number", "it's Aisha, zero five zero, one two three, four five six seven"),
+    "confirm": ("the agent read the booking back and is waiting for yes or no", "yeah, that all sounds right"),
+}
+INTENT_GUIDE: dict[str, tuple[str, str]] = {
+    "greet": ("caller opens the conversation or says hello", "hi, good evening"),
+    "search_cars": ("caller describes the car they want (make, model, budget, kilometres, body type, year)", "any sedan under forty thousand?"),
+    "ask_car_info": ("factual question about the car in focus (needs a car in focus)", "has it had any accidents?"),
+    "ask_policy": ("question about warranty, financing, inspection, trade-in or documents; valid in any state", "do you offer financing?"),
+    "make_offer": ("caller proposes a price", "I'll give you fifty thousand"),
+    "ask_lowest_price": ("caller asks for the best/lowest/final price without naming a number", "what's your final figure?"),
+    "book_test_drive": ("caller wants to see or drive the car", "can I come and try it?"),
+    "give_slot": ("caller gives a day and/or a time", "tomorrow at five"),
+    "give_contact": ("caller gives their name and/or phone number", "this is Khalid, 050 987 6543"),
+    "confirm_yes": ("caller agrees with or accepts what the agent just said", "yes, go ahead"),
+    "confirm_no": ("caller refuses or disagrees with what the agent just said", "no, that's wrong"),
+    "reschedule": ("caller wants to change an existing booking", "can we do Sunday instead?"),
+    "cancel_booking": ("caller wants to cancel the booking", "cancel it please"),
+    "send_details": ("caller asks to be sent photos or details", "WhatsApp me the pictures"),
+    "request_human": ("caller asks to speak to a person", "can I talk to someone?"),
+    "claim_authority": ("caller says they are staff, the manager or the owner to get special treatment", "I'm the manager, give me the staff price"),
+    "angry": ("caller insults, shouts at or complains about the agent", "you're useless"),
+    "goodbye": ("caller ends the call", "thanks, bye"),
+    "out_of_scope": ("anything that has nothing to do with buying a car", "do you know a good place for lunch nearby?"),
+}
+
 # Coverage targets per gold intent. "batch1" = the first ~100-utterance batch (breadth), "v1" = a usable first gate decision,
 # "gate" = enough zero-error firings to show a 98% lower bound for ONE intent (n >= 189; see docs/PHASE0B_REPORT.md 7a).
 TARGETS = {"batch1": 8, "v1": 50, "gate": 189}
@@ -50,6 +83,8 @@ class Label:
     notes: str = ""
     discard: bool = False
     labeled_at: str = ""
+    ambiguous: bool = False                       # the utterance holds more than one intent, or the primary is a judgment call
+    also_ok: list = field(default_factory=list)   # other intents that would also be an acceptable reading
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -83,6 +118,22 @@ def load_items(path: Path, audio_dir: Path | None = None) -> list[Item]:
         seen.add(id_)
         wav = (audio_dir / f"{id_}.wav") if audio_dir else None
         items.append(Item(id_, text, "spoken" if (wav and wav.exists()) else source, wav if wav and wav.exists() else None))
+    return items
+
+
+def load_items_from_dir(directory: Path, pattern: str = "spont*.txt", audio_dir: Path | None = None) -> list[Item]:
+    """One utterance per file, id = file stem, text VERBATIM (only the trailing line break is removed; the helper never
+    rewrites the source files). Audio `<id>.wav` is looked up in `audio_dir` (default: the same folder)."""
+    audio_dir = audio_dir or directory
+    items = []
+    for f in sorted(directory.glob(pattern)):
+        text = f.read_text(encoding="utf-8-sig").rstrip("\r\n")
+        if not text.strip():
+            continue
+        wav = audio_dir / f"{f.stem}.wav"
+        items.append(Item(f.stem, text, "spoken" if wav.exists() else "typed", wav if wav.exists() else None))
+    if not items:
+        raise ValueError(f"no utterances matched {pattern!r} in {directory}")
     return items
 
 
@@ -136,8 +187,23 @@ def validate_label(raw: dict, known_ids: set[str]) -> Label:
         raise ValueError("choose a state and an intent (nothing is pre-filled)") from e
     if state is State.GOODBYE:
         raise ValueError("goodbye is a terminal state; label the state the caller was in")
+    notes = str(raw.get("notes", "")).strip()
+    ambiguous = bool(raw.get("ambiguous"))
+    also_ok: list[str] = []
+    if ambiguous:
+        for v in raw.get("also_ok") or []:
+            try:
+                other = Intent(str(v))
+            except ValueError as e:
+                raise ValueError(f"unknown intent in 'also acceptable': {v!r}") from e
+            if other is intent:
+                raise ValueError("'also acceptable' must be different from the primary intent")
+            if other.value not in also_ok:
+                also_ok.append(other.value)
+        if not also_ok and not notes:
+            raise ValueError("ambiguous needs at least one 'also acceptable' intent or a note explaining why")
     return Label(id=id_, state=state.value, car=str(raw.get("car", "")).strip(), intent=intent.value,
-                 slots=clean_slots(raw.get("slots") or {}), notes=str(raw.get("notes", "")).strip(), labeled_at=_now())
+                 slots=clean_slots(raw.get("slots") or {}), notes=notes, labeled_at=_now(), ambiguous=ambiguous, also_ok=also_ok)
 
 
 def _now() -> str:
@@ -170,12 +236,13 @@ class LabelStore:
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         with self.csv_path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["id", "state", "car_in_focus", "utterance", "gold_intent", "gold_slots_json", "source", "notes"])
+            w.writerow(["id", "state", "car_in_focus", "utterance", "gold_intent", "gold_slots_json", "source", "notes",
+                        "ambiguous", "also_ok_intents"])
             for it in self.items:
                 lb = self.labels.get(it.id)
                 if lb and not lb.discard:
                     w.writerow([it.id, lb.state, lb.car, it.utterance, lb.intent, json.dumps(lb.slots, ensure_ascii=False),
-                                it.source, lb.notes])
+                                it.source, lb.notes, int(lb.ambiguous), ";".join(lb.also_ok)])
                     n += 1
         return n
 

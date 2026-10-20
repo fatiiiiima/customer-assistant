@@ -78,10 +78,12 @@ def summarise(label: str, examples: list[Example], preds: dict[str, dict]) -> di
         sc = [score(e, preds[e.id]["json"], ground=True) for e in exs]
         raw = [score(e, preds[e.id]["json"], ground=False) for e in exs]
         io = [preds[e.id]["intent_only"] == e.gold_intent.value for e in exs]
+        lenient = [(preds[e.id]["json"].get("intent") in {e.gold_intent.value, *e.also_ok}) for e in exs]
         agree = [preds[e.id]["intent_only"] == preds[e.id]["json"].get("intent") for e in exs]
         n = len(exs)
         out["sets"][name] = {
-            "n": n, "intent": sum(s.intent_ok for s in sc) / n, "exact": sum(s.exact for s in raw) / n,
+            "n": n, "n_ambiguous": sum(e.ambiguous for e in exs), "intent_lenient": sum(lenient) / n,
+            "intent": sum(s.intent_ok for s in sc) / n, "exact": sum(s.exact for s in raw) / n,
             "exact_ground": sum(s.exact for s in sc) / n, "intent_only_acc": sum(io) / n, "intent_only_agrees": sum(agree) / n,
             "json_ms_p50": statistics.median(preds[e.id]["json_ms"] for e in exs),
             "intent_ms_p50": statistics.median(preds[e.id]["intent_ms"] for e in exs)}
