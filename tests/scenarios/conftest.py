@@ -29,8 +29,9 @@ class FakeClassifier:
 class Call:
     """One scripted call. `say()` returns (reply, debug) and checks the voice rules on every reply."""
 
-    def __init__(self, table):
-        self.cfg = load_config(environ={})
+    def __init__(self, table, variants=False):
+        # the scenario tests pin the exact base wording; wording variants have their own tests (test_phrasebook.py)
+        self.cfg = load_config(environ={"VA__DIALOGUE__VARIANTS": str(variants).lower()})
         self.clf = FakeClassifier(table)
         self.app = build_app(self.cfg, inventory="demo", classifier=self.clf, clock=lambda: NOW.astimezone(timezone.utc))
         self.s = self.app.engine.new_session()

@@ -2,12 +2,12 @@
 
 Principle: the model never writes a price, date, booking or confirmation. Naturalness is added in three stages, safest first.
 
-## Stage 1 - approved wording variants (BUILT, off by default)
+## Stage 1 - approved wording variants (BUILT; currently ON with the owner-approved set)
 * `src/dealer_core/dialogue/phrasebook.py`: 13 low-risk situations (opening, goodbye, hello again, "what car", "say that again", four
   "too many matches" questions, "can't search on that", "no match", two off-topic lines). Each has a base wording (what the demo was
   verified with) and placeholders (`{total}`, `{desc}`).
-* `config/phrase_variants.yaml`: variants written **offline** by the local model (`scripts/gen_phrase_variants.py`), all `proposed`.
-* **Nothing is used until a person sets `status: approved` AND `dialogue.variants: on`** in `config/default.yaml` (default `off`).
+* `config/phrase_variants.yaml`: variants written **offline** by the local model (`scripts/gen_phrase_variants.py`), generated as `proposed`; the owner then approved all of them (see "Review log").
+* **Nothing is used until a person sets `status: approved` AND `dialogue.variants: true`** in `config/default.yaml` (default `false`; currently `true`).
 * At run time: no model call. A seeded random generator (`dialogue.variant_seed`, default 7) picks among [base + approved variants],
   never the same one twice in a row in a call; the same seed reproduces the same call. Values are filled in by code.
 * Validator (also re-run on every approved entry at start-up; an invalid one stops start-up and names the entry):
@@ -20,12 +20,16 @@ Principle: the model never writes a price, date, booking or confirmation. Natura
 1. Open `config/phrase_variants.yaml`. For each line set `status:` to `approved`, `rejected`, or leave `proposed`. You may edit the text
    (keep `{placeholders}`).
 2. Generate more any time (existing entries are never changed): `.venv\Scripts\python.exe scripts\gen_phrase_variants.py --per 8 --only no_match`
-3. Turn it on: `dialogue.variants: on` (or env var `VA__DIALOGUE__VARIANTS=on`). Run `pytest`, then the demo replay.
+3. Turn it on: `dialogue.variants: true` (or env var `VA__DIALOGUE__VARIANTS=true`). Run `pytest`, then the demo replay.
    **Scripted-demo note:** the demo expectations check key words (for example "6 SUVs under 150,000 dirhams"). If you approve variants,
    re-run `demo_replay.cmd` once and fix any expectation that was tied to the exact base wording.
-4. Known weak spots in the first batch (review will catch them): two `narrow_again` entries are garbled ("I's read out", "I we'll read");
-   some `goodbye` / `hello_again` lines are slightly off ("You're welcome. Have a good day."; "Again, how can I help you?").
-   The validator checks safety (facts, negation, length), not grammar or taste: that is the human review.
+
+### Review log
+* Owner decision: every opening names the **AGMC dealership** (the base opening wording was changed to match: "Hello, welcome to the
+  AGMC dealership. ..."); every other proposed variant approved.
+* Two garbled entries had a typo fixed, not reworded ("I's read out" and "I we'll read" became "I'll read"); they then equalled the base
+  wording and were removed, as were duplicates. The validator checks safety (facts, negation, length), not grammar or taste.
+* To go back to the single verified wording: set `dialogue.variants: false` (one line in `config/default.yaml`).
 
 ## Stage 2 - per-state style flag (NOT BUILT; agreed design)
 `style: template | rephrase | llm_write`, set per state/situation in config.

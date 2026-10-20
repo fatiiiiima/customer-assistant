@@ -89,11 +89,23 @@ def test_shipped_variants_file_is_valid_and_nothing_is_approved_without_a_human(
     load_variants(path)                                             # whatever is approved must validate
 
 
-def test_engine_uses_variants_only_when_enabled(tmp_path):
+def test_engine_uses_variants_only_when_enabled():
     from scenarios.conftest import Call
 
-    c = Call({})
-    assert c.app.engine.opening(c.s) == sit("opening").base         # default config: variants off
-    c.app.engine.phrases = Phrasebook({"opening": ["Welcome! Which car can I help you find today?"]})
-    seen = {c.app.engine.opening(c.app.engine.new_session()) for _ in range(1)}
-    assert seen <= {sit("opening").base, "Welcome! Which car can I help you find today?"}
+    off = Call({})
+    assert {off.app.engine.opening(off.app.engine.new_session()) for _ in range(5)} == {sit("opening").base}
+    on = Call({}, variants=True)
+    lines = set()
+    for seed in range(40):
+        on.app.engine.variant_seed = seed
+        lines.add(on.app.engine.opening(on.app.engine.new_session()))
+    assert len(lines) > 1 and all("AGMC dealership" in x for x in lines)      # varied, and always names the dealership
+
+
+def test_a_whole_call_with_variants_on_stays_valid():
+    from scenarios.conftest import Call
+
+    c = Call({"just show me": "search_cars"}, variants=True)
+    for said in ("SUV under 150 thousand", "SUV under 150 thousand", "just show me", "do you have a bently car", "thanks bye"):
+        r = c.say(said)                              # say() also asserts the voice rules on every reply
+        assert r.reply

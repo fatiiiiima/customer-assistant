@@ -150,7 +150,7 @@ class SendDetailsCfg(_Strict):
 
 
 class DialogueCfg(_Strict):
-    variants: Literal["off", "on"] = "off"       # "on": use human-approved wording variants (config/phrase_variants.yaml)
+    variants: bool = False                       # true: use human-approved wording variants (config/phrase_variants.yaml)
     variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
 
 

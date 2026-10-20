@@ -3,7 +3,7 @@
 How it works
   * Every situation has ONE base template (the wording the demo was verified with) and a list of placeholders.
   * `config/phrase_variants.yaml` holds extra wordings written offline with the local model. Each has a status. Only entries a human
-    has marked `approved` are ever used, and only when `dialogue.variants: on` in the config (default: off).
+    has marked `approved` are ever used, and only when `dialogue.variants: true` in the config (default: off).
   * At run time `Phrasebook.say()` picks one of [base + approved variants] with a seeded random generator, never the same one twice
     in a row for a session. Nothing here calls a model, and the values (counts, filters) are filled in by code afterwards.
   * Every variant is validated (also again when loaded): same placeholders, required phrases verbatim, no new commitment words,
@@ -42,7 +42,7 @@ def placeholders(text: str) -> frozenset[str]:
 
 # The base wording below is exactly what the engine said before variants existed (tests pin this).
 SITUATIONS: dict[str, Situation] = {s.id: s for s in [
-    Situation("opening", "Hello, welcome to the dealership. What kind of car are you looking for?",
+    Situation("opening", "Hello, welcome to the AGMC dealership. What kind of car are you looking for?",
               note="the agent's first line of the call"),
     Situation("goodbye", "Thanks for calling. Have a great day!", note="closing the call politely"),
     Situation("hello_again", "Hello again! How can I help?", note="the caller greets again mid-call"),

@@ -125,3 +125,8 @@ negotiation:
 send_details:
   default_channel: whatsapp
   mock: true
+
+# ---- Reply wording ------------------------------------------------------
+dialogue:
+  variants: true          # true: use the human-approved wording variants in config/phrase_variants.yaml; false: base wording only
+  variant_seed: 7         # same seed -> same wording choices in a call (reproducible demos)

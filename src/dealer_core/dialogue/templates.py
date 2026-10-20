@@ -7,7 +7,7 @@ from datetime import datetime
 from ..models import CarView
 from ..tools.phones import speak_phone
 
-OPENING = "Hello, welcome to the dealership. What kind of car are you looking for?"
+OPENING = "Hello, welcome to the AGMC dealership. What kind of car are you looking for?"
 GOODBYE = "Thanks for calling. Have a great day!"
 HANDOFF_WAIT = "A colleague will be with you shortly."
 TOPIC_LABEL = {"warranty": "warranty", "financing": "financing", "inspection": "inspection", "trade_in": "trade-in", "documents": "documents"}
