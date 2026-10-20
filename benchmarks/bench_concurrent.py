@@ -44,7 +44,45 @@ def tts_worker(spec, threads, seconds, barrier, q):
     q.put(("tts", lats))
 
 
+def ov_llm_worker(spec, threads, seconds, barrier, q):
+    """spec = ov:<model dir>@<DEVICE>. Intent-only constrained call, per-state prompt (no cache needed)."""
+    import json as _json
+    import openvino_genai as ov
+    from common import MODELS, now
+    from nlu_cases import CASES, state_schema, state_system
+
+    model, _, device = spec[3:].partition("@")
+    extra = {"INFERENCE_NUM_THREADS": threads} if (device == "CPU" and threads) else {}
+    pipe = ov.LLMPipeline(str(MODELS / "ov" / model), device, CACHE_DIR=str(MODELS / "ov_cache"), **extra)
+    tok = pipe.get_tokenizer()
+    cfg = ov.GenerationConfig()
+    cfg.max_new_tokens, cfg.do_sample = 14, False
+    sch = state_schema("negotiating")
+    cfg.structured_output_config = ov.StructuredOutputConfig(json_schema=_json.dumps(
+        {"type": "object", "properties": {"intent": sch["properties"]["intent"]}, "required": ["intent"]}))
+    neg = [c for c in CASES if c[0] == "negotiating"]
+
+    def one(i):
+        s, car, u, _ = neg[i % len(neg)]
+        prompt = tok.apply_chat_template([{"role": "system", "content": state_system("negotiating")},
+                                          {"role": "user", "content": f"STATE: {s}\nCAR_IN_FOCUS: {car}\nCUSTOMER: {u}"}],
+                                         add_generation_prompt=True, extra_context={"enable_thinking": False})
+        t = now()
+        pipe.generate([prompt], cfg)
+        return (now() - t) * 1000
+
+    one(0)
+    barrier.wait()
+    end, lats, i = time.perf_counter() + seconds, [], 1
+    while time.perf_counter() < end:
+        lats.append(one(i))
+        i += 1
+    q.put(("llm", lats))
+
+
 def llm_worker(model, threads, seconds, barrier, q):
+    if model.startswith("ov:"):
+        return ov_llm_worker(model, threads, seconds, barrier, q)
     import ollama
     from bench_llm import one_call, user_msg
     from nlu_cases import CASES, state_schema, state_system

@@ -1,4 +1,4 @@
-"""OpenVINO benchmark on CPU / iGPU (GPU) / NPU for the LLM and Whisper.
+﻿"""OpenVINO benchmark on CPU / iGPU (GPU) / NPU for the LLM and Whisper.
 
 Does not assume acceleration helps: every device is timed on the same prompt, and failures
 (unsupported model on NPU, compile errors) are recorded rather than hidden.
@@ -22,8 +22,8 @@ import openvino_genai as ov_genai  # noqa: E402
 CACHE = str(MODELS / "ov_cache")
 
 
-def bench_llm(model_dir: str, device: str, repeat: int, structured: bool) -> dict:
-    out: dict = {"model": model_dir, "device": device, "structured": structured}
+def bench_llm(model_dir: str, device: str, repeat: int, structured: bool, intent_only: bool = False) -> dict:
+    out: dict = {"model": model_dir, "device": device, "structured": structured, "intent_only": intent_only}
     try:
         t0 = now()
         pipe = ov_genai.LLMPipeline(str(MODELS / "ov" / model_dir), device, CACHE_DIR=CACHE)
@@ -31,10 +31,13 @@ def bench_llm(model_dir: str, device: str, repeat: int, structured: bool) -> dic
         tok = pipe.get_tokenizer()
         neg = [c for c in CASES if c[0] == "negotiating"]
         cfg = ov_genai.GenerationConfig()
-        cfg.max_new_tokens = 40
+        cfg.max_new_tokens = 14 if intent_only else 40
         cfg.do_sample = False
         if structured:
-            cfg.structured_output_config = ov_genai.StructuredOutputConfig(json_schema=json.dumps(state_schema("negotiating")))
+            sch = state_schema("negotiating")
+            if intent_only:  # the intent field comes first, so this yields the same intent as the full JSON
+                sch = {"type": "object", "properties": {"intent": sch["properties"]["intent"]}, "required": ["intent"]}
+            cfg.structured_output_config = ov_genai.StructuredOutputConfig(json_schema=json.dumps(sch))
         ttft, tps, total, ntok, nin = [], [], [], [], []
         for i in range(repeat + 1):
             s, car, u, _ = neg[i % len(neg)]
@@ -43,7 +46,7 @@ def bench_llm(model_dir: str, device: str, repeat: int, structured: bool) -> dic
             prompt = tok.apply_chat_template(history, add_generation_prompt=True,
                                              extra_context={"enable_thinking": False})
             t = now()
-            res = pipe.generate(prompt, cfg)  # prompt is already templated; no second template pass
+            res = pipe.generate([prompt], cfg)  # list input -> DecodedResults (a bare str returns only text, no perf_metrics)
             wall = (now() - t) * 1000
             if i == 0:
                 continue  # warm-up (kernel compile / caches)
@@ -54,7 +57,7 @@ def bench_llm(model_dir: str, device: str, repeat: int, structured: bool) -> dic
             ntok.append(float(pm.get_num_generated_tokens()))
             nin.append(float(pm.get_num_input_tokens()))
         out.update(ttft_ms=summarize(ttft), decode_tok_s=summarize(tps), total_ms=summarize(total),
-                   gen_tokens=summarize(ntok), prompt_tokens=int(nin[0]), sample=str(res)[:160])
+                   gen_tokens=summarize(ntok), prompt_tokens=int(nin[0]), sample=str(res.texts[0])[:160])
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {str(e)[:300]}"
     return out
@@ -91,6 +94,7 @@ def main() -> None:
     ap.add_argument("--whisper", nargs="*", default=["whisper-tiny-int8-ov", "whisper-base-int8-ov"])
     ap.add_argument("--devices", nargs="+", default=["CPU", "GPU", "NPU"])
     ap.add_argument("--repeat", type=int, default=5)
+    ap.add_argument("--intent-only", action="store_true", help="LLM outputs only the intent (slots come from code)")
     ap.add_argument("--structured", action="store_true", help="also run LLM with JSON-schema constrained decoding")
     ap.add_argument("--tag", default="openvino")
     a = ap.parse_args()
@@ -98,7 +102,7 @@ def main() -> None:
     for m in a.llm:
         for d in a.devices:
             for st in ([False, True] if a.structured else [False]):
-                r = bench_llm(m, d, a.repeat, st)
+                r = bench_llm(m, d, a.repeat, st or a.intent_only, a.intent_only)
                 res["llm"].append(r)
                 print(f"LLM {m} {d} structured={st}:",
                       r.get("error") or f"load {r['load_s']}s | TTFT {r['ttft_ms']['median']}ms "
@@ -116,3 +120,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -4,7 +4,8 @@ Fully local, CPU-only voice agent. An LLM only extracts intent and slots as cons
 JSON; a state machine, policy engine and templates produce the spoken text.
 Production path needs no API keys and sends no data off the machine.
 
-Status: **Phase 0** (skeleton). See the phase plan in the project brief.
+Status: **Phase 0b done** (latency/accuracy spike). Results and the recommended stack: [docs/PHASE0B_REPORT.md](docs/PHASE0B_REPORT.md).
+Benchmarks must be run on **AC power** (battery cuts sustained speed to ~30%); the suite scripts refuse to run on battery.
 
 ## Requirements
 - Windows laptop, Python 3.11 or 3.12 (3.12 recommended), [uv](https://docs.astral.sh/uv/)
@@ -51,6 +52,12 @@ prints a warning at startup, and is currently a disabled stub
 ## Privacy
 Latency logs (`logs/latency.jsonl`) contain timings only. Transcripts and phone numbers are
 excluded unless `latency_log.include_transcripts` is set to true.
+
+## Windows gotchas found in Phase 0b
+- `sherpa-onnx` and the `onnxruntime` wheel each ship their own `onnxruntime.dll`; the first loaded in a process wins.
+  Keep sherpa engines (STT/Piper TTS) and onnxruntime engines (Silero VAD, Kokoro, Moonshine) in separate processes.
+- `uv` does not install `sherpa-onnx-core` transitively; it is pinned in the `spike` extra.
+- Piper's `lessac`, `ryan` and `hfc_*` voices are not licensed for commercial use. See docs/LICENSES.md.
 
 ## Layout
 ```

@@ -1,8 +1,8 @@
 # Dependency and model licenses
 
-Rule: production uses only MIT / Apache-2.0 / BSD. Status as of 2026-10-20, from PyPI
-metadata and the vendor pages named below. "Unverified" means a source did not state the
-license; it must be read from the primary model card or repo before use.
+Rule: production uses only MIT / Apache-2.0 / BSD. Status as of 2026-10-20, from PyPI metadata,
+Hugging Face model-card tags and the vendor pages named. Anything marked **BLOCKER** or
+**OPEN** needs your decision before it ships.
 
 ## Libraries
 
@@ -10,48 +10,58 @@ license; it must be read from the primary model card or repo before use.
 |---|---|---|---|
 | pipecat-ai | 1.13.0 | BSD-2-Clause | OK |
 | faster-whisper | 1.2.1 | MIT | OK |
-| sherpa-onnx | 1.13.8 | Apache-2.0 | OK |
-| useful-moonshine-onnx | 20251121 | MIT | OK (English models; check each model card) |
+| sherpa-onnx / sherpa-onnx-core | 1.13.8 | Apache-2.0 | OK |
+| useful-moonshine-onnx | 20251121 | MIT | OK |
 | silero-vad | 6.2.3 | MIT | OK |
-| kokoro-onnx | 0.6.1 | MIT (README) | OK; see espeak/G2P caveat |
-| onnxruntime / onnxruntime-openvino | 1.31.0 / 1.24.1 | MIT | OK |
+| kokoro-onnx | 0.6.1 | MIT | OK, but pulls GPL deps (below) |
+| onnxruntime / onnxruntime-openvino | 1.24.4 / 1.24.1 | MIT | OK |
 | openvino / openvino-genai / optimum-intel | 2026.4.x | Apache-2.0 | OK |
-| ollama (client) | 0.6.3 | MIT | OK |
-| llama-cpp-python | 0.3.36 | MIT | OK |
-| sentence-transformers | 6.1.0 | Apache-2.0 | OK |
-| sqlite-vec | 0.1.9 | MIT / Apache-2.0 | OK |
+| ollama (client) / Ollama server | 0.6.3 / 0.40.5 | MIT | OK |
+| sentencepiece, sentence-transformers, huggingface-hub, tokenizers | various | Apache-2.0 | OK |
+| rapidfuzz (fast path) | 3.14 | MIT | OK |
 | pydantic, pyyaml, python-dotenv, numpy, psutil, soundfile, jiwer, pytest | various | MIT / BSD / Apache | OK |
-| **piper-tts** (current, OHF-Voice/piper1-gpl) | 1.8.0 | **GPL-3.0-or-later** | **NOT permissive** |
-| **phonemizer / phonemizer-fork** | 3.x | **GPL-3.0-or-later** | **NOT permissive** |
-| espeak-ng (used for phonemization by Piper and Kokoro paths) | n/a | GPL-3 (not verified here) | **Open question** |
-| misaki (Kokoro G2P) | n/a | Unverified | Check repo |
+| **soxr** (benchmark resampling only) | 1.0.0 | **LGPL-2.1+** | Dev-only helper; replace with scipy/numpy resampling before shipping |
+| **phonemizer** (pulled in by kokoro-onnx) | 3.4.0 | **GPL-3.0+** | **BLOCKER if Kokoro is used.** Kokoro is not needed (Piper wins on speed) |
+| **piper-tts** (PyPI package, OHF-Voice/piper1-gpl) | 1.8.0 | **GPL-3.0+** | **Not used.** Piper voices run through sherpa-onnx instead |
+| espeakng-loader | n/a | MIT (loader); bundled espeak-ng is GPL-3 | See "espeak-ng" below |
+| librosa (pulled in by moonshine/kokoro) | 1.0.0 | ISC | OK |
+
+### espeak-ng (OPEN)
+Piper voices need a phonemizer. sherpa-onnx ships `espeak-ng-data` inside each Piper voice folder.
+espeak-ng is GPL-3. Running it as data/library inside an internal, non-distributed deployment is a
+legal call for you (GPL obligations mainly attach on distribution). If it must be avoided, the
+alternative is a TTS whose chain has no espeak-ng; not benchmarked yet.
 
 ## Models
 
 | Model | License | Status |
 |---|---|---|
-| Qwen3 0.6B / 1.7B / 4B (and 4B-Instruct-2507) | Apache-2.0 (HF card for 1.7B) | OK. Production default family |
-| Kokoro-82M | Apache-2.0 (HF card) | OK |
-| Ministral 3 (3B) | Apache-2.0 (Ollama page) | OK; benchmark candidate |
-| Qwen3.5 (0.8B/2B/4B) | Unverified (Ollama page names none) | Benchmark only until verified |
-| Gemma 4 (E2B/E4B) | Unverified | Not planned (4.6 GB+); verify if considered |
-| Llama 3.2 1B/3B | Llama Community License | **Benchmark only** (your decision) |
+| Qwen3 0.6B / 1.7B / 4B-Instruct-2507 | Apache-2.0 (HF cards) | OK. Production family |
+| Qwen3.5 0.8B / 2B | Apache-2.0 (HF cards: Qwen/Qwen3.5-0.8B, -2B) | OK. Verified now; **but not recommended** (no prompt-cache reuse) |
+| Ministral 3 (3B) | Apache-2.0 (HF + Ollama page) | OK |
+| Llama 3.2 1B / 3B | Llama Community License | **Benchmark only** (your decision) |
 | Gemma 3 4B | Gemma Terms of Use | **Benchmark only** (your decision) |
-| qwen2.5:3b (already on this laptop) | Believed Qwen Research License (non-commercial) | **Unverified; not used** |
-| Piper voices | Per-voice (some CC-BY-NC or restricted) | Check each voice's MODEL_CARD before use |
-| Moonshine English models | MIT (verify each card) | Check card |
-| Silero VAD / Pipecat smart-turn model | MIT / BSD (verify in Phase 3) | Check card |
+| qwen2.5:3b (already on laptop) | Believed Qwen Research License | Unverified; not used |
+| faster-whisper tiny.en / base.en (Systran) | MIT (HF tag) | OK |
+| Moonshine tiny / base | MIT (HF tag) | OK |
+| sherpa-onnx streaming zipformer en (2023-06-26, 20M) | Apache-2.0 (HF tag / README) | OK. Trained on LibriSpeech |
+| OpenVINO/Qwen3-*-int4-ov, whisper-*-int8-ov | Apache-2.0 (HF tags) | OK |
+| Kokoro-82M | Apache-2.0 | OK, but not used |
+| Silero VAD / Pipecat smart-turn model | MIT / BSD | Verify in Phase 3 |
 
-## Open issue for your decision: Piper and espeak-ng are GPL
+### Piper voices: license is set by the TRAINING DATA, and several popular voices are NOT usable
+Checked from each voice's MODEL_CARD (rhasspy/piper-voices):
 
-Piper's maintained runtime is GPL-3 and embeds espeak-ng. Kokoro's phonemization may also
-fall back to espeak-ng. Options, in my order of preference:
+| Voice | Training data license | Commercial use |
+|---|---|---|
+| en_US **lessac** | Blizzard 2013 licence: research only; excludes building speech products/services | **NO (BLOCKER)** |
+| en_US **ryan** | CC BY-NC-SA 4.0 | **NO** |
+| en_US **hfc_male / hfc_female** | CC BY-NC-SA 4.0 | **NO** |
+| en_US amy | "See URL" (Mimic3) | Unclear: do not use until read |
+| en_US **libritts_r** | CC BY 4.0 | Yes, with attribution |
+| en_US **joe**, **kathleen** | CC0 | Yes |
+| en_US **ljspeech**, **kristin**, **norman**, **john**, **bryce** | public domain | Yes |
+| en_GB **alba** | CC BY 4.0 | Yes, with attribution |
 
-1. Benchmark Piper **voices** through sherpa-onnx (Apache-2.0) and Kokoro through
-   kokoro-onnx, then check whether the espeak-ng-data they bundle is acceptable. This
-   keeps GPL Python code out of the process, but the espeak-ng data question remains.
-2. Treat GPL as acceptable for an internal, non-distributed deployment on one laptop.
-   GPL obligations mainly apply when you distribute. This is a legal question for you.
-3. Pick a TTS whose whole chain is permissive, if the spike shows one is fast enough.
-
-Benchmarking GPL tools locally is fine; the question is only what ships.
+The benchmark used lessac early on; every later number uses libritts_r / joe / ljspeech / alba. The
+voice *model* files themselves also have their own distribution terms; confirm before shipping.

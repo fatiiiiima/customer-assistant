@@ -118,6 +118,30 @@ class Moonshine(Engine):
         return text.strip(), (now() - t0) * 1000
 
 
+class OvWhisper(Engine):
+    """OpenVINO GenAI Whisper (multilingual int8 builds; no .en variants exist) on CPU / GPU / NPU."""
+
+    def __init__(self, model: str, device: str, hotwords: bool, threads: int | None = None) -> None:
+        import openvino_genai as ov
+
+        self.name = f"openvino-whisper:{model}@{device}" + ("+prompt" if hotwords else "")
+        extra = {"INFERENCE_NUM_THREADS": threads} if (device == "CPU" and threads) else {}
+        self.pipe = ov.WhisperPipeline(str(MODELS / "ov" / model), device, CACHE_DIR=str(MODELS / "ov_cache"), **extra)
+        self.cfg = self.pipe.get_generation_config()
+        self.cfg.language = "<|en|>"
+        self.cfg.task = "transcribe"
+        if hotwords:  # bias with an initial prompt of car terms (fields exist in recent GenAI; verified below)
+            if hasattr(self.cfg, "initial_prompt"):
+                self.cfg.initial_prompt = ", ".join(hotword_terms()[:60])
+            else:
+                raise ValueError("this openvino_genai version has no initial_prompt")
+
+    def transcribe(self, audio: np.ndarray) -> tuple[str, float]:
+        t0 = now()
+        res = self.pipe.generate(audio.tolist(), self.cfg)
+        return str(res.texts[0] if hasattr(res, "texts") else res).strip(), (now() - t0) * 1000
+
+
 def build(spec: str, threads: int) -> Engine:
     kind, _, arg = spec.partition(":")
     if kind == "sherpa":
@@ -128,6 +152,10 @@ def build(spec: str, threads: int) -> Engine:
         return FasterWhisper(size, threads, hw == "hot")
     if kind == "moonshine":
         return Moonshine(arg, threads)
+    if kind == "ovw":  # ovw:<model dir>@<DEVICE>[+hot]
+        model, _, rest = arg.partition("@")
+        dev, _, hw = rest.partition("+")
+        return OvWhisper(model, dev, hw == "hot", threads)
     raise SystemExit(f"unknown engine spec {spec}")
 
 
