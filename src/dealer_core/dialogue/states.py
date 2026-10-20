@@ -83,7 +83,7 @@ STATE_SPEC: dict[State, tuple[list[Intent], list[str]]] = {
                        Intent.SEARCH_CARS, Intent.CONFIRM_YES, Intent.CONFIRM_NO, Intent.CLAIM_AUTHORITY]
                       + _POLICY + _CAR + _ALWAYS, SEARCH_SLOTS + ["topic", "offer_amount"]),
     State.NEGOTIATING: ([Intent.MAKE_OFFER, Intent.ASK_LOWEST_PRICE, Intent.CONFIRM_YES, Intent.CONFIRM_NO,
-                         Intent.CLAIM_AUTHORITY, Intent.BOOK_TEST_DRIVE] + _POLICY + _CAR + _ALWAYS,
+                         Intent.CLAIM_AUTHORITY, Intent.BOOK_TEST_DRIVE, Intent.SEARCH_CARS] + _POLICY + _CAR + _ALWAYS,
                         ["offer_amount", "topic"]),
     State.SLOT: ([Intent.GIVE_SLOT, Intent.CONFIRM_NO, Intent.RESCHEDULE, Intent.CANCEL_BOOKING]
                  + _POLICY + _CAR + _ALWAYS, ["date", "time", "topic"]),

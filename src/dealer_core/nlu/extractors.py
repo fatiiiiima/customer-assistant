@@ -20,6 +20,11 @@ MAKE_ALIASES = {"mercedes benz": "mercedes", "benz": "mercedes", "merc": "merced
 BODY = {"suv": "suv", "suvs": "suv", "crossover": "suv", "4x4": "suv", "sedan": "sedan", "sedans": "sedan", "saloon": "sedan",
         "hatchback": "hatchback", "hatch": "hatchback", "coupe": "coupe", "pickup": "pickup", "pickups": "pickup",
         "truck": "pickup", "trucks": "pickup"}
+# Makes a caller may ask for that we may not stock. Without these, "do you have a Bentley?" finds no make at all and the agent
+# cannot say "no Bentley in stock". Names that are also ordinary words (seat, smart, mini) are left out on purpose.
+WELL_KNOWN_MAKES = ["bentley", "ferrari", "lamborghini", "rolls royce", "aston martin", "maserati", "bugatti", "mclaren", "porsche",
+                    "jaguar", "volvo", "tesla", "mitsubishi", "subaru", "mazda", "suzuki", "isuzu", "peugeot", "renault", "citroen",
+                    "jeep", "dodge", "cadillac", "lincoln", "genesis", "infiniti", "lexus", "acura", "volkswagen", "hyundai", "kia"]
 KM_TOKENS = {"km", "kms", "kilometre", "kilometres", "kilometer", "kilometers", "miles"}
 _OTHERS = re.compile(r"\b(other|others|different|else|another|more|alternatives?|something like|not that|not those)\b")
 
@@ -45,7 +50,7 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
         if f" {alias} " in text and make in vocab:
             out["make"] = make
     grams = [" ".join(tokens[i:i + n]) for n in (1, 2, 3) for i in range(len(tokens) - n + 1)]
-    makes = list(vocab)
+    makes = list(vocab) + [m for m in WELL_KNOWN_MAKES if m not in vocab]
     if "make" not in out:
         exact = [m for m in makes if f" {m} " in text]
         if exact:

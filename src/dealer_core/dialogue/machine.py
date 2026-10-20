@@ -218,9 +218,10 @@ class DialogueEngine:
 
     def _policy(self, s: Session, text: str) -> str:
         topic = next((t for t, rx in TOPICS.items() if re.search(rx, " ".join(ex.tokens_of(text)))), None)
-        label = T.TOPIC_LABEL.get(topic or "", "that")
+        label = T.TOPIC_LABEL.get(topic or "")
         s.pending = Pending("handoff_offer")
-        return f"I don't have our confirmed {label} details with me. Would you like me to connect you with a colleague?"
+        what = f"our confirmed {label} details" if label else "confirmed details on that"
+        return f"I don't have {what} with me. Would you like me to connect you with a colleague?"
 
     # ------------------------------------------------------------------------------------------------ search
     def _search(self, s: Session, text: str, dbg: TurnDebug) -> str:
