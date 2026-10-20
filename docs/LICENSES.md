@@ -10,7 +10,7 @@ Hugging Face model-card tags and the vendor pages named. Anything marked **BLOCK
 |---|---|---|---|
 | pipecat-ai | 1.13.0 | BSD-2-Clause | OK |
 | faster-whisper | 1.2.1 | MIT | OK |
-| sherpa-onnx / sherpa-onnx-core | 1.13.8 | Apache-2.0 | OK |
+| sherpa-onnx / sherpa-onnx-core | 1.13.8 | Apache-2.0 (own code) | **Embeds GPL-3 espeak-ng statically: see the OPEN DECISION below** |
 | useful-moonshine-onnx | 20251121 | MIT | OK |
 | silero-vad | 6.2.3 | MIT | OK |
 | kokoro-onnx | 0.6.1 | MIT | OK, but pulls GPL deps (below) |
@@ -26,11 +26,38 @@ Hugging Face model-card tags and the vendor pages named. Anything marked **BLOCK
 | espeakng-loader | n/a | MIT (loader); bundled espeak-ng is GPL-3 | See "espeak-ng" below |
 | librosa (pulled in by moonshine/kokoro) | 1.0.0 | ISC | OK |
 
-### espeak-ng (OPEN)
-Piper voices need a phonemizer. sherpa-onnx ships `espeak-ng-data` inside each Piper voice folder.
-espeak-ng is GPL-3. Running it as data/library inside an internal, non-distributed deployment is a
-legal call for you (GPL obligations mainly attach on distribution). If it must be avoided, the
-alternative is a TTS whose chain has no espeak-ng; not benchmarked yet.
+### espeak-ng (GPL-3): OPEN DECISION for legal/IT review before ANY production use
+
+**Status:** accepted by you for the **internal prototype** (decision recorded 2026-10-20). **Not accepted for production.**
+
+**Exactly what pulls it in** (verified by scanning the installed binaries, not assumed):
+
+| Component | How espeak-ng gets in | In the production path? |
+|---|---|---|
+| **sherpa-onnx native libraries** (`_sherpa_onnx.pyd`, `sherpa-onnx-c-api.dll`, wheel `sherpa-onnx-core`) | espeak-ng is **statically linked into the library** (37 references in each file). This is true for every TTS model run through sherpa, including the lexicon-based ones | **Yes** (Piper TTS) |
+| **Every Piper voice archive** (libritts_r, joe, ...) | ships an `espeak-ng-data/` directory, used for text-to-phoneme conversion at runtime | **Yes** |
+| `espeakng-loader` 0.2.4 (MIT loader) | bundles `espeak-ng.dll` + data (GPL-3) | No (Kokoro only) |
+| `phonemizer` 3.4.0 | GPL-3 Python package that calls espeak-ng | No (Kokoro only) |
+| `piper-tts` 1.8.0 | GPL-3 (embeds espeak-ng) | No (not installed) |
+
+espeak-ng's own license is GPL-3.0-or-later (its repo also carries other licences for some files, e.g. UCD data and a BSD
+getopt shim). The GPL's obligations attach mainly on **distribution**; running it inside one company on one laptop without
+handing the program to anyone else is the usual "internal use" reading. Handing the agent to a customer, a franchise, or
+another legal entity is distribution. **This is a legal question, not an engineering one.**
+
+**Non-GPL alternatives and what each would cost (my estimates; none built or listened to yet):**
+
+| Alternative | Removes GPL from the process? | Estimated cost | Risks |
+|---|---|---|---|
+| Lexicon voices in sherpa-onnx (`vits-ljs`, `vits-vctk`; no espeak data, lexicon + tokens only) | **No**: the sherpa binary still contains espeak-ng. Removes only the data and the runtime *use* | ~half a day to benchmark + listen | out-of-lexicon words (car names, Arabic names) may be mispronounced or fail; older VITS quality |
+| Build sherpa-onnx from source with espeak-ng disabled, use lexicon voices | Probably yes (not verified that a build switch exists) | 1-2 days (MSVC + CMake toolchain, plus the lexicon-voice evaluation above) | Piper voices unusable; build maintenance on every upgrade |
+| Run Piper ONNX voices ourselves (plain onnxruntime) with a different phonemizer | Yes if the phonemizer is permissive | 3-5 days | Piper voices expect espeak's IPA phoneme set; a replacement G2P risks mispronunciation, especially for car and Arabic names |
+| Pre-render all fixed phrases offline, keep runtime TTS for dynamic text only | No (runtime TTS still needed for numbers, names, models) | 0.5 day | does not remove the dependency; only reduces how often it runs |
+| A TTS whose full chain is permissive (not yet identified or benchmarked) | Yes | unknown: survey + benchmark, probably 1-2 days | may not reach the first-audio target on this CPU |
+
+**Decision needed before production:** (1) legal/IT confirms whether shipping/hosting the agent counts as distribution for
+your use, and if so (2) which row above to fund. Until then: keep the TTS in its own process (planned anyway), keep the TTS
+engine behind the `TtsEngine` interface so any row above can be swapped in, and do not distribute the build.
 
 ## Models
 

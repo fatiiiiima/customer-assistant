@@ -48,28 +48,46 @@ class SttCfg(_Strict):
     hotwords_file: str | None = None
 
 
-class LocalLlmCfg(_Strict):
-    backend: Literal["ollama", "llama_cpp"] = "ollama"
-    host: str = "http://127.0.0.1:11434"
-    model: str = "qwen3:1.7b"
-    think: bool = False  # Qwen3 thinking must stay off
-    temperature: float = 0.0
-    num_ctx: int = 2048
-    num_thread: int | None = None
-    keep_alive: str = "30m"
-    max_nlu_tokens: int = 64
-    max_freeform_tokens: int = 60
+class BackendCfg(_Strict):
+    """One named NLU backend. Which fields apply depends on `runtime`."""
 
-
-class CloudLlmCfg(_Strict):
-    model_env: str = "GEMINI_MODEL"
-    api_key_env: str = "GEMINI_API_KEY"
+    runtime: Literal["openvino", "ollama", "cloud_stub"]
+    model: str                                   # openvino: folder under <model_dir>/ov ; ollama: model tag
+    device: Literal["CPU", "GPU", "NPU"] | None = None   # openvino only
+    host: str = "http://127.0.0.1:11434"         # ollama only
+    # auto: per-state prompt on GPU (a cache miss costs ~160 ms), static prompt on CPU/ollama (a miss costs 1.2 s+).
+    prompt_mode: Literal["auto", "state", "static"] = "auto"
+    timeout_s: float = 3.0                       # per-call budget; exceeding it triggers the next fallback
+    num_ctx: int = 2048                          # ollama only
+    keep_alive: str = "30m"                      # ollama only
+    num_thread: int | None = None                # ollama only. Never pin threads for OpenVINO (hybrid cores)
+    max_intent_tokens: int = 16
+    max_json_tokens: int = 96
+    max_answer_tokens: int = 60
+    model_env: str | None = None                 # cloud_stub only: env var holding the model name (never hard-coded)
+    api_key_env: str | None = None               # cloud_stub only
 
 
 class LlmCfg(_Strict):
-    provider: Literal["local", "cloud"] = "local"
-    local: LocalLlmCfg = Field(default_factory=LocalLlmCfg)
-    cloud: CloudLlmCfg = Field(default_factory=CloudLlmCfg)
+    backend: str = "openvino_gpu"                # voice path
+    text_backend: str = "ollama"                 # Phase 1 text core and the website chat
+    fallbacks: list[str] = Field(default_factory=lambda: ["openvino_cpu", "ollama"])
+    think: bool = False                          # Qwen3 thinking must stay off
+    temperature: float = 0.0
+    backends: dict[str, BackendCfg]
+
+    @model_validator(mode="after")
+    def _names_exist(self) -> "LlmCfg":
+        wanted = [self.backend, self.text_backend, *self.fallbacks]
+        missing = [n for n in wanted if n not in self.backends]
+        if missing:
+            raise ValueError(f"llm refers to undefined backends: {missing}")
+        return self
+
+    def chain(self, primary: str | None = None) -> list[str]:
+        """Backend names to try in order: the primary, then the fallbacks (no duplicates)."""
+        order = [primary or self.backend, *self.fallbacks]
+        return [n for i, n in enumerate(order) if n not in order[:i]]
 
 
 class TtsCfg(_Strict):
@@ -95,6 +113,8 @@ class BranchCfg(_Strict):
 class TestDriveCfg(_Strict):
     # TO CONFIRM WITH SALES: placeholder rules.
     slot_minutes: int = 30
+    min_lead_minutes: int = 60       # earliest bookable slot is this far from now
+    horizon_days: int = 14           # how far ahead slots are offered
     licence_required: bool = True
     collect_fields: list[str] = ["name", "phone"]
 
@@ -109,6 +129,9 @@ class NegotiationCfg(_Strict):
     # PLACEHOLDERS: to be set by the business.
     max_rounds: int = 3
     counter_steps: int = 3
+    # Offers outside [low, high] percent of list price are treated as misheard numbers and re-confirmed, not negotiated.
+    implausible_low_pct: float = 30.0
+    implausible_high_pct: float = 150.0
     tiers: list[TierCfg]
 
     @model_validator(mode="after")
@@ -140,7 +163,9 @@ class Config(_Strict):
 
     @property
     def cloud_active(self) -> bool:
-        return self.llm.provider == "cloud"
+        """True if any backend this config can ever select is the (disabled) cloud stub."""
+        names = {self.llm.backend, self.llm.text_backend, *self.llm.fallbacks}
+        return any(self.llm.backends[n].runtime == "cloud_stub" for n in names)
 
 
 def _coerce(value: str) -> Any:
@@ -171,7 +196,7 @@ def load_config(path: Path | None = None, environ: dict[str, str] | None = None)
     if cfg.cloud_active:
         if environ.get(ALLOW_CLOUD_ENV) != "1":
             raise ConfigError(
-                f"llm.provider=cloud requires {ALLOW_CLOUD_ENV}=1. Cloud mode is dev-only "
+                f"a cloud_stub backend is selected, which requires {ALLOW_CLOUD_ENV}=1. Cloud mode is dev-only "
                 "and off by default."
             )
         print(

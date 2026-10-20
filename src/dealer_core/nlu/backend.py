@@ -1,0 +1,55 @@
+"""NLU backend interface. Backends are chosen by config (`llm.backend`, `llm.text_backend`, `llm.fallbacks`)."""
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Iterator
+
+from ..config import BackendCfg
+from ..dialogue.states import Intent, State
+
+
+class BackendError(RuntimeError):
+    """A backend call failed (device missing, timeout, malformed output). The chain moves to the next backend."""
+
+
+@dataclass(frozen=True)
+class BackendHealth:
+    ok: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class IntentResult:
+    intent: Intent
+    latency_ms: float
+    backend: str
+    raw: str
+
+
+def resolve_prompt_mode(cfg: BackendCfg) -> str:
+    """'state' or 'static'. On the iGPU a prefix-cache miss costs ~160 ms so a short per-state prompt wins; on CPU
+    (OpenVINO or Ollama) a miss costs 1.2 s+, so one static prompt keeps the prefix cached (Phase 0b measurements)."""
+    if cfg.prompt_mode != "auto":
+        return cfg.prompt_mode
+    return "state" if cfg.runtime == "openvino" and cfg.device in ("GPU", "NPU") else "static"
+
+
+class NluBackend(ABC):
+    name: str
+
+    @abstractmethod
+    def health(self) -> BackendHealth:
+        """Cheap-but-real check used at startup: is the device/server present and the model loadable?"""
+
+    @abstractmethod
+    def classify(self, state: State, car: str | None, text: str) -> IntentResult:
+        """Production call: grammar-constrained, intent only (~6 tokens). Slots are extracted by code afterwards."""
+
+    @abstractmethod
+    def complete_json(self, state: State, car: str | None, text: str) -> dict:
+        """Intent + slots as JSON. Used for accuracy comparisons between backends, not on the live path."""
+
+    @abstractmethod
+    def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
+        """Free-form reply for open questions, yielded one sentence at a time so TTS can start on the first."""

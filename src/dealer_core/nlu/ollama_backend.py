@@ -1,0 +1,83 @@
+"""Ollama NLU backend (text core, website chat, and the voice-path fallback)."""
+from __future__ import annotations
+
+import json
+import re
+import time
+from typing import Iterator
+
+from ..config import BackendCfg, LlmCfg
+from ..dialogue.states import Intent, State
+from . import prompts
+from .backend import BackendError, BackendHealth, IntentResult, NluBackend, resolve_prompt_mode
+
+_SENTENCE_END = re.compile(r"[.!?]\s*$")
+
+
+class OllamaBackend(NluBackend):
+    def __init__(self, name: str, cfg: BackendCfg, llm: LlmCfg) -> None:
+        import ollama  # lazy: the package is only needed when this backend is used
+
+        self.name, self.cfg, self.llm = name, cfg, llm
+        self.mode = resolve_prompt_mode(cfg)
+        self._ollama = ollama
+        self.client = ollama.Client(host=cfg.host, timeout=cfg.timeout_s)
+
+    def health(self) -> BackendHealth:
+        try:
+            names = {m.model for m in self.client.list().models}
+        except Exception as e:  # server down, wrong host...
+            return BackendHealth(False, f"ollama unreachable at {self.cfg.host}: {e}")
+        if self.cfg.model not in names:
+            return BackendHealth(False, f"model {self.cfg.model!r} not pulled (run: ollama pull {self.cfg.model})")
+        return BackendHealth(True, f"ollama {self.cfg.model}")
+
+    # -- internals ---------------------------------------------------------------------------
+    def _chat(self, system: str, user: str, schema: dict | None, max_tokens: int, stream: bool = False):
+        options = {"temperature": self.llm.temperature, "num_ctx": self.cfg.num_ctx, "num_predict": max_tokens}
+        if self.cfg.num_thread:
+            options["num_thread"] = self.cfg.num_thread
+        kwargs = dict(model=self.cfg.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                      options=options, keep_alive=self.cfg.keep_alive, stream=stream)
+        if schema is not None:
+            kwargs["format"] = schema
+        try:
+            # think=False is Ollama's switch for Qwen3-style models. Models without a thinking mode reject it.
+            return self.client.chat(think=self.llm.think, **kwargs)
+        except self._ollama.ResponseError as e:
+            if "think" not in str(e).lower():
+                raise BackendError(str(e)) from e
+            return self.client.chat(**kwargs)
+        except Exception as e:  # connection error, timeout
+            raise BackendError(f"{type(e).__name__}: {e}") from e
+
+    def _json(self, state: State, car: str | None, text: str, schema: dict, max_tokens: int) -> tuple[dict, str, float]:
+        t0 = time.perf_counter()
+        r = self._chat(prompts.system_prompt(state, self.mode), prompts.user_message(state, car, text), schema, max_tokens)
+        raw = r.message.content or ""
+        try:
+            return json.loads(raw), raw, (time.perf_counter() - t0) * 1000
+        except json.JSONDecodeError as e:
+            raise BackendError(f"malformed JSON from {self.name}: {raw!r}") from e
+
+    # -- interface ---------------------------------------------------------------------------
+    def classify(self, state: State, car: str | None, text: str) -> IntentResult:
+        obj, raw, ms = self._json(state, car, text, prompts.intent_only_schema(state), self.cfg.max_intent_tokens)
+        return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
+
+    def complete_json(self, state: State, car: str | None, text: str) -> dict:
+        return self._json(state, car, text, prompts.full_schema(state), self.cfg.max_json_tokens)[0]
+
+    def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
+        system = prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences)
+        stream = self._chat(system, f"CONTEXT: {context}\nCALLER: {question}", None, self.cfg.max_answer_tokens, stream=True)
+        buf, sentences = "", 0
+        for chunk in stream:
+            buf += chunk.message.content or ""
+            if _SENTENCE_END.search(buf) and len(buf.split()) >= 3:
+                yield buf.strip()
+                buf, sentences = "", sentences + 1
+                if sentences >= max_sentences:
+                    return
+        if buf.strip():
+            yield buf.strip()

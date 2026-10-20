@@ -1,0 +1,161 @@
+{
+ "results": {
+  "ov_orig": {
+   "label": "ov_orig",
+   "sets": {
+    "dev": {
+     "n": 31,
+     "intent": 0.9354838709677419,
+     "exact": 0.5483870967741935,
+     "exact_ground": 0.7741935483870968,
+     "intent_only_acc": 0.9032258064516129,
+     "intent_only_agrees": 0.967741935483871,
+     "json_ms_p50": 1592.671699996572,
+     "intent_ms_p50": 643.7221000087447
+    },
+    "heldout": {
+     "n": 40,
+     "intent": 0.85,
+     "exact": 0.525,
+     "exact_ground": 0.75,
+     "intent_only_acc": 0.85,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2168.13424997963,
+     "intent_ms_p50": 915.8917499880772
+    },
+    "fresh": {
+     "n": 29,
+     "intent": 0.9310344827586207,
+     "exact": 0.5862068965517241,
+     "exact_ground": 0.7931034482758621,
+     "intent_only_acc": 0.9310344827586207,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2004.030599957332,
+     "intent_ms_p50": 885.2847999660298
+    },
+    "ALL": {
+     "n": 100,
+     "intent": 0.9,
+     "exact": 0.55,
+     "exact_ground": 0.77,
+     "intent_only_acc": 0.89,
+     "intent_only_agrees": 0.99,
+     "json_ms_p50": 1935.9235000156332,
+     "intent_ms_p50": 793.5948499944061
+    }
+   }
+  },
+  "ollama_orig": {
+   "label": "ollama_orig",
+   "sets": {
+    "dev": {
+     "n": 31,
+     "intent": 0.967741935483871,
+     "exact": 0.5161290322580645,
+     "exact_ground": 0.8387096774193549,
+     "intent_only_acc": 0.967741935483871,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2848.180599976331,
+     "intent_ms_p50": 961.6988000343554
+    },
+    "heldout": {
+     "n": 40,
+     "intent": 0.95,
+     "exact": 0.575,
+     "exact_ground": 0.825,
+     "intent_only_acc": 0.925,
+     "intent_only_agrees": 0.975,
+     "json_ms_p50": 2151.863399980357,
+     "intent_ms_p50": 826.745150028728
+    },
+    "fresh": {
+     "n": 29,
+     "intent": 0.896551724137931,
+     "exact": 0.41379310344827586,
+     "exact_ground": 0.7931034482758621,
+     "intent_only_acc": 0.896551724137931,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2151.1821000021882,
+     "intent_ms_p50": 963.6707999743521
+    },
+    "ALL": {
+     "n": 100,
+     "intent": 0.94,
+     "exact": 0.51,
+     "exact_ground": 0.82,
+     "intent_only_acc": 0.93,
+     "intent_only_agrees": 0.99,
+     "json_ms_p50": 2316.688399994746,
+     "intent_ms_p50": 911.7889500048477
+    }
+   }
+  },
+  "ollama_2507": {
+   "label": "ollama_2507",
+   "sets": {
+    "dev": {
+     "n": 31,
+     "intent": 1.0,
+     "exact": 0.5483870967741935,
+     "exact_ground": 0.8387096774193549,
+     "intent_only_acc": 0.967741935483871,
+     "intent_only_agrees": 0.967741935483871,
+     "json_ms_p50": 2597.691400034819,
+     "intent_ms_p50": 824.0127000026405
+    },
+    "heldout": {
+     "n": 40,
+     "intent": 0.925,
+     "exact": 0.6,
+     "exact_ground": 0.85,
+     "intent_only_acc": 0.925,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2149.1506500169635,
+     "intent_ms_p50": 741.6028500301763
+    },
+    "fresh": {
+     "n": 29,
+     "intent": 0.9655172413793104,
+     "exact": 0.5517241379310345,
+     "exact_ground": 0.8620689655172413,
+     "intent_only_acc": 0.9310344827586207,
+     "intent_only_agrees": 0.9655172413793104,
+     "json_ms_p50": 2175.0796000123955,
+     "intent_ms_p50": 759.0377000160515
+    },
+    "ALL": {
+     "n": 100,
+     "intent": 0.96,
+     "exact": 0.57,
+     "exact_ground": 0.85,
+     "intent_only_acc": 0.94,
+     "intent_only_agrees": 0.98,
+     "json_ms_p50": 2264.498150005238,
+     "intent_ms_p50": 788.123150006868
+    }
+   }
+  }
+ },
+ "pairs": {
+  "ov_orig:ollama_orig": {
+   "n": 100,
+   "diff_pts": -5.0,
+   "ci_low": -12.0,
+   "ci_high": 2.0,
+   "cand_only": 4,
+   "base_only": 9,
+   "p_mcnemar": 0.266845703125,
+   "verdict": "INCONCLUSIVE: the interval spans the threshold. Proceed with the candidate for the voice path, keep the baseline as the configured fallback, and re-run when the labelled set grows"
+  },
+  "ov_orig:ollama_2507": {
+   "n": 100,
+   "diff_pts": -8.0,
+   "ci_low": -16.0,
+   "ci_high": 0.0,
+   "cand_only": 4,
+   "base_only": 12,
+   "p_mcnemar": 0.076812744140625,
+   "verdict": "INCONCLUSIVE: the interval spans the threshold. Proceed with the candidate for the voice path, keep the baseline as the configured fallback, and re-run when the labelled set grows"
+  }
+ }
+}

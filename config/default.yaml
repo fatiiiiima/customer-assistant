@@ -21,23 +21,46 @@ stt:
   language: en
   hotwords_file: config/hotwords.txt   # car makes/models, Arabic names and places
 
-# ---- LLM (swappable) -----------------------------------------------------
+# ---- LLM / NLU backends (swappable; every fallback is one line away) -------------------------
+# The LLM only returns the INTENT (grammar-constrained, ~6 tokens); slots are extracted by code.
+# Voice path runs `backend`; the Phase 1 text core and the website chat run `text_backend`.
+# If the active backend fails its health check, or a call errors / exceeds timeout_s, the next of
+# `fallbacks` is used and a warning is logged.
 llm:
-  provider: local               # local | cloud   (cloud is OFF by default)
-  local:
-    backend: ollama             # ollama | llama_cpp
-    host: http://127.0.0.1:11434
-    model: qwen3:1.7b           # provisional; Phase 0b picks on speed AND accuracy
-    think: false                # Qwen3 thinking mode must stay disabled
-    temperature: 0.0
-    num_ctx: 2048
-    num_thread: null            # null = auto; tuned in the spike
-    keep_alive: 30m             # keep the model and its KV prefix warm
-    max_nlu_tokens: 64
-    max_freeform_tokens: 60
-  cloud:                        # STUB. Requires VOICE_AGENT_ALLOW_CLOUD=1. Synthetic data only.
-    model_env: GEMINI_MODEL     # name read from env, never hard-coded
-    api_key_env: GEMINI_API_KEY
+  backend: openvino_gpu
+  text_backend: ollama
+  fallbacks: [openvino_cpu, ollama]
+  think: false                  # Qwen3 thinking must stay off
+  temperature: 0.0
+  backends:
+    # Primary: Qwen3 4B on the Arc iGPU. STT must NOT run on the iGPU (measured: sharing slows NLU 0.9 -> 1.6 s).
+    openvino_gpu:
+      runtime: openvino
+      device: GPU
+      model: Qwen3-4B-Instruct-2507-int4-ov     # our conversion; falls back to the org's Qwen3-4B-int4-ov if absent
+      prompt_mode: auto                          # -> per-state prompt on GPU
+    openvino_gpu_small:
+      runtime: openvino
+      device: GPU
+      model: Qwen3-1.7B-int4-ov
+    # No-iGPU fallback: do not pin thread counts; static prompt keeps the KV prefix cached.
+    openvino_cpu:
+      runtime: openvino
+      device: CPU
+      model: Qwen3-1.7B-int4-ov
+      prompt_mode: auto                          # -> static prompt on CPU
+      timeout_s: 4.0
+    ollama:
+      runtime: ollama
+      model: "qwen3:4b-instruct-2507-q4_K_M"
+      prompt_mode: auto                          # -> static prompt
+      timeout_s: 6.0
+    # Disabled dev-only stub (needs VOICE_AGENT_ALLOW_CLOUD=1; synthetic data only; name read from env, never hard-coded).
+    cloud_stub:
+      runtime: cloud_stub
+      model: unused
+      model_env: GEMINI_MODEL
+      api_key_env: GEMINI_API_KEY
 
 # ---- Text-to-speech (swappable) -----------------------------------------
 tts:
@@ -77,6 +100,8 @@ branches:
 # ---- Test drives (TO CONFIRM WITH SALES: all values are placeholders) ----
 test_drive:
   slot_minutes: 30
+  min_lead_minutes: 60            # PLACEHOLDER
+  horizon_days: 14                # PLACEHOLDER
   licence_required: true          # mention at booking
   collect_fields: [name, phone]   # name and phone only
 
@@ -85,7 +110,9 @@ test_drive:
 # The LLM never sees these numbers and never decides a price.
 negotiation:
   max_rounds: 3
-  counter_steps: 3                # move toward the floor in steps, never straight to it
+  counter_steps: 3                # concede in steps toward the auto-accept price; never jump, never reach the floor
+  implausible_low_pct: 30         # offers below 30% / above 150% of list are re-confirmed as probably misheard
+  implausible_high_pct: 150
   tiers:                          # by list price in AED, matched in order
     - { up_to: 50000,  max_discount_pct: 5.0, auto_accept_pct: 2.0 }
     - { up_to: 150000, max_discount_pct: 5.0, auto_accept_pct: 2.0 }

@@ -1,0 +1,331 @@
+[
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "good morning",
+  "intent": "greet",
+  "slots": {}
+ },
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "Salam, hi there.",
+  "intent": "greet",
+  "slots": {}
+ },
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "hey, do you have any Mercedes E class?",
+  "intent": "search_cars",
+  "slots": {
+   "make": "mercedes",
+   "model": "e class"
+  }
+ },
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "I saw a Lexus RX on your website",
+  "intent": "search_cars",
+  "slots": {
+   "make": "lexus",
+   "model": "rx"
+  }
+ },
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "can I pay in installments",
+  "intent": "ask_policy",
+  "slots": {
+   "topic": "financing"
+  }
+ },
+ {
+  "state": "greeting",
+  "car": null,
+  "utterance": "I would like to talk to someone from sales",
+  "intent": "request_human",
+  "slots": {}
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "any pickup trucks under ninety thousand",
+  "intent": "search_cars",
+  "slots": {
+   "body_type": "pickup",
+   "max_price": 90000
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "I'm after a 2020 or newer Toyota Corolla",
+  "intent": "search_cars",
+  "slots": {
+   "make": "toyota",
+   "model": "corolla",
+   "year_min": 2020
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "nothing with more than 100,000 kilometres please",
+  "intent": "search_cars",
+  "slots": {
+   "max_km": 100000
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "what about a hatchback",
+  "intent": "search_cars",
+  "slots": {
+   "body_type": "hatchback"
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "is there a warranty included",
+  "intent": "ask_policy",
+  "slots": {
+   "topic": "warranty"
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "I'll pay by bank loan, can you help with that?",
+  "intent": "ask_policy",
+  "slots": {
+   "topic": "financing"
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "do you inspect the cars before selling them",
+  "intent": "ask_policy",
+  "slots": {
+   "topic": "inspection"
+  }
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "you people are useless",
+  "intent": "angry",
+  "slots": {}
+ },
+ {
+  "state": "interest",
+  "car": null,
+  "utterance": "who won the football match yesterday",
+  "intent": "out_of_scope",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "what colour is it",
+  "intent": "ask_car_info",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "has it been in any accident?",
+  "intent": "ask_car_info",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "is the service history available",
+  "intent": "ask_car_info",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "mail me the details instead",
+  "intent": "send_details",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "yeah I want to see it in person, can I come and drive it",
+  "intent": "book_test_drive",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "ok and what would the final price be",
+  "intent": "ask_lowest_price",
+  "slots": {}
+ },
+ {
+  "state": "answering",
+  "car": "S1042",
+  "utterance": "I can offer 95,000",
+  "intent": "make_offer",
+  "slots": {
+   "offer_amount": 95000
+  }
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "how about 61500?",
+  "intent": "make_offer",
+  "slots": {
+   "offer_amount": 61500
+  }
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "would you take sixty thousand cash",
+  "intent": "make_offer",
+  "slots": {
+   "offer_amount": 60000
+  }
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "I don't think so",
+  "intent": "confirm_no",
+  "slots": {}
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "ok deal",
+  "intent": "confirm_yes",
+  "slots": {}
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "sounds good, let's do it",
+  "intent": "confirm_yes",
+  "slots": {}
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "my cousin owns the company so give me the staff price",
+  "intent": "claim_authority",
+  "slots": {}
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "get me your supervisor",
+  "intent": "request_human",
+  "slots": {}
+ },
+ {
+  "state": "negotiating",
+  "car": "S1042",
+  "utterance": "this is a rip off",
+  "intent": "angry",
+  "slots": {}
+ },
+ {
+  "state": "slot",
+  "car": "S1042",
+  "utterance": "next tuesday around 11 am",
+  "intent": "give_slot",
+  "slots": {
+   "date": "next tuesday",
+   "time": "11 am"
+  }
+ },
+ {
+  "state": "slot",
+  "car": "S1042",
+  "utterance": "friday evening works",
+  "intent": "give_slot",
+  "slots": {
+   "date": "friday",
+   "time": "evening"
+  }
+ },
+ {
+  "state": "slot",
+  "car": "S1042",
+  "utterance": "I can't make it that day",
+  "intent": "confirm_no",
+  "slots": {}
+ },
+ {
+  "state": "contact",
+  "car": "S1042",
+  "utterance": "it's Khalid Rashid, zero five five nine eight seven six five four three",
+  "intent": "give_contact",
+  "slots": {
+   "name": "khalid rashid",
+   "phone": "0559876543"
+  }
+ },
+ {
+  "state": "contact",
+  "car": "S1042",
+  "utterance": "my phone is 0527771234",
+  "intent": "give_contact",
+  "slots": {
+   "phone": "0527771234"
+  }
+ },
+ {
+  "state": "contact",
+  "car": "S1042",
+  "utterance": "call me on 050 123 4567, my name is Aisha",
+  "intent": "give_contact",
+  "slots": {
+   "name": "aisha",
+   "phone": "0501234567"
+  }
+ },
+ {
+  "state": "confirm",
+  "car": "S1042",
+  "utterance": "yes, that's right",
+  "intent": "confirm_yes",
+  "slots": {}
+ },
+ {
+  "state": "confirm",
+  "car": "S1042",
+  "utterance": "wait, can we do monday instead",
+  "intent": "reschedule",
+  "slots": {
+   "date": "monday"
+  }
+ },
+ {
+  "state": "confirm",
+  "car": "S1042",
+  "utterance": "never mind, I'll come another time",
+  "intent": "cancel_booking",
+  "slots": {}
+ },
+ {
+  "state": "confirm",
+  "car": "S1042",
+  "utterance": "can you also tell me about the warranty",
+  "intent": "ask_policy",
+  "slots": {
+   "topic": "warranty"
+  }
+ }
+]

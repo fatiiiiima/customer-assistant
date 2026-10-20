@@ -300,7 +300,8 @@ open questions.
 ### 9a. Realistic SEQUENTIAL turns (STT finishes, then NLU, then TTS)
 `benchmarks/bench_turns.py`: 69 scripted utterances (heldout + fresh, spoken by a different Piper voice, transcribed by the
 real STT) + 7 open questions. T0 = caller audio complete; **endpointing/VAD is not included** (unmeasured; assume ~300 ms
-more). T2 = first TTS audio chunk. TTS runs in its own process behind a pipe (round trip under 0.1 ms). Three interleaved
+more). T2 = first TTS audio chunk **of the reply, i.e. the first meaningful word (not the ack clip)**; the ack clip is
+pre-rendered, so its first audio is about "endpointing" alone (audio device start-up not measured). TTS runs in its own process behind a pipe (round trip under 0.1 ms). Three interleaved
 repetitions per config, on AC. Each cell is the **median of the three per-run p50s, with the min-max across runs**.
 
 | Config | Rule turn T0->T2 p50 (run p95s) | LLM turn T0->T2 p50 (run p95s) | NLU alone, LLM turn | Open answer, first sentence, T0->T2 p50 (run p95s) |
