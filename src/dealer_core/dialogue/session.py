@@ -28,6 +28,7 @@ class Session:
     excluded: set[str] = field(default_factory=set)          # cars already shown, excluded from "other models" searches
     filters: dict = field(default_factory=dict)              # accumulated search filters
     narrow_asks: int = 0
+    last_lead: str = ""                                      # the previous hybrid lead-in (never repeated)
     rng: random.Random = field(default_factory=lambda: random.Random(7))      # picks among approved wording variants
     last_variant: dict[str, int] = field(default_factory=dict)
     negotiation: dict[str, NegotiationState] = field(default_factory=dict)

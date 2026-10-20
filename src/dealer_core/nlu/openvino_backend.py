@@ -106,6 +106,19 @@ class OpenVinoBackend(NluBackend):
         obj, raw, ms = self._run("intent", state, car, text)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
+    def lead_in(self, system: str, user: str) -> str:
+        from ..dialogue.leadin import LEAD_TIMEOUT_S
+
+        self._ensure_loaded()
+        cfg = self._ov.GenerationConfig()
+        cfg.do_sample, cfg.max_new_tokens = False, 36
+        prompt = self._prompt(system, user)
+        fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
+        try:
+            return fut.result(timeout=LEAD_TIMEOUT_S)
+        except FutureTimeout as e:
+            raise BackendTimeout(f"{self.name} lead-in exceeded {LEAD_TIMEOUT_S}s") from e
+
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._run("json", state, car, text)[0]
 

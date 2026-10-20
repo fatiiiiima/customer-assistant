@@ -57,7 +57,9 @@ OFFER_CUE = re.compile(r"\b(?:offer|pay|give you|take|do it for|do|how about|wha
 SEARCH_CUE = re.compile(r"\b(?:looking for|do you have|have any|any|show me|i want|i need|i am after|after a|interested in|budget|"
                         r"something|cheap|find me|searching)\b")
 PRICE_CUE = re.compile(r"\b(?:under|below|less than|up to|max|maximum|budget|around|about|within|not more than|upto)\b")
-ORDINAL_RE = re.compile(r"\b(?:first|1st|second|2nd|third|3rd|last) one\b")
+WANTS_ANOTHER = re.compile(r"\b(?:(?:another|a different|different|other|any other) (?:car|cars|one|ones|option|options|model|models|vehicle)|"
+                           r"something (?:else|different)|show me (?:something|others|other)|i want another|looking for another)\b")
+ORDINAL_RE =re.compile(r"\b(?:first|1st|second|2nd|third|3rd|last) one\b")
 GREET_RE = re.compile(r"^(hi|hello|hey|good (morning|afternoon|evening)|salam|assalam\w*|marhaba|hiya)\b")
 
 
@@ -97,6 +99,8 @@ class RuleEngine:
         def ok(intent: Intent, rule: str) -> RuleHit | None:
             return RuleHit(intent, rule) if intent in allowed else None
 
+        if state in (State.ANSWERING, State.NEGOTIATING) and WANTS_ANOTHER.search(norm):      # "I want another car instead" (not a reschedule)
+            return ok(Intent.SEARCH_CARS, "another")
         for intent, pat in RULES:
             if intent is Intent.ASK_POLICY:
                 for topic, rx in TOPICS.items():

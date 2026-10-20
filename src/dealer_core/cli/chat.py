@@ -25,6 +25,8 @@ def format_debug(d: TurnDebug) -> str:
              f"  | intent  : {d.intent}   handled by {who}" + (f" ({detail})" if detail else "") + f"   NLU {d.nlu_ms:.1f} ms",
              f"  | tool    : {'; '.join(d.tools) if d.tools else '-'}",
              f"  | policy  : {d.decision or '-'}"]
+    if d.lead_in:
+        lines.append(f"  | lead-in : \"{d.lead_in}\"   (model-written, verified; {d.lead_ms:.0f} ms)")
     if d.note:
         lines.append(f"  | note    : {d.note}")
     if d.violations:
@@ -50,12 +52,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backend", help="llm backend from config (openvino_gpu | openvino_gpu_small | openvino_cpu | ollama); default llm.text_backend")
     ap.add_argument("--inventory", choices=["demo", "seed"], default="demo", help="demo = 16 hand-written fake cars; seed = 60 random fake cars")
     ap.add_argument("--clock", choices=["demo", "real"], default="demo", help="demo = frozen at the next Monday 10:00 (scripted demos look the same any day)")
+    ap.add_argument("--hybrid", action="store_true", help="hybrid replies: a verified model-written lead-in sentence before low-risk templated answers")
     ap.add_argument("--debug", action="store_true", help="show state, intent, rules-or-LLM, tools, policy decision and timing for every turn")
     a = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     cfg = load_config()
-    app = build_app(cfg, inventory=a.inventory, backend=a.backend, clock=demo_clock(cfg) if a.clock == "demo" else None)
+    app = build_app(cfg, inventory=a.inventory, backend=a.backend, clock=demo_clock(cfg) if a.clock == "demo" else None,
+                    lead_in=True if a.hybrid else None)
     try:
         start(app)
     except BackendError as e:

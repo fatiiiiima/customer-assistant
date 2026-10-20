@@ -27,6 +27,7 @@ from ..tools.phones import speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 from . import templates as T
+from .leadin import LeadInWriter
 from .phrasebook import Phrasebook
 from . import voice_rules
 from .session import Pending, Session
@@ -45,6 +46,8 @@ class TurnDebug:
     total_ms: float = 0.0
     violations: list[str] = field(default_factory=list)
     note: str = ""
+    lead_in: str = ""                  # the model-written lead-in sentence, when a hybrid reply used one
+    lead_ms: float = 0.0
 
 
 @dataclass
@@ -55,8 +58,9 @@ class TurnResult:
 
 
 class DialogueEngine:
-    def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7) -> None:
-        self.svc, self.nlu = svc, nlu
+    def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7,
+                 lead_writer: LeadInWriter | None = None) -> None:
+        self.svc, self.nlu, self.writer = svc, nlu, lead_writer
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
 
     def _say(self, s: Session, sid: str, **values: object) -> str:
@@ -87,11 +91,24 @@ class DialogueEngine:
             dbg.note = f"intent repaired by a consistency check ({u.repaired})"
         dbg.via = {"rules": f"rules:{u.rule}", "llm": f"llm:{u.backend}"}.get(u.via, u.via)
         reply = self._dispatch(s, u, text, dbg)
+        reply = self._with_lead_in(s, u.intent.value, text, dbg, reply)
         return self._finish(s, dbg, reply, t0)
+
+    def _with_lead_in(self, s: Session, intent: str, text: str, dbg: TurnDebug, reply: str) -> str:
+        """Hybrid mode: put a verified model-written sentence in front of a low-risk templated reply (see leadin.py)."""
+        if self.writer is None or s.ended or intent not in self.writer.intents:
+            return reply
+        out = self.writer.write(text, reply, s.last_lead)
+        dbg.lead_ms = out.ms
+        if out.text:
+            s.last_lead, dbg.lead_in = out.text, out.text
+            return f"{out.text} {reply}"
+        dbg.note = (dbg.note + "; " if dbg.note else "") + f"lead-in dropped ({out.why_not})"
+        return reply
 
     def _finish(self, s: Session, dbg: TurnDebug, reply: str, t0: float) -> TurnResult:
         dbg.state_after = s.state.value
-        dbg.violations = voice_rules.check(reply)
+        dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (1 if dbg.lead_in else 0))
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         return TurnResult(reply, dbg, s.ended)
 
@@ -240,11 +257,20 @@ class DialogueEngine:
         if ex.wants_listing(text) and s.filters and s.narrow_asks > 0:
             s.narrow_asks = 2                       # the caller does not want more questions: read out the matches
             new = {}
+        elif not new and not others and s.filters and ex.points_at_a_car(text):
+            return self._ask_which(s)                   # "tell me about the second one" with nothing on screen
         elif not new and not others and s.filters:
             dbg.note = "search request with no filter I can apply: said so instead of repeating the last answer"
             return self._say(s, "cannot_filter")
         # A named model, or a make said out of the blue, starts a fresh search ("do you have a Land Cruiser?"). A make said as the
         # answer to a narrowing question ("Toyota please") refines the current one instead.
+        if others and not new and (s.car or s.shown):       # "I want another car instead": drop the car they were on, ask what they want
+            s.excluded |= ({s.car} if s.car else set()) | {c.stock_id for c in s.shown}
+            s.filters.pop("make", None)
+            s.filters.pop("model", None)
+            if not s.filters:
+                s.car, s.shown, s.state, s.narrow_asks = None, [], State.INTEREST, 0
+                return self._say(s, "ask_instead")
         if new.get("model") or (new.get("make") and s.narrow_asks == 0):
             s.filters = dict(new)
             s.excluded.clear()

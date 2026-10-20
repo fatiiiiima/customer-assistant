@@ -41,3 +41,17 @@ Principle: the model never writes a price, date, booking or confirmation. Natura
 
 ## Stage 3 - `llm_write` (NOT BUILT; restricted)
 Disabled for prices, dates, bookings and confirmations. Only to be considered for small talk and general car information, text mode first.
+
+## Hybrid lead-ins (BUILT, off by default; `--hybrid` or `dialogue.lead_in: true`)
+Owner direction: "half template, half LLM". Implemented as a verified lead-in (`dialogue/leadin.py`):
+`reply = <model-written acknowledgement> + <templated answer>`.
+* Eligible intents only: `search_cars`, `ask_car_info`, `out_of_scope` (`dialogue.lead_in_intents`). Never price, booking, confirmation,
+  policy, hand-off. The model sees only the caller's words and the core reply, never prices or limits.
+* Verifier (any failure -> the template is spoken alone): one statement of 2-14 words, plain characters only, no digits/currency, no
+  commercial or commitment words, no negation (except "no problem"), no "I can / I will / let me", every word must be one the caller
+  said, one the core reply says, or an ordinary conversational word from a fixed list; never the same as the previous lead-in.
+* Measured live (iGPU, 21 invented utterances, not a tuned set): ~half the lead-ins pass verification and are spoken; the rest fall back
+  to the template. Cost: +0.4-1.2 s per turn (p50 ~0.6 s). Examples used: "Got it, a family car." / "Okay, a Bentley." / "Sure, let's
+  look at something different." / "Good question." / "I see you like football."
+* Voice-rule limit is 3 sentences only for a turn that has a lead-in.
+* Scripted demo (`demo_replay.cmd`) stays template-only so it is deterministic. Interactive hybrid: `demo_chat_hybrid.cmd`.

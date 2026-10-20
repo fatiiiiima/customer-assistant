@@ -49,6 +49,10 @@ class NluBackend(ABC):
     def warm_up(self) -> None:
         """Optional: pre-compile grammars / load weights so the first real caller does not pay the cold-start cost."""
 
+    def lead_in(self, system: str, user: str) -> str:
+        """Free text, a few words: the conversational lead-in for hybrid replies (verified by the caller before use)."""
+        raise BackendError(f"{self.name} cannot write lead-ins")
+
     @abstractmethod
     def classify(self, state: State, car: str | None, text: str) -> IntentResult:
         """Production call: grammar-constrained, intent only (~6 tokens). Slots are extracted by code afterwards."""

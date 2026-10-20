@@ -48,6 +48,8 @@ SITUATIONS: dict[str, Situation] = {s.id: s for s in [
     Situation("hello_again", "Hello again! How can I help?", note="the caller greets again mid-call"),
     Situation("ask_what_car", "What kind of car are you after, and roughly what budget?",
               note="the caller has not said what they want yet"),
+    Situation("ask_instead", "Of course. What kind of car would you like to see instead?",
+              note="the caller wants a different car than the one discussed; ask what they would like"),
     Situation("didnt_catch", "Sorry, could you say that again?", note="the agent did not understand and asks for a repeat"),
     Situation("narrow_make_mileage", "I have {total} {desc}. Do you prefer a particular make, or a maximum mileage?",
               note="too many matches to read out; ask a question to narrow them down"),

@@ -113,6 +113,14 @@ def mentions_unfilterable(text: str) -> bool:
     return bool(_UNFILTERABLE.search(" ".join(tokens_of(text))))
 
 
+_POINTS = re.compile(r"\b(?:first|1st|second|2nd|third|3rd|last|this|that) (?:one|car)\b|\bthe (?:first|second|third|last)\b")
+
+
+def points_at_a_car(text: str) -> bool:
+    """"tell me about the second one" / "that one": the caller refers to a car on screen, not a new search."""
+    return bool(_POINTS.search(" ".join(tokens_of(text))))
+
+
 def wants_listing(text: str) -> bool:
     """'just show me' after a narrowing question: stop asking and read out the first matches."""
     return bool(_SHOW_ME.search(" ".join(tokens_of(text))))

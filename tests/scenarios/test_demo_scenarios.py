@@ -225,3 +225,19 @@ def test_only_one_questions_are_answered_directly(call):
     assert r.reply.startswith("Yes, that's the only 2021 Toyota Camry I have right now.")
     r = c.say("do you only have one toyota")
     assert r.reply.startswith("I have") or r.reply.startswith("No, I have")
+
+
+def test_i_want_another_car_asks_what_instead_and_does_not_reread_or_go_off_topic(call):
+    c = call({})
+    c.say("do you have a toyota camry")
+    r = c.say("i want another car instead")
+    assert r.debug.intent == "search_cars" and "see instead" in r.reply and c.s.car is None
+    r = c.say("an suv")
+    assert "Camry" not in r.reply and r.debug.state_after in ("answering", "interest")
+
+
+def test_pointing_at_a_car_with_nothing_on_screen_asks_which_one(call):
+    c = call({"tell me about the second one": "search_cars"})
+    c.say("do you have a bently")                         # no match: nothing on screen
+    c.say("an suv under 150 thousand")                    # 6 matches: a narrowing question, still nothing read out
+    assert "Which car" in c.say("tell me about the second one").reply
