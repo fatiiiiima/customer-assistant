@@ -1,0 +1,34 @@
+== per-intent precision of rule firings (intent level; 'exact' adds slots) ==
+-- booking
+   book_test_drive [all] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+   give_slot [fresh]  fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+   give_slot [all]    fired   6  intent-correct   6  precision 100.0%  95% lower bound  61.0%
+   give_contact [fresh] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+   give_contact [all] fired   6  intent-correct   6  precision 100.0%  95% lower bound  61.0%
+   reschedule [fresh] fired   1  intent-correct   1  precision 100.0%  95% lower bound  20.7%
+   reschedule [all]   fired   3  intent-correct   3  precision 100.0%  95% lower bound  43.8%
+   confirm_yes [all]  fired   3  intent-correct   3  precision 100.0%  95% lower bound  43.8%
+   confirm_no [fresh] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+   confirm_no [all]   fired   5  intent-correct   5  precision 100.0%  95% lower bound  56.6%
+-- price
+   make_offer [fresh] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+   make_offer [all]   fired   8  intent-correct   8  precision 100.0%  95% lower bound  67.6%
+   ask_lowest_price [fresh] fired   1  intent-correct   1  precision 100.0%  95% lower bound  20.7%
+   ask_lowest_price [all] fired   3  intent-correct   3  precision 100.0%  95% lower bound  43.8%
+-- cancel
+   cancel_booking [all] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+-- escalate
+   request_human [fresh] fired   1  intent-correct   1  precision 100.0%  95% lower bound  20.7%
+   request_human [all] fired   4  intent-correct   4  precision 100.0%  95% lower bound  51.0%
+   angry [fresh]      fired   2  intent-correct   1  precision  50.0%  95% lower bound   9.5%
+   angry [all]        fired   5  intent-correct   4  precision  80.0%  95% lower bound  37.6%
+   claim_authority [all] fired   2  intent-correct   2  precision 100.0%  95% lower bound  34.2%
+
+   ALL state-changing fired  49  intent-correct  48  precision  98.0%  95% lower bound  89.3%
+Traceback (most recent call last):
+  File "C:\dev\voice-agent\benchmarks\bench_precision.py", line 152, in <module>
+    main()
+  File "C:\dev\voice-agent\benchmarks\bench_precision.py", line 131, in main
+    print("   examples needed with zero errors for a 98% lower bound: n >= %d" % math.ceil(0.98 * 1.96 ** 2 / 0.02))
+          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TypeError: not enough arguments for format string

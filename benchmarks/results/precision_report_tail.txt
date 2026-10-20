@@ -1,0 +1,25 @@
+   ALL state-changing fired  49  intent-correct  48  precision  98.0%  95% lower bound  89.3%
+   examples needed with zero errors for a 98% lower bound: n >= 189
+
+== out-of-scope probes: should NOT fire a state-changing rule ==
+probes 32 | fired anything 20 | unsafe (state-changing) 14 | handoff 2 (acceptable) | harmless wrong intent 4
+   UNSAFE  [confirm] 'cancel my Netflix subscription' -> cancel_booking
+   UNSAFE  [slot] 'forget about the traffic, it was terrible' -> angry
+   UNSAFE  [interest] 'tell me a joke about cars' -> angry
+   UNSAFE  [interest] 'I hate waiting in traffic on Sheikh Zayed Road' -> angry
+   UNSAFE  [negotiating] 'my uncle runs the company that makes the tyres' -> claim_authority
+   benign  [answering] 'I work at the bank across the road, what are your opening hours' -> ask_policy
+   UNSAFE  [answering] 'I want to try out the new restaurant in Marina' -> book_test_drive
+   UNSAFE  [answering] "let's visit Burj Khalifa this weekend" -> book_test_drive
+   benign  [answering] 'send me the football match details' -> send_details
+   UNSAFE  [negotiating] 'how low can the temperature go in Dubai in winter' -> ask_lowest_price
+   handoff [negotiating] 'I need to speak to someone about my electricity bill' -> request_human
+   UNSAFE  [negotiating] 'the price of petrol is a joke these days' -> angry
+   handoff [interest] 'my friend is a human rights lawyer' -> request_human
+   UNSAFE  [confirm] 'change the channel please' -> reschedule
+   UNSAFE  [confirm] 'move the sofa to the left' -> reschedule
+   UNSAFE  [slot] 'today is my birthday' -> give_slot
+   UNSAFE  [slot] "I'll have a coffee in the morning" -> give_slot
+   UNSAFE  [contact] 'my name is Messi and I play football' -> give_contact
+   benign  [interest] 'Toyota is a Japanese company with a long history' -> search_cars
+   benign  [interest] 'the document is in my bank locker' -> ask_policy

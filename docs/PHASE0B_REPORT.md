@@ -10,10 +10,13 @@ Reproduce: `scripts/download_models.ps1`, `scripts/pull_models.ps1`, `scripts/ru
 1. **Sub-second first audio is achievable by design; a sub-second first *meaningful* word is achievable
    for ~83% of turns** (rules answer them in <1 ms). LLM turns land at about **1.3-1.9 s**. Not yet measured
    end to end: VAD/turn-detection latency (Phase 3), so the 300 ms endpoint figure below is an assumption.
-2. **The runtime matters more than the model.** Ollama/llama.cpp needs 1.8 s to read a 293-token prompt on a
-   cache miss; **OpenVINO GenAI needs 94 ms** for the same model on the same CPU (57 ms on the iGPU).
-   That is a design problem, not a hardware limit. Token *generation* (15-40 tok/s) is the real hardware limit,
-   so the LLM must emit very few tokens: an **intent-only constrained call (~6 tokens)**, slots filled by code.
+2. **The iGPU matters more than the runtime.** CORRECTION: my first version of this report said OpenVINO reads a
+   293-token prompt in 94 ms against 1.8 s for Ollama. That was wrong: OpenVINO GenAI silently reuses its KV cache across
+   `generate()` calls, so my repeated-prompt test measured cache *hits*. With a guaranteed-unique prefix
+   (`benchmarks/diag_ov_cache.py`): OpenVINO **CPU** misses cost 1172 ms (1.7B) and 4720 ms (4B), about the same as
+   Ollama; the **iGPU** misses cost only **89 ms (1.7B) and 158 ms (4B)**. The win is the iGPU's prefill speed (plus
+   prompt-prefix reuse on CPU), not the runtime. Token *generation* (15-40 tok/s) is the hardware limit, so the LLM must
+   emit very few tokens: an **intent-only constrained call (~6 tokens)**, slots filled by code.
 3. **Qwen3 1.7B is not accurate enough on its own** (intent 0.72-0.76 on unseen phrasing); **Qwen3 4B is**
    (0.90-0.93). With rules answering ~83% of turns, the LLM only sees the hard 17%.
 4. **Licensing found real blockers**: the popular Piper "lessac" voice is research-only; Piper's PyPI package and
@@ -195,7 +198,9 @@ Do not put STT and the LLM on the same iGPU.
 * Sub-second *meaningful word on LLM turns*: **a hardware limit** on decoding (15-40 tok/s on this CPU/iGPU), only
   reachable by emitting ~6 tokens. A free-form 25-token reply costs 0.7-1.7 s by itself, so such replies belong in
   the 1.5-3 s allowance, not the 1 s one.
-* Ollama's 1.8-4.9 s cache-miss prefill: **a design/runtime problem**, fixed by OpenVINO (or by a smaller prompt).
+* Cache-miss prefill on the CPU (1.2-4.9 s for a 285-token prompt, in Ollama and OpenVINO alike): **a hardware limit of
+  CPU prefill**, avoided by (a) running the LLM on the iGPU, where a miss costs 89-158 ms, or (b) on CPU keeping ONE static
+  system prompt so the prefix is always cached.
 * Kokoro under 1 s: hardware limit.
 
 ## 7. Deterministic fast path (item 4)
@@ -214,6 +219,32 @@ a bare "Yousef Hassan 0551112233" got the phone but not the name (safe; the agen
 open off-topic chatter, rare phrasings of yes ("ok that's acceptable"), spelled-out dates. Same author wrote rules
 and test sets, so this is optimistic against real callers.
 
+### 7a. Precision of the STATE-CHANGING intents (your condition 5; `benchmarks/bench_precision.py`, rules unchanged)
+
+| Group | Intents | Rule firings (all 100 labelled) | Correct | 95% lower bound |
+|---|---|---|---|---|
+| booking | book_test_drive, give_slot, give_contact, reschedule, confirm_yes/no | 25 | 25 | 34-61% per intent |
+| price | make_offer, ask_lowest_price | 11 | 11 | 44-68% |
+| cancel | cancel_booking | 2 | 2 | 34% |
+| escalate | request_human, angry, claim_authority | 11 | 10 (**angry 4/5 = 80%**; fresh set 1/2) | 38-51% |
+| **all state-changing** | | **49** | **48 = 98.0%** | **89.3%** |
+
+* **A 98% claim cannot be demonstrated on this data.** Even with zero errors you need n >= 189 firings *per intent* for a
+  95% lower bound of 98%. The 100 labelled examples give n of 2-8 per intent. Only your recorded + typed set can open the gate.
+* **Out-of-scope probes (32 adversarial utterances, written before any result, each placed in a state where the trigger
+  intent is valid): 20 triggered a rule, 14 of them a state-changing intent.** Examples: "cancel my Netflix subscription" ->
+  cancel_booking; "move the sofa to the left" -> reschedule; "today is my birthday" -> give_slot; "tell me a joke about
+  cars" and "I hate waiting in traffic" -> angry; "how low can the temperature go" -> ask_lowest_price. The probes are
+  deliberately keyword-hostile, so real callers will trigger far fewer, but the rules are plainly keyword-driven.
+* **Decision implied by your gate:** state-changing intents defer to the LLM until each passes the lower-bound test. Cost,
+  measured on the fresh set: the share of turns needing the LLM rises from **17% to 62%**; mean T0->T2 goes from ~400 ms to
+  ~730 ms (primary) or ~630 ms (CPU fallback), and the typical turn becomes an LLM turn (~1.0 s / 0.8 s). Harmless intents
+  (search, policy, car info, send details, greeting, goodbye) keep the fast path. Mitigation planned, not built: anchored
+  whole-utterance patterns per intent so each can pass the gate on your data.
+* The "tell me a joke" false escalation is a design finding, not a one-line bug: escalation rules need (a) anchoring,
+  (b) a domain / out-of-scope check before any escalation, (c) the LLM's `out_of_scope` as a veto. Left unfixed on purpose
+  so the fresh set stays clean.
+
 Hybrid (rules first, LLM for the rest), exact intent+slots, fresh set only (the other two are contaminated):
 
 | Setup | LLM-only | Hybrid | Share to LLM |
@@ -228,7 +259,16 @@ years, dates and times, phone, names after "my name is", make/model/body-type (b
 human-handoff and anger keywords. What stays LLM: `search_cars` vs `ask_car_info` in ambiguous phrasing, hedged
 yes/no, off-topic, authority claims with unusual wording.
 
-## 8. OpenVINO CPU / iGPU / NPU (the brief said "don't assume it helps": it does, a lot)
+## 8. OpenVINO CPU / iGPU / NPU (the brief said "don't assume it helps": the iGPU does, the NPU does not)
+
+**Read the TTFT rows below as cache-HIT numbers** (same system prompt repeated). Cache MISS (unique prefix), measured
+separately, 285-token prompt, intent-only call:
+
+| Model | CPU hit -> miss | iGPU hit -> miss |
+|---|---|---|
+| Qwen3 1.7B int4 | TTFT 102 -> **1172 ms** (total 362 -> 1453) | 60 -> **89 ms** (total 299 -> 322) |
+| Qwen3 4B int4 | TTFT 608 -> **4720 ms** (total 1633 -> 5527) | 94 -> **158 ms** (total 695 -> 752) |
+
 
 | Workload | CPU | iGPU (Arc 140T) | NPU |
 |---|---|---|---|
@@ -244,15 +284,37 @@ that org publishes only for 8B). The LLM numbers are *speed only*: the OpenVINO 
 through the accuracy sets (expected similar to Ollama Q4_K_M; verify in Phase 1).
 OpenVINO adds a runtime outside "Ollama or llama.cpp". It is Apache-2.0 and CPU-only compatible, but it is a decision for you.
 
-## 9. Recommended stack (pending your answers below)
+## 9. Recommended stack (CORRECTED per your condition 1: STT and the LLM never share the iGPU)
 
-| Part | Pick | Fallback |
-|---|---|---|
-| Turn flow | rules first; LLM only on decline; templates for all replies; cached ack clips | |
-| STT | OpenVINO Whisper tiny int8 on iGPU + car-term prompt (58 ms) | faster-whisper tiny.en + hotwords, CPU (307 ms) |
-| LLM | **Qwen3 4B-Instruct-2507 int4, OpenVINO iGPU, intent-only grammar call** | Qwen3 1.7B int4 on CPU if no iGPU; Ollama (Phase 1 text core, website chat) |
-| TTS | Piper fp32 via sherpa-onnx, voice **libritts_r** (CC BY, attribution) or **joe** (CC0) | |
-| Not used | Kokoro, Qwen3.5, Gemma 3, Llama 3.2, qwen3:0.6b, int8 TTS, sherpa 20M | |
+| Role | Config name | STT | NLU LLM (intent-only, grammar-constrained) | TTS | Prompt style |
+|---|---|---|---|---|---|
+| **Primary** | `openvino_gpu` | OpenVINO Whisper tiny int8 on **CPU**, car-term prompt | **Qwen3 4B-Instruct-2507 int4 on the iGPU** | Piper fp32, **separate process** | per-state (a miss costs only ~160 ms on the iGPU) |
+| iGPU, faster | `openvino_gpu_small` | same | Qwen3 1.7B int4, iGPU | same | per-state |
+| **No-iGPU fallback** | `openvino_cpu` | OpenVINO Whisper tiny, CPU | **Qwen3 1.7B int4, CPU** | same | **one static prompt** (state enforced by the grammar only): a CPU cache miss costs 1.2 s |
+| Ollama fallback | `ollama` | faster-whisper tiny.en + hotwords (CPU) | Qwen3 4B or 1.7B Q4_K_M via Ollama | same | static prompt |
+
+Voice: Piper `libritts_r` (CC BY 4.0) or `joe` (CC0). Not used: Kokoro, Qwen3.5, Gemma 3, Llama 3.2, qwen3:0.6b, int8 TTS,
+the sherpa streaming STT. Rules answer first; the LLM is called only when they decline; every reply is templated except
+open questions.
+
+### 9a. Realistic SEQUENTIAL turns (STT finishes, then NLU, then TTS)
+`benchmarks/bench_turns.py`: 69 scripted utterances (heldout + fresh, spoken by a different Piper voice, transcribed by the
+real STT) + 7 open questions. T0 = caller audio complete; **endpointing/VAD is not included** (unmeasured; assume ~300 ms
+more). T2 = first TTS audio chunk. TTS runs in its own process behind a pipe (round trip under 0.1 ms). Three interleaved
+repetitions per config, on AC. Each cell is the **median of the three per-run p50s, with the min-max across runs**.
+
+| Config | Rule turn T0->T2 p50 (run p95s) | LLM turn T0->T2 p50 (run p95s) | NLU alone, LLM turn | Open answer, first sentence, T0->T2 p50 (run p95s) |
+|---|---|---|---|---|
+| **Primary** (4B iGPU) | **277 ms** (269-416); p95 401-551 | **1012 ms** (986-1146); p95 1112-1522 | 685-752 ms | 1463 ms (1461-1774); p95 1597-2338 |
+| iGPU, faster (1.7B iGPU) | 320 (260-326); p95 318-545 | 716 (572-716); p95 630-881 | 318-379 | 953 (943-1400); p95 1060-1521 |
+| CPU fallback (1.7B CPU, static prompt) | 310 (278-412); p95 320-697 | 825 (766-1032); **p95 1343-2154** | 480-616 | 1139 (1058-1484); p95 1215-1609 |
+
+Rules answered 83% of the 69 scripted turns from real STT transcripts (91% from the gold text, so transcription errors cost
+about 8 points of coverage). Adding ~300 ms endpointing gives **rule turn ~0.6 s, LLM turn ~1.3 s, open answer ~1.8 s
+to the first meaningful word**; the cached ack clip needs only the endpoint. Run-to-run spread is large (the primary
+rule-turn median ranged 269-416 ms), so quote ranges. Two mistakes kept visible: a CPU run with a per-state prompt
+gave LLM turns of 2438 ms (p95 3433) because every state change was a cache miss; and a single non-interleaved run ranked
+configurations wrongly because the machine drifted between runs.
 
 ## 10. Things that went wrong or are unverified
 
@@ -260,6 +322,8 @@ OpenVINO adds a runtime outside "Ollama or llama.cpp". It is Apache-2.0 and CPU-
   third, v1.17.1). The first one loaded in a process wins, so **never mix sherpa and onnxruntime engines in one
   process**. Silero VAD (onnxruntime) + sherpa TTS in one Pipecat process is a Phase 3 risk; likely fix: run TTS in
   its own process. `uv` also failed to install `sherpa-onnx-core` transitively; it is now pinned.
+* **My OpenVINO "94 ms prefill" claim in the first version of this report was wrong** (it measured KV-cache hits). I found
+  it because the sequential test disagreed with the standalone one. Corrected in the headline and sections 8-9.
 * The first LLM timings (battery, with other scripts running) were contaminated and were all redone.
 * My `ask_car_info`-in-every-state menu mistake cost the 1.7B ~10 intent points before I caught it.
 * Ollama's server vanished once and gemma3:4b crashed a connection in the first run (fine in the AC rerun).
