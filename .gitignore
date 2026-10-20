@@ -8,3 +8,4 @@ logs/
 benchmarks/results/*.json
 benchmarks/recordings/*.wav
 !benchmarks/recordings/.gitkeep
+benchmarks/results/synth/

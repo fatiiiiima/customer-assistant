@@ -21,6 +21,8 @@ spike = [
     "ollama",             # client for the local Ollama server (MIT)
     "faster-whisper",     # MIT
     "sherpa-onnx",        # Apache-2.0
+    "sentencepiece",      # Apache-2.0; builds bpe.vocab for sherpa hotwords
+    "sherpa-onnx-core",   # native libs incl. its own onnxruntime.dll; uv did not pull it in transitively
     "useful-moonshine-onnx",  # MIT (English models)
     "kokoro-onnx",        # MIT; model Apache-2.0. See docs/LICENSES.md for G2P caveats.
 ]

@@ -1,10 +1,10 @@
-# Recording guide: STT accuracy clips (Phase 0b)
+﻿# Recording guide: STT accuracy clips (Phase 0b)
 
 These clips measure word error rate (WER) on car names, plates and spoken numbers.
 They stay on this laptop: `benchmarks/recordings/*.wav` is gitignored.
 
 ## What to record
-- The lines in `benchmarks/recordings/script.tsv`: **39 clips**, each about 3-6 seconds.
+- The lines in `benchmarks/recordings/script.tsv`: **37 clips**, each about 3-6 seconds.
 - Read each line **exactly as written**, in your normal speaking voice and accent.
   Numbers are written as words so the reference transcript is unambiguous.
 
@@ -23,3 +23,4 @@ They stay on this laptop: `benchmarks/recordings/*.wav` is gitignored.
 - Optional: a second speaker reading the same lines, named `car01_spk2.wav`.
 
 If some clips are missing, the benchmark skips them and reports how many were scored.
+
