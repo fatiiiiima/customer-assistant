@@ -129,4 +129,5 @@ send_details:
 # ---- Reply wording ------------------------------------------------------
 dialogue:
   variants: true          # true: use the human-approved wording variants in config/phrase_variants.yaml; false: base wording only
+  lead_in: true           # hybrid replies: verified model-written lead-in before low-risk templated answers (false = templates only)
   variant_seed: 7         # same seed -> same wording choices in a call (reproducible demos)

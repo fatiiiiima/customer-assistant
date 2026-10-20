@@ -1,5 +1,9 @@
 # Demo guide (text chat, fake data)
 
+**Replies are now HYBRID by default:** for low-risk turns (search, car questions, off-topic) the model writes one short, verified
+acknowledgement ("Got it, Toyota.") in front of the templated answer; if it fails the checks, the template is spoken alone. Prices,
+bookings, confirmations and hand-offs are always exact templates. Add `--template-only` to any command to switch it off.
+
 **What this is:** the real dialogue engine, tools and policy engine, driven by typing. The language model only chooses the *intent*;
 every reply is templated, every price comes from the policy engine, and every booking is read back before it is made. All cars,
 prices, customers and branches are **fake**. It is **text only**: voice (STT/TTS) is a later phase.
@@ -21,6 +25,7 @@ Fallback if the iGPU misbehaves: `--backend ollama` (same checkpoint on the CPU;
 | One scenario only (for example the price haggle) | `demo_replay.cmd --only 3` |
 | **Interactive chat** with the live trace | double-click `demo_chat.cmd`, or `.venv\Scripts\python.exe -m dealer_core.cli.chat --backend openvino_gpu --debug` |
 | Reliability check, 20 runs of every scenario, no transcripts | `.venv\Scripts\python.exe -m dealer_core.cli.replay --backend openvino_gpu --runs 20 --quiet` |
+| Templates only (no lead-ins; fastest, fully fixed wording) | add `--template-only` |
 | Fallback backend | add `--backend ollama` (replace `openvino_gpu`) |
 
 Start-up takes about 10-13 seconds (it loads the model and warms every state so the first customer turn is not slow). In the
