@@ -1,0 +1,21 @@
+# Which intents the deterministic rules may answer WITHOUT asking the LLM.
+#
+# Rule: a STATE-CHANGING intent (booking, price, cancel, escalation, yes/no) may only be listed here together with measured
+# evidence that its 95% lower-bound precision is >= 0.98 (docs/PHASE1_PLAN.md section 5). The loader refuses anything else.
+# The 100 hand-written utterances of Phase 0b cannot show that (n is 2-8 per intent; ~189 correct firings with zero errors are
+# needed), so every state-changing intent is CLOSED and goes through the LLM. Your batch-1 set is the first chance to open any.
+#
+# The harmless intents below are enabled but have not been measured on real callers yet.
+enabled:
+  - greet
+  - search_cars
+  - ask_car_info
+  - ask_policy
+  - send_details
+  - goodbye
+
+# Example of what opening a gate looks like (NOT active):
+# enabled: [..., confirm_yes]
+# evidence:
+#   confirm_yes: {n: 212, correct: 212, lower_bound: 0.982, set: "batch1+colleagues", date: "2026-11-01"}
+evidence: {}

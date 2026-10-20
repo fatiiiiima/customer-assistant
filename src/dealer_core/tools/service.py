@@ -78,6 +78,11 @@ class DealerService:
         f = SearchFilters(body_type=car.body_type, min_price=int(car.price * 0.8), max_price=int(car.price * 1.2))
         return tuple(c.view() for c in self.inventory.search(f, k + 1) if c.stock_id != car.stock_id)[:k]
 
+    def similar_to(self, stock_id: str, k: int = 3) -> tuple[CarView, ...]:
+        """Cars like this one (same body type, within +/-20% of its price): offered when a car is sold mid-call."""
+        car = self.inventory.get(stock_id)
+        return self._similar(car, k) if car else ()
+
     def book_test_drive(self, stock_id: str, customer_name: str, customer_phone: str, slot_start: datetime) -> BookingOutcome:
         phone = normalize_phone(customer_phone)
         if phone is None or not customer_name.strip():

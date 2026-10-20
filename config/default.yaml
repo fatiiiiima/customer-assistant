@@ -39,6 +39,7 @@ llm:
       device: GPU
       model: Qwen3-4B-Instruct-2507-int4-ov-nocal   # our data-free int4 conversion of the 2507 checkpoint (T0: matches Ollama Q4_K_M)
       prompt_mode: auto                          # -> per-state prompt on GPU
+      timeout_s: 6.0                             # warm calls take ~0.7 s; this only fires if the iGPU stalls
     openvino_gpu_small:
       runtime: openvino
       device: GPU
@@ -49,12 +50,12 @@ llm:
       device: CPU
       model: Qwen3-1.7B-int4-ov
       prompt_mode: auto                          # -> static prompt on CPU
-      timeout_s: 4.0
+      timeout_s: 12.0                            # generous: a cold CPU fallback must load + prefill (1.2 s on a cache miss)
     ollama:
       runtime: ollama
       model: "qwen3:4b-instruct-2507-q4_K_M"
       prompt_mode: auto                          # -> static prompt
-      timeout_s: 6.0
+      timeout_s: 20.0                            # generous for the same reason (cold model load)
     # Disabled dev-only stub (needs VOICE_AGENT_ALLOW_CLOUD=1; synthetic data only; name read from env, never hard-coded).
     cloud_stub:
       runtime: cloud_stub
@@ -78,7 +79,7 @@ turn:
 # Working days/hours are per-branch config. Weekdays: mon..sun.
 branches:
   - id: DXB-01
-    name: Fake Showroom Dubai
+    name: Dubai Showroom                # fake branch (placeholder)
     timezone: Asia/Dubai
     working_hours:
       mon: ["09:00", "19:00"]
@@ -88,7 +89,7 @@ branches:
       fri: ["14:00", "19:00"]
       sat: ["09:00", "19:00"]
   - id: SHJ-01
-    name: Fake Showroom Sharjah
+    name: Sharjah Showroom              # fake branch (placeholder)
     timezone: Asia/Dubai
     working_hours:
       mon: ["10:00", "18:00"]

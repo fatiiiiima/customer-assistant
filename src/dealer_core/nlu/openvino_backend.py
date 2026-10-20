@@ -19,7 +19,7 @@ from typing import Iterator
 from ..config import BackendCfg, LlmCfg
 from ..dialogue.states import Intent, State
 from . import prompts
-from .backend import BackendError, BackendHealth, IntentResult, NluBackend, resolve_prompt_mode
+from .backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
 
 _SENTENCE_END = re.compile(r"[.!?]\s*$")
 
@@ -84,13 +84,22 @@ class OpenVinoBackend(NluBackend):
         try:
             raw = fut.result(timeout=self.cfg.timeout_s)
         except FutureTimeout as e:
-            raise BackendError(f"{self.name} exceeded {self.cfg.timeout_s}s") from e
+            raise BackendTimeout(f"{self.name} exceeded {self.cfg.timeout_s}s") from e
         except Exception as e:
             raise BackendError(f"{type(e).__name__}: {e}") from e
         try:
             return json.loads(raw), raw, (time.perf_counter() - t0) * 1000
         except json.JSONDecodeError as e:
             raise BackendError(f"malformed JSON from {self.name}: {raw!r}") from e
+
+    def warm_up(self) -> None:
+        """First use of each state compiles its grammar (several seconds). Do it for every state up front, with no timeout."""
+        from ..dialogue.states import nlu_states
+
+        self._ensure_loaded()
+        for state in nlu_states():
+            prompt = self._prompt(prompts.system_prompt(state, self.mode), prompts.user_message(state, None, "hello there"))
+            self._pool.submit(lambda p=prompt, c=self._gen_config("intent", state): self._pipe.generate([p], c)).result()
 
     # -- interface ---------------------------------------------------------------------------
     def classify(self, state: State, car: str | None, text: str) -> IntentResult:

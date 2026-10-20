@@ -1,0 +1,58 @@
+# The five demo scenarios. Run with the replayer (see docs/DEMO.md). All cars, prices and customers are FAKE.
+# Expectations are checked on every run; `via` is "rules" (answered by the deterministic fast path) or "llm" (intent chosen by the model).
+# Prices below follow the PLACEHOLDER negotiation limits in config/default.yaml (TO BE SET BY THE BUSINESS).
+
+- name: "1. Search for an SUV within a budget"
+  steps:
+    - say: "Hi, I'm looking for an SUV under 150 thousand dirhams"
+      expect: {intent: search_cars, via: rules, state_after: interest, reply_has: ["6 SUVs under 150,000 dirhams", "make"]}
+    - say: "Toyota please"
+      expect: {intent: search_cars, via: rules, state_after: answering, reply_has: ["Prado", "Land Cruiser", "105,000", "148,000"]}
+    - say: "Tell me about the second one"
+      expect: {intent: ask_car_info, via: rules, reply_has: ["Land Cruiser", "62,000"]}
+
+- name: "2. Ask about a car"
+  steps:
+    - say: "Do you have a Toyota Land Cruiser?"
+      expect: {intent: search_cars, via: rules, reply_has: ["2021 Toyota Land Cruiser", "62,000 kilometres", "148,000 dirhams"]}
+    - say: "How many kilometres has it done, and what colour is it?"
+      expect: {intent: ask_car_info, via: rules, reply_has: ["62,000 kilometres", "white"]}
+    - say: "Is it GCC spec?"
+      expect: {intent: ask_car_info, via: rules, reply_has: ["GCC spec"]}
+    - say: "Does it have a service history?"
+      expect: {intent: ask_car_info, via: rules, reply_has: ["full service history"]}
+    - say: "Has it had any accidents?"
+      expect: {intent: ask_car_info, via: rules, reply_has: ["don't have accident records", "colleague"]}
+
+- name: "3. Haggle below the floor price"
+  steps:
+    - say: "Do you have a Toyota Land Cruiser?"
+      expect: {intent: search_cars, via: rules}
+    - say: "Can you do 120,000?"
+      expect: {intent: make_offer, via: llm, state_after: negotiating, reply_has: ["147,100 dirhams, subject to confirmation"], decision_has: ["counter"]}
+    - say: "How about 125,000?"
+      expect: {intent: make_offer, via: llm, reply_has: ["146,100 dirhams, subject to confirmation"]}
+    - say: "My final offer is 130,000"
+      expect: {intent: make_offer, via: llm, reply_has: ["final offer is 145,100"], decision_has: ["final"]}
+    - say: "I can only do 135,000"
+      expect: {intent: make_offer, via: llm, ended: true, reply_has: ["colleague"], decision_has: ["escalate"], tool_has: ["escalate_to_human(below_floor)"]}
+
+- name: "4. Book a test drive with read-back confirmation"
+  steps:
+    - say: "Do you have a Toyota Land Cruiser?"
+      expect: {intent: search_cars, via: rules}
+    - say: "I'd like to book a test drive"
+      expect: {intent: book_test_drive, via: llm, state_after: slot, reply_has: ["Which works better"]}
+    - say: "Saturday at four thirty in the afternoon"
+      expect: {intent: give_slot, via: llm, state_after: contact, reply_has: ["Saturday at 4:30 PM", "name and mobile"]}
+    - say: "My name is Mohammed Al Mansoori and my number is zero five zero one two three four five six seven"
+      expect: {intent: give_contact, via: llm, state_after: confirm, reply_has: ["Let me confirm", "Land Cruiser", "Saturday", "4:30 PM", "Mohammed Al Mansoori", "zero five zero, one two three, four five six seven", "Is that right?"]}
+    - say: "Yes, that's right"
+      expect: {intent: confirm_yes, via: llm, reply_has: ["You're booked", "driving licence", "WhatsApp"], tool_has: ["book_test_drive(S1042", "send_details(whatsapp"]}
+
+- name: "5. Off-topic, then an angry customer, handed to a human"
+  steps:
+    - say: "The weather is really hot today"
+      expect: {intent: out_of_scope, via: llm, ended: false, reply_has: ["used cars"]}
+    - say: "This is useless, you're wasting my time"
+      expect: {intent: angry, via: llm, ended: true, reply_has: ["colleague"], tool_has: ["escalate_to_human(angry)"]}

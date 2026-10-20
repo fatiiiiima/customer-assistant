@@ -2440,6 +2440,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "rapidfuzz" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
@@ -2493,6 +2494,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rapidfuzz", specifier = ">=3.9" },
     { name = "sentence-transformers", marker = "extra == 'rag'" },
     { name = "sentencepiece", marker = "extra == 'spike'" },
     { name = "sherpa-onnx", marker = "extra == 'spike'" },

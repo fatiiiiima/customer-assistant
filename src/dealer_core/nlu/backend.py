@@ -13,6 +13,10 @@ class BackendError(RuntimeError):
     """A backend call failed (device missing, timeout, malformed output). The chain moves to the next backend."""
 
 
+class BackendTimeout(BackendError):
+    """A call exceeded its time budget. The backend may be fine (just slow once): the chain falls back for THIS call only."""
+
+
 @dataclass(frozen=True)
 class BackendHealth:
     ok: bool
@@ -41,6 +45,9 @@ class NluBackend(ABC):
     @abstractmethod
     def health(self) -> BackendHealth:
         """Cheap-but-real check used at startup: is the device/server present and the model loadable?"""
+
+    def warm_up(self) -> None:
+        """Optional: pre-compile grammars / load weights so the first real caller does not pay the cold-start cost."""
 
     @abstractmethod
     def classify(self, state: State, car: str | None, text: str) -> IntentResult:

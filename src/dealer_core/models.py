@@ -84,6 +84,7 @@ class SearchFilters(_Frozen):
     max_km: int | None = None
     branch_id: str | None = None
     include_unavailable: bool = False   # default: only cars that can actually be sold
+    exclude_stock_ids: tuple[str, ...] = ()   # cars the caller was already shown ("show me other models")
 
 
 class BookingStatus(str, Enum):

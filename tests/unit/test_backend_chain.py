@@ -3,7 +3,7 @@ import pytest
 from dealer_core.config import BackendCfg
 from dealer_core.dialogue.states import STATE_SPEC, Intent, State
 from dealer_core.nlu import prompts
-from dealer_core.nlu.backend import BackendError, BackendHealth, IntentResult, NluBackend, resolve_prompt_mode
+from dealer_core.nlu.backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
 from dealer_core.nlu.chain import BackendChain
 
 
@@ -73,3 +73,35 @@ def test_static_prompt_is_identical_for_every_state():
     """The point of the static prompt is that the KV-cache prefix never changes between states."""
     assert prompts.system_prompt(State.GREETING, "static") == prompts.system_prompt(State.CONFIRM, "static")
     assert prompts.system_prompt(State.GREETING, "state") != prompts.system_prompt(State.CONFIRM, "state")
+
+
+class SlowOnce(Fake):
+    """Times out on its first call, fine afterwards (a cold start)."""
+
+    def classify(self, state, car, text):
+        self.calls += 1
+        if self.calls == 1:
+            raise BackendTimeout("cold")
+        return IntentResult(Intent.GREET, 1.0, self.name, "{}")
+
+
+def test_a_timeout_uses_the_fallback_for_that_call_only_and_keeps_the_primary():
+    a, b = SlowOnce("a"), Fake("b")
+    chain = BackendChain([a, b])
+    assert chain.classify(State.GREETING, None, "x").backend == "b"       # a timed out: b answered this one call
+    assert chain.name == "a"                                             # ...but a is still the active backend
+    assert chain.classify(State.GREETING, None, "x").backend == "a"       # and answers the next call
+
+
+def test_start_warms_only_the_active_backend():
+    warmed = []
+
+    class W(Fake):
+        def warm_up(self):
+            warmed.append(self.name)
+
+    BackendChain([W("a"), W("b")]).start()
+    assert warmed == ["a"]
+    warmed.clear()
+    BackendChain([W("a")]).start(warm=False)
+    assert warmed == []

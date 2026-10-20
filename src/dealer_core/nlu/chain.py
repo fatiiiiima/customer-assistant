@@ -7,7 +7,7 @@ from typing import Callable, Iterator
 
 from ..config import BackendCfg, Config, LlmCfg
 from ..dialogue.states import State
-from .backend import BackendError, IntentResult, NluBackend
+from .backend import BackendError, BackendTimeout, IntentResult, NluBackend
 
 log = logging.getLogger("dealer.nlu")
 
@@ -49,13 +49,16 @@ class BackendChain:
                 log.warning("backend %s unavailable: %s", name, e)
         return cls(built)
 
-    def start(self) -> str:
-        """Health-check in order; the first healthy backend becomes active. Returns a one-line status for the log."""
+    def start(self, warm: bool = True) -> str:
+        """Health-check in order; the first healthy backend becomes active and is warmed up (grammars compiled, weights loaded)
+        so the first caller does not hit a cold start. Fallbacks are NOT loaded. Returns a one-line status for the log."""
         reasons = []
         for i, b in enumerate(self.backends):
             h = b.health()
             if h.ok:
                 self.active = i
+                if warm:
+                    b.warm_up()
                 msg = f"NLU backend active: {b.name} ({h.detail})" + (f"; skipped: {'; '.join(reasons)}" if reasons else "")
                 log.info(msg)
                 return msg
@@ -73,13 +76,17 @@ class BackendChain:
             b = self.backends[i]
             try:
                 out = fn(b)
-                if i != self.active:
-                    log.warning("falling back from %s to %s", self.backends[self.active].name, b.name)
-                    self.active = i
+                if i != self.active:         # the primary timed out (not demoted): this one answered for THIS call only
+                    log.warning("%s answered for this call instead of %s", b.name, self.backends[self.active].name)
                 return out
+            except BackendTimeout as e:      # slow once is not broken: use the next backend for THIS call, keep the primary
+                log.warning("backend %s timed out: %s", b.name, e)
+                last = e
             except BackendError as e:
                 log.warning("backend %s failed: %s", b.name, e)
                 last = e
+                if i == self.active and i + 1 < len(self.backends):
+                    self.active = i + 1      # a hard failure demotes it
         raise BackendError(f"all NLU backends failed; last error: {last}")
 
     def classify(self, state: State, car: str | None, text: str) -> IntentResult:

@@ -26,3 +26,12 @@ def inventory(db, cfg):
 @pytest.fixture
 def bookings(db, inventory):
     return SqliteBookingRepo(db)
+
+
+@pytest.fixture
+def demo_inventory(db):
+    from dealer_core.repos.demo_data import seed_demo_inventory
+
+    repo = SqliteInventoryRepo(db)
+    seed_demo_inventory(repo)
+    return repo

@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "rapidfuzz>=3.9",          # fuzzy make/model matching against the inventory vocabulary (MIT)
     "tzdata>=2024.1; sys_platform == 'win32'",   # Windows has no system tz database for zoneinfo (Apache-2.0)
 ]
 

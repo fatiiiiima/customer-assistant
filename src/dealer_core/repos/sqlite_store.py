@@ -118,6 +118,9 @@ class SqliteInventoryRepo:
         if f.body_type:
             where.append("body_type = ?")
             args.append(f.body_type.value)
+        if f.exclude_stock_ids:
+            where.append("stock_id NOT IN (%s)" % ",".join("?" * len(f.exclude_stock_ids)))
+            args.extend(f.exclude_stock_ids)
         return (" WHERE " + " AND ".join(where)) if where else "", args
 
     def search(self, filters: SearchFilters, limit: int = 10) -> list[Car]:

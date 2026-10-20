@@ -9,7 +9,7 @@ from typing import Iterator
 from ..config import BackendCfg, LlmCfg
 from ..dialogue.states import Intent, State
 from . import prompts
-from .backend import BackendError, BackendHealth, IntentResult, NluBackend, resolve_prompt_mode
+from .backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
 
 _SENTENCE_END = re.compile(r"[.!?]\s*$")
 
@@ -49,6 +49,8 @@ class OllamaBackend(NluBackend):
                 raise BackendError(str(e)) from e
             return self.client.chat(**kwargs)
         except Exception as e:  # connection error, timeout
+            if "timed out" in str(e).lower() or type(e).__name__.endswith("Timeout"):
+                raise BackendTimeout(f"{self.name} exceeded {self.cfg.timeout_s}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
 
     def _json(self, state: State, car: str | None, text: str, schema: dict, max_tokens: int) -> tuple[dict, str, float]:
@@ -59,6 +61,12 @@ class OllamaBackend(NluBackend):
             return json.loads(raw), raw, (time.perf_counter() - t0) * 1000
         except json.JSONDecodeError as e:
             raise BackendError(f"malformed JSON from {self.name}: {raw!r}") from e
+
+    def warm_up(self) -> None:
+        """Load the model into memory (a cold 4B load takes ~10 s) with a generous timeout, then keep it warm."""
+        warm = self._ollama.Client(host=self.cfg.host, timeout=max(60.0, self.cfg.timeout_s * 5))
+        warm.chat(model=self.cfg.model, messages=[{"role": "user", "content": "hi"}], think=False, keep_alive=self.cfg.keep_alive,
+                  options={"num_predict": 1, "num_ctx": self.cfg.num_ctx})
 
     # -- interface ---------------------------------------------------------------------------
     def classify(self, state: State, car: str | None, text: str) -> IntentResult:
