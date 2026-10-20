@@ -1,0 +1,63 @@
+# One term per line; used for STT biasing (hotwords / prompt). Extend freely.
+# Makes
+Toyota
+Nissan
+Honda
+Mitsubishi
+Hyundai
+Kia
+Mazda
+Lexus
+Infiniti
+Mercedes-Benz
+BMW
+Audi
+Porsche
+Land Rover
+Range Rover
+Ford
+Chevrolet
+Jeep
+GMC
+Tesla
+# Models
+Land Cruiser
+Camry
+Corolla
+Patrol
+Pajero
+Sunny
+Accord
+Civic
+Sportage
+Sorento
+Elantra
+Tucson
+Santa Fe
+Wrangler
+Defender
+Cayenne
+Mustang
+Yukon
+# Places
+Dubai
+Sharjah
+Abu Dhabi
+Al Quoz
+Deira
+Sheikh Zayed Road
+Al Barsha
+Jumeirah
+Ajman
+Ras Al Khaimah
+# Common names
+Mohammed
+Ahmed
+Abdullah
+Khalid
+Fatima
+Aisha
+Omar
+Yousef
+Hassan
+Rashid

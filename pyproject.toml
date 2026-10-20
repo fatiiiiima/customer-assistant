@@ -1,0 +1,57 @@
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Fully local voice agent for a used-car dealership (UAE). CPU-only."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+# Install only what the current phase needs:  uv sync --extra <name>
+[project.optional-dependencies]
+# Phase 0b latency/accuracy spike. Versions are pinned after the spike picks winners.
+spike = [
+    "numpy",
+    "psutil",
+    "soundfile",
+    "jiwer",              # word error rate
+    "ollama",             # client for the local Ollama server (MIT)
+    "faster-whisper",     # MIT
+    "sherpa-onnx",        # Apache-2.0
+    "useful-moonshine-onnx",  # MIT (English models)
+    "kokoro-onnx",        # MIT; model Apache-2.0. See docs/LICENSES.md for G2P caveats.
+]
+# OpenVINO is benchmarked, not assumed to help (Phase 0b).
+openvino = [
+    "openvino",
+    "openvino-genai",
+]
+# Phase 2
+rag = [
+    "sentence-transformers",
+    "sqlite-vec",
+]
+# Phase 3: Pipecat extras are confirmed against current docs before use.
+voice = [
+    "pipecat-ai",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dealer_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

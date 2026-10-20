@@ -1,0 +1,99 @@
+# Default configuration. Override with VA__SECTION__KEY env vars or --config <file>.
+# Everything marked PLACEHOLDER / TO CONFIRM WITH SALES is invented for development.
+
+app:
+  log_dir: logs
+  model_dir: models
+  currency: AED
+  distance_unit: km
+
+# ---- Observability -------------------------------------------------------
+latency_log:
+  console: true
+  jsonl_path: logs/latency.jsonl
+  # PRIVACY: off by default. Logs never contain transcripts or phone numbers unless true.
+  include_transcripts: false
+
+# ---- Speech-to-text (swappable) -----------------------------------------
+stt:
+  backend: sherpa_onnx          # sherpa_onnx | moonshine | faster_whisper (chosen in Phase 0b)
+  model: null                   # filled in after the spike
+  language: en
+  hotwords_file: config/hotwords.txt   # car makes/models, Arabic names and places
+
+# ---- LLM (swappable) -----------------------------------------------------
+llm:
+  provider: local               # local | cloud   (cloud is OFF by default)
+  local:
+    backend: ollama             # ollama | llama_cpp
+    host: http://127.0.0.1:11434
+    model: qwen3:1.7b           # provisional; Phase 0b picks on speed AND accuracy
+    think: false                # Qwen3 thinking mode must stay disabled
+    temperature: 0.0
+    num_ctx: 2048
+    num_thread: null            # null = auto; tuned in the spike
+    keep_alive: 30m             # keep the model and its KV prefix warm
+    max_nlu_tokens: 64
+    max_freeform_tokens: 60
+  cloud:                        # STUB. Requires VOICE_AGENT_ALLOW_CLOUD=1. Synthetic data only.
+    model_env: GEMINI_MODEL     # name read from env, never hard-coded
+    api_key_env: GEMINI_API_KEY
+
+# ---- Text-to-speech (swappable) -----------------------------------------
+tts:
+  backend: piper                # piper | kokoro (chosen in Phase 0b)
+  voice: null
+  cache_dir: models/tts_cache   # pre-rendered fixed phrases
+
+# ---- Turn handling -------------------------------------------------------
+turn:
+  vad: silero
+  turn_detector: pipecat_smart_turn   # confirmed against current Pipecat docs in Phase 3
+  fallback_silence_ms: 700
+
+# ---- Branches (2 FAKE branches; the car determines the branch) -----------
+# Working days/hours are per-branch config. Weekdays: mon..sun.
+branches:
+  - id: DXB-01
+    name: Fake Showroom Dubai
+    timezone: Asia/Dubai
+    working_hours:
+      mon: ["09:00", "19:00"]
+      tue: ["09:00", "19:00"]
+      wed: ["09:00", "19:00"]
+      thu: ["09:00", "19:00"]
+      fri: ["14:00", "19:00"]
+      sat: ["09:00", "19:00"]
+  - id: SHJ-01
+    name: Fake Showroom Sharjah
+    timezone: Asia/Dubai
+    working_hours:
+      mon: ["10:00", "18:00"]
+      tue: ["10:00", "18:00"]
+      wed: ["10:00", "18:00"]
+      thu: ["10:00", "18:00"]
+      sat: ["10:00", "16:00"]
+
+# ---- Test drives (TO CONFIRM WITH SALES: all values are placeholders) ----
+test_drive:
+  slot_minutes: 30
+  licence_required: true          # mention at booking
+  collect_fields: [name, phone]   # name and phone only
+
+# ---- Negotiation (PLACEHOLDERS: TO BE SET BY THE BUSINESS) ---------------
+# floor_price lives on each car; tiers are only the default when a car has none.
+# The LLM never sees these numbers and never decides a price.
+negotiation:
+  max_rounds: 3
+  counter_steps: 3                # move toward the floor in steps, never straight to it
+  tiers:                          # by list price in AED, matched in order
+    - { up_to: 50000,  max_discount_pct: 5.0, auto_accept_pct: 2.0 }
+    - { up_to: 150000, max_discount_pct: 5.0, auto_accept_pct: 2.0 }
+    - { up_to: null,   max_discount_pct: 4.0, auto_accept_pct: 1.5 }
+  # Offers above auto_accept but within max_discount need manager approval.
+  # Offers below the floor always escalate to a human.
+
+# ---- Messaging channel (mocked) ------------------------------------------
+send_details:
+  default_channel: whatsapp
+  mock: true
