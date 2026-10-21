@@ -310,3 +310,11 @@ def test_a_bare_make_that_does_not_fit_the_old_filters_switches_topic(call):
     assert "Camry" in r.reply and "SUV" not in r.reply and c.s.filters == {"make": "toyota", "model": "camry"}
     r = c.say("do you have a land cruiser")                         # a full request starts fresh as before
     assert "Land Cruiser" in r.reply
+
+
+def test_user_transcript_a_red_car_then_nissan_keeps_the_red(call):
+    c = call({})                                                    # no model needed: both lines are answered by rules
+    r = c.say("a red car")
+    assert r.debug.intent == "search_cars" and r.debug.via.startswith("rules") and "Altima" in r.reply and "Mustang" in r.reply
+    r = c.say("nissan")
+    assert "Altima" in r.reply and "Patrol" not in r.reply and "Mustang" not in r.reply

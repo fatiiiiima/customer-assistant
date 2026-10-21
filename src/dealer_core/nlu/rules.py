@@ -118,7 +118,7 @@ class RuleEngine:
             return ok(Intent.ASK_CAR_INFO, "about-this-car")       # "what colour is the camry, is it red": a question about THIS car
         vocab = self.vocabulary()
         vehicle = ex.find_vehicle(toks, vocab)
-        searchish = bool(vehicle) or any(t in ex.BODY for t in toks) or bool(FIND_CUE.search(norm) and any(t in ex.COLORS for t in toks))
+        searchish = bool(vehicle) or any(t in ex.BODY for t in toks) or bool(any(t in ex.COLORS for t in toks) and (FIND_CUE.search(norm) or any(t in ("car", "cars") for t in toks)))
         money = [v for v, i, j in spans if v.isdigit() and int(v) >= 1000 and not v.startswith("0")
                  and not (len(v) == 4 and 1990 <= int(v) <= 2030) and (toks[j] if j < len(toks) else "") not in ex.KM_TOKENS]
         if money and not searchish and (state is State.NEGOTIATING or (state is State.ANSWERING and OFFER_CUE.search(norm))):
