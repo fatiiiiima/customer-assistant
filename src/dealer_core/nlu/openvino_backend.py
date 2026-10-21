@@ -106,16 +106,16 @@ class OpenVinoBackend(NluBackend):
         obj, raw, ms = self._run("intent", state, car, text)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
-    def lead_in(self, system: str, user: str) -> str:
+    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
         from ..dialogue.leadin import LEAD_TIMEOUT_S
 
         self._ensure_loaded()
         cfg = self._ov.GenerationConfig()
-        cfg.do_sample, cfg.max_new_tokens = False, 36
+        cfg.do_sample, cfg.max_new_tokens = False, max_tokens
         prompt = self._prompt(system, user)
         fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
         try:
-            return fut.result(timeout=LEAD_TIMEOUT_S)
+            return fut.result(timeout=LEAD_TIMEOUT_S * (2 if max_tokens > 36 else 1))
         except FutureTimeout as e:
             raise BackendTimeout(f"{self.name} lead-in exceeded {LEAD_TIMEOUT_S}s") from e
 

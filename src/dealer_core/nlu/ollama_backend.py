@@ -76,8 +76,8 @@ class OllamaBackend(NluBackend):
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._json(state, car, text, prompts.full_schema(state), self.cfg.max_json_tokens)[0]
 
-    def lead_in(self, system: str, user: str) -> str:
-        return self._chat(system, user, None, 36).message.content or ""
+    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
+        return self._chat(system, user, None, max_tokens).message.content or ""
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         system = prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences)

@@ -27,6 +27,7 @@ from ..tools.phones import speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 from . import templates as T
+from .draft import DraftWriter
 from .leadin import LeadInWriter
 from .phrasebook import Phrasebook
 from . import voice_rules
@@ -48,6 +49,7 @@ class TurnDebug:
     note: str = ""
     lead_in: str = ""                  # the model-written lead-in sentence, when a hybrid reply used one
     lead_ms: float = 0.0
+    draft: str = ""                    # EXPERIMENT: the model-written full reply that replaced the template (draft mode)
 
 
 @dataclass
@@ -59,8 +61,8 @@ class TurnResult:
 
 class DialogueEngine:
     def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7,
-                 lead_writer: LeadInWriter | None = None) -> None:
-        self.svc, self.nlu, self.writer = svc, nlu, lead_writer
+                 lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None) -> None:
+        self.svc, self.nlu, self.writer, self.drafter = svc, nlu, lead_writer, drafter
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
 
     def _say(self, s: Session, sid: str, **values: object) -> str:
@@ -96,6 +98,14 @@ class DialogueEngine:
 
     def _with_lead_in(self, s: Session, intent: str, text: str, dbg: TurnDebug, reply: str) -> str:
         """Hybrid mode: put a verified model-written sentence in front of a low-risk templated reply (see leadin.py)."""
+        if self.drafter is not None and not s.ended and intent in self.drafter.intents:
+            out = self.drafter.write(text, reply)
+            dbg.lead_ms = out.ms
+            if out.text:
+                dbg.draft = out.text
+                return out.text
+            dbg.note = (dbg.note + "; " if dbg.note else "") + f"draft dropped ({out.why_not})"
+            return reply
         if self.writer is None or s.ended or intent not in self.writer.intents:
             return reply
         out = self.writer.write(text, reply, s.last_lead)
@@ -108,7 +118,7 @@ class DialogueEngine:
 
     def _finish(self, s: Session, dbg: TurnDebug, reply: str, t0: float) -> TurnResult:
         dbg.state_after = s.state.value
-        dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (1 if dbg.lead_in else 0))
+        dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (1 if (dbg.lead_in or dbg.draft) else 0))
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         return TurnResult(reply, dbg, s.ended)
 

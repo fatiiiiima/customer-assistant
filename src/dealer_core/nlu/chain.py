@@ -95,8 +95,8 @@ class BackendChain:
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._call(lambda b: b.complete_json(state, car, text))  # type: ignore[return-value]
 
-    def lead_in(self, system: str, user: str) -> str:
-        return self.backends[self.active].lead_in(system, user)      # no fallback: a missing lead-in just means the template alone
+    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
+        return self.backends[self.active].lead_in(system, user, max_tokens)      # no fallback: a missing lead-in just means the template alone
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         return self.backends[self.active].answer(question, context, max_sentences)

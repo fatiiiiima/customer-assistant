@@ -49,7 +49,7 @@ class NluBackend(ABC):
     def warm_up(self) -> None:
         """Optional: pre-compile grammars / load weights so the first real caller does not pay the cold-start cost."""
 
-    def lead_in(self, system: str, user: str) -> str:
+    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
         """Free text, a few words: the conversational lead-in for hybrid replies (verified by the caller before use)."""
         raise BackendError(f"{self.name} cannot write lead-ins")
 

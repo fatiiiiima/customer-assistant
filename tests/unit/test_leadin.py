@@ -103,3 +103,9 @@ def test_engine_hybrid_adds_the_lead_in_only_for_eligible_intents_and_falls_back
 @pytest.mark.parametrize("lead", ["Got it, a pickup you say—sure thing.", "Sure – happy to help.", "Sure (happy to help).", "Sure, happy to help \U0001F600."])
 def test_odd_characters_are_rejected(lead):
     assert any("characters" in p for p in verify(lead, USER, CORE))
+
+
+def test_a_lead_in_that_just_repeats_the_answer_is_rejected():
+    core = "Yes, it's white. Anything else you'd like to know?"
+    assert any("repeats" in p for p in verify("Yes, it's white.", "is it white", core))
+    assert verify("Good question.", "is it white", core) == []

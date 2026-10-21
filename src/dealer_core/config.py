@@ -152,6 +152,7 @@ class SendDetailsCfg(_Strict):
 class DialogueCfg(_Strict):
     variants: bool = False                       # true: use human-approved wording variants (config/phrase_variants.yaml)
     lead_in: bool = False                        # hybrid replies: a verified model-written sentence before low-risk templated answers
+    draft: bool = False                          # EXPERIMENT: the model rewrites the whole low-risk reply (verified); overrides lead_in
     lead_in_intents: list[str] = Field(default_factory=lambda: ["search_cars", "ask_car_info", "out_of_scope"])
     variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
 

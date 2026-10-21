@@ -86,6 +86,9 @@ def verify(lead: str, user_text: str, core: str, previous: str = "") -> list[str
     unknown = [w for w in ws if w not in known and w.replace("'s", "") not in known]
     if unknown:
         problems.append(f"words outside the allowed set: {', '.join(unknown[:4])}")
+    core_sentences = {re.sub(r"[^a-z' ]", "", x.lower()).strip() for x in re.split(r"(?<=[.!?])\s+", core)}
+    if re.sub(r"[^a-z' ]", "", lead.lower()).strip() in core_sentences:
+        problems.append("repeats a sentence of the reply")
     if previous and lead.lower() == previous.lower():
         problems.append("same as the previous lead-in")
     return problems
