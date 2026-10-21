@@ -77,7 +77,19 @@ async def run(a: argparse.Namespace) -> None:
 
     from ..voice.status import StatusLine
 
-    probes = {"vad": StatusLine({"vad", "bot"}), "stt": StatusLine({"stt"})}
+    from ..voice.status import TurnClock
+
+    def timing(total: float, parts: dict[str, float]) -> None:
+        detail = ", ".join(f"{name} {secs:.2f} s" for name, secs in parts.items())
+        if a.transcript or a.save_transcript:
+            _write_transcript("TIME ", f"{total:.1f} s from the end of your speech to the first sound ({detail})", a.transcript, transcript)
+        else:
+            print(f"  [first sound {total:.1f} s after you finished: {detail}]", flush=True)
+
+    stop_secs = a.stop_secs or cfg.voice.stop_secs
+    clock = TurnClock(stop_secs, timing)
+    probes = {"vad": StatusLine({"vad", "bot"}, clock=clock, stage="vad"), "stt": StatusLine({"stt"}, clock=clock, stage="stt"),
+              "brain": StatusLine(set(), clock=clock, stage="brain")}
     transcript = open(a.save_transcript, "a", encoding="utf-8") if a.save_transcript else None     # only if explicitly asked: the call is otherwise never written to disk
 
     def heard(text: str) -> None:

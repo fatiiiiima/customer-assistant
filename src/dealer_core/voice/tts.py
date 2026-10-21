@@ -34,6 +34,25 @@ def pronounce(text: str) -> str:
     return text
 
 
+def speech_chunks(text: str, max_words: int = 9) -> list[str]:
+    """Split a long sentence into clauses of about `max_words`, so the first sound does not wait for the whole sentence to be synthesized
+    (Piper starts speaking only when a piece is complete). Splits at commas first, then at " and ", otherwise leaves the sentence whole."""
+    words = text.split()
+    if len(words) <= max_words + 2:
+        return [text]
+    parts = re.split(r"(?<=,)\s+|\s+(?=and\b)", text)
+    chunks, cur = [], ""
+    for part in parts:
+        if cur and len((cur + " " + part).split()) > max_words:
+            chunks.append(cur)
+            cur = part
+        else:
+            cur = f"{cur} {part}".strip()
+    if cur:
+        chunks.append(cur)
+    return chunks if len(chunks) > 1 else [text]
+
+
 def voice_dir(models: Path, voice: str) -> Path:
     d = models / VOICES.get(voice, voice)
     nested = d / d.name                                  # the downloads unpack to <name>/<name>/
@@ -72,7 +91,8 @@ class PiperSherpa:
 
         def run():
             try:
-                self.tts.generate(pronounce(text), sid=self.speaker, speed=speed, callback=cb)
+                for piece in speech_chunks(text):
+                    self.tts.generate(pronounce(piece), sid=self.speaker, speed=speed, callback=cb)
             finally:
                 q.put(None)
 

@@ -93,7 +93,7 @@ Checked from each voice's MODEL_CARD (rhasspy/piper-voices):
 | en_US **lessac** | Blizzard 2013 licence: research only; excludes building speech products/services | **NO (BLOCKER)** |
 | en_US **ryan** | CC BY-NC-SA 4.0 | **NO** |
 | en_US **hfc_male / hfc_female** | CC BY-NC-SA 4.0 | **NO** |
-| en_US amy | "See URL" (Mimic3) | Unclear: do not use until read |
+| en_US amy | "See URL" (Mimic3) | **OPEN DECISION.** In use for the INTERNAL PROTOTYPE on the owner's request (best pronunciation). Licence still UNCONFIRMED: the model card says "See URL" (github.com/MycroftAI/mimic3-voices), and that repo has no amy entry and no per-voice licence column. Not shippable until the dataset licence is confirmed; switch `tts.voice` (libritts_r speaker 1 is CC BY 4.0, joe is CC0) |
 | en_US **libritts_r** | CC BY 4.0 | Yes, with attribution |
 | en_US **joe**, **kathleen** | CC0 | Yes |
 | en_US **ljspeech**, **kristin**, **norman**, **john**, **bryce** | public domain | Yes |

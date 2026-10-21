@@ -15,7 +15,7 @@ microphone -> [half-duplex gate] -> Silero VAD -> Whisper (OpenVINO, CPU) -> Dea
 | VAD | Silero (bundled in Pipecat), `stop_secs` 0.3 | local, fast; Smart Turn v3 (also bundled) is NOT wired in yet |
 | STT | OpenVINO Whisper **base** int8 on the **CPU** (`voice.stt_model`; tiny is ~0.1 s faster but mishears more), car-term prompt | Phase 0b winner; never on the iGPU (it would fight the language model) |
 | Brain | `DialogueEngine.handle_stream` | same engine as the text chat |
-| TTS | Piper **libritts_r, speaker 1** (owner choice; `tts.voice` / `tts.speaker` in config) fp32 via sherpa-onnx, CPU | Phase 0b: fastest first audio (40-80 ms here). **CC BY 4.0: attribution required** (LibriTTS-R). espeak-ng phoneme data is GPL-3: internal prototype only |
+| TTS | Piper **amy** (owner choice: best pronunciation of the car names; `tts.voice` / `tts.speaker`), the installed build is low-quality int8 (16 kHz) via sherpa-onnx, CPU | **Licence unconfirmed ("See URL", Mimic3): internal prototype only.** Slower than the fp32 voices (about 0.1 real-time factor; first audio 100-500 ms depending on clause length, so long sentences are spoken in clauses). Fast fallbacks: libritts_r speaker 1 (CC BY 4.0), joe (CC0). espeak-ng data is GPL-3: internal prototype only |
 | Microphone / speaker | Pipecat `LocalAudioTransport` (PyAudio) | |
 
 ## Run it
@@ -65,3 +65,8 @@ unless you pass `--show-text` (agent side only; nothing the caller says is ever 
 * Spoken forms: `AGMC` is spelled "eigh gee em see" for the voice (Piper read it as a word, "aagmic"). Chosen by listening-test: a listener model heard "A G M C"
   correctly for 3 different speakers with this spelling, but "I G M C" with "ay". Also `GCC` and `SUV(s)`. The transcript keeps the written form (`voice/tts.py: PRONUNCIATIONS`).
 * Interjections ("Ah", "Oh", "Ooh", "Hmm", "Ha", "Wow") at the start of a sentence are removed in code, and the prompts no longer teach them.
+
+## Timing in the transcript
+With `--transcript` the call shows a `TIME` line per turn, e.g. `TIME : 1.4 s from the end of your speech to the first sound (waiting for you to finish 0.30 s,
+speech recognition 0.21 s, reply 0.66 s, voice 0.18 s)`. Without `--transcript`, `--debug` prints the same as `[first sound 1.4 s after you finished: ...]`.
+"End of your speech" is the moment the voice detector stopped plus its 0.3 s of silence, so the figure is what you would feel as the wait.
