@@ -12,6 +12,7 @@ from typing import Callable
 
 import yaml
 
+from ..dialogue.focus import FIND_CUE, about_the_car_in_focus  # noqa: F401
 from ..dialogue.states import STATE_CHANGING, STATE_SPEC, Intent, State
 from . import extractors as ex
 from .datetime_parse import parse_when
@@ -57,7 +58,6 @@ OFFER_CUE = re.compile(r"\b(?:offer|pay|give you|take|do it for|do|how about|wha
 SEARCH_CUE = re.compile(r"\b(?:looking for|do you have|have any|any|show me|i want|i need|i am after|after a|interested in|budget|"
                         r"something|cheap|find me|searching)\b")
 PRICE_CUE = re.compile(r"\b(?:under|below|less than|up to|max|maximum|budget|around|about|within|not more than|upto)\b")
-FIND_CUE = re.compile(r"\b(?:do you have|have you got|got any|i want|i need|looking for|show me|do you sell|any other|something else)\b")
 WANTS_ANOTHER = re.compile(r"\b(?:(?:another|a different|different|other|any other) (?:car|cars|one|ones|option|options|model|models|vehicle)|"
                            r"something (?:else|different)|show me (?:something|others|other)|i want another|looking for another)\b")
 ORDINAL_RE =re.compile(r"\b(?:first|1st|second|2nd|third|3rd|last) one\b")
@@ -114,7 +114,7 @@ class RuleEngine:
             return ok(Intent.GIVE_SLOT, "when")
         if state is State.CONTACT and ex.contact(text).phone:
             return ok(Intent.GIVE_CONTACT, "phone")
-        if car and not FIND_CUE.search(norm) and (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS):
+        if about_the_car_in_focus(text, bool(car)):
             return ok(Intent.ASK_CAR_INFO, "about-this-car")       # "what colour is the camry, is it red": a question about THIS car
         vocab = self.vocabulary()
         vehicle = ex.find_vehicle(toks, vocab)

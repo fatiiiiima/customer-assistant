@@ -66,3 +66,16 @@ voice with Pipecat + STT/TTS (Phase 3), gate measurement on your labelled set (o
 
 ## 6. Licences / open decisions
 Everything is MIT/Apache/BSD except: espeak-ng (GPL-3, internal prototype only, open decision in `docs/LICENSES.md`). Piper voice `joe` is CC0.
+
+## 7. Conversation focus (added after the "it does not understand what I meant" bugs)
+`dialogue/focus.py` is the single place that decides what a caller's words mean given what is being searched. It is a pure function
+`decide(Ctx, Cues, fits) -> Decision` with named operations: **fresh** (a new request), **refine** (the old request plus this),
+**switch** (does not fit the old request: new subject), **others / ask_instead** ("another car"), **list_all** ("any budget", "just show me"),
+**cannot_filter**, **ask_which** (pointing at a car not on screen), **replay** (follow-up to "shall I look for a red one?"), **ask_what**.
+`about_the_car_in_focus()` separates a question about THE car on screen ("is it red") from a search ("do you have it in red"); the rule
+engine and the dialogue engine both use it.
+* The decision is stored (`Session.last_focus`) and printed in the debug trace as `reading :`; `Session.focus` is a one-line description of what
+  the call is about (`2 cars just read out; looking for: color=red`) and prints as `focus :`.
+* `tests/unit/test_focus.py` is a table: (current request, what the caller says) -> (operation, request afterwards), one row per past
+  misunderstanding. A new misunderstanding = a new row plus, if needed, a change in `decide()`, not another special case in the engine.
+* Not covered yet: pronoun resolution beyond "it/this/that/one", and corrections ("I said red, not white").

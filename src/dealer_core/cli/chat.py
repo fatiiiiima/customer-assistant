@@ -27,6 +27,10 @@ def format_debug(d: TurnDebug) -> str:
              f"  | policy  : {d.decision or '-'}"]
     if d.draft:
         lines.append(f"  | draft   : model-written full reply, verified against the facts ({d.lead_ms:.0f} ms)")
+    if d.focus:
+        lines.append(f"  | reading : {d.focus}")
+    if d.about:
+        lines.append(f"  | focus   : {d.about}")
     if d.lead_in:
         lines.append(f"  | lead-in : \"{d.lead_in}\"   (model-written, verified; {d.lead_ms:.0f} ms)")
     if d.note:

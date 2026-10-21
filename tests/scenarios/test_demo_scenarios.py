@@ -318,3 +318,13 @@ def test_user_transcript_a_red_car_then_nissan_keeps_the_red(call):
     assert r.debug.intent == "search_cars" and r.debug.via.startswith("rules") and "Altima" in r.reply and "Mustang" in r.reply
     r = c.say("nissan")
     assert "Altima" in r.reply and "Patrol" not in r.reply and "Mustang" not in r.reply
+
+
+def test_the_session_says_what_the_call_is_about_and_how_the_last_search_line_was_read(call):
+    c = call({})
+    r = c.say("a red car")
+    assert r.debug.focus.startswith("refine") and "2 cars just read out" in r.debug.about and "color=red" in r.debug.about
+    r = c.say("nissan")
+    assert r.debug.focus.startswith("refine") and "one car" in r.debug.about and "color=red, make=nissan" in r.debug.about
+    r = c.say("camry")                              # the colour is kept: it says a red Camry does not exist
+    assert r.debug.focus.startswith("refine") and "in red" in r.reply and c.s.last_focus == r.debug.focus

@@ -26,6 +26,7 @@ from ..tools.escalation import EscalationReason
 from ..tools.phones import speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
+from . import focus as F
 from . import templates as T
 from .draft import DraftWriter
 from .leadin import LeadInWriter
@@ -49,6 +50,8 @@ class TurnDebug:
     note: str = ""
     lead_in: str = ""                  # the model-written lead-in sentence, when a hybrid reply used one
     lead_ms: float = 0.0
+    about: str = ""                    # what the call is about after this turn (Session.focus)
+    focus: str = ""                    # how the caller's words were interpreted (focus.decide), for the trace
     draft: str = ""                    # EXPERIMENT: the model-written full reply that replaced the template (draft mode)
 
 
@@ -126,6 +129,7 @@ class DialogueEngine:
 
     def _finish(self, s: Session, dbg: TurnDebug, reply: str, t0: float) -> TurnResult:
         dbg.state_after = s.state.value
+        dbg.about = s.focus
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (1 if (dbg.lead_in or dbg.draft) else 0))
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         return TurnResult(reply, dbg, s.ended)
@@ -276,54 +280,32 @@ class DialogueEngine:
 
     # ------------------------------------------------------------------------------------------------ search
     def _search(self, s: Session, text: str, dbg: TurnDebug, force: bool = False) -> str:
-        vocab = self.svc.inventory.vocabulary()
-        new = ex.search_filters(text, vocab)
-        others = ex.wants_others(text)
-        if force:                                   # a "yes, look for one" follow-up: search the filters as they are
-            pass
-        elif ex.wants_listing(text) and s.filters and s.narrow_asks > 0:
-            s.narrow_asks = 2                       # the caller does not want more questions: read out the matches
-            new = {}
-        elif not new and not others and s.filters and ex.points_at_a_car(text):
-            return self._ask_which(s)                   # "tell me about the second one" with nothing on screen
-        elif not new and not others and s.filters:
+        """Interpret what the caller wants (focus.decide: one named operation, shown in the trace), then search and answer."""
+        new = ex.search_filters(text, self.svc.inventory.vocabulary())
+        cues = F.Cues(new=new, others=ex.wants_others(text), listing=ex.wants_listing(text), points_at_car=ex.points_at_a_car(text),
+                      bare=ex.is_bare_vehicle(text), refers_to_car=bool(set(ex.tokens_of(text)) & {"it", "this", "that", "one"}), force=force)
+        ctx = F.Ctx(spec=dict(s.filters), narrow_asks=s.narrow_asks, has_shown=bool(s.car or s.shown))
+        d = F.decide(ctx, cues, lambda spec: bool(self.svc.inventory.count(self._filters(spec, s.excluded))))
+        dbg.focus = s.last_focus = f"{d.op.value}: {d.reason}"
+        if d.op is F.Op.ASK_WHICH:
+            return self._ask_which(s)
+        if d.op is F.Op.CANNOT_FILTER:
             dbg.note = "search request with no filter I can apply: said so instead of repeating the last answer"
             return self._say(s, "cannot_filter")
-        # A named model, or a make said out of the blue, starts a fresh search ("do you have a Land Cruiser?"). A make said as the
-        # answer to a narrowing question ("Toyota please") refines the current one instead.
-        if others and not new and (s.car or s.shown):       # "I want another car instead": drop the car they were on, ask what they want
+        if d.mark_discussed:
             s.excluded |= ({s.car} if s.car else set()) | {c.stock_id for c in s.shown}
-            s.filters.pop("make", None)
-            s.filters.pop("model", None)
-            if not s.filters:
-                s.car, s.shown, s.state, s.narrow_asks = None, [], State.INTEREST, 0
-                return self._say(s, "ask_instead")
-        # "I want a red car" / "an SUV" with no make or model, said about nothing in particular, is a fresh request: the make, model
-        # and body type of the earlier search no longer apply. ("it", "this" or "that" would mean the car in focus.)
-        refers_to_car = bool(set(ex.tokens_of(text)) & {"it", "this", "that", "one"})
-        if (new.get("color") or new.get("body_type")) and not new.get("make") and not new.get("model") and s.narrow_asks == 0                 and not refers_to_car and not force:
-            for k in ("make", "model", "body_type"):
-                s.filters.pop(k, None)
-        bare = ex.is_bare_vehicle(text) and bool(s.filters) and not force
-        if bare and (new.get("make") or new.get("model")) and not new.get("color") and not new.get("body_type"):
-            # Just a make or model, said after a search ("nissan" after "a red car"): it refines what was asked, it does not start over.
-            base = dict(s.filters)
-            if new.get("make") and not new.get("model"):
-                base.pop("model", None)                     # the old model belonged to the old make
-            merged = {**base, **new}
-            if self.svc.inventory.count(self._filters(merged, s.excluded)) or merged.get("color"):
-                s.filters = merged
-            else:                                           # the two do not fit together (an SUV and a Camry): the caller switched topic
-                s.filters = dict(new)
-                s.excluded.clear()
-        elif new.get("model") or (new.get("make") and s.narrow_asks == 0):
-            s.filters = dict(new)
+        if d.op is F.Op.ASK_INSTEAD:
+            s.filters = d.spec
+            s.car, s.shown, s.state, s.narrow_asks = None, [], State.INTEREST, 0
+            return self._say(s, "ask_instead")
+        if d.stop_narrowing:
+            s.narrow_asks = 2                       # the caller does not want more questions: read out the matches
+        if d.reset_excluded:
             s.excluded.clear()
-        else:
-            s.filters.update(new)
-        if not s.filters and not others:
+        s.filters = d.spec
+        if d.op is F.Op.ASK_WHAT:
             return self._say(s, "ask_what_car")
-        if others:
+        if d.exclude_shown:
             s.excluded |= {c.stock_id for c in s.shown}
         f = SearchFilters(max_price=s.filters.get("max_price"), make=s.filters.get("make"), model=s.filters.get("model"),
                           body_type=s.filters.get("body_type"), color=s.filters.get("color"), year_min=s.filters.get("year_min"), max_km=s.filters.get("max_km"),

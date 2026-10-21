@@ -42,5 +42,24 @@ class Session:
     pending: Pending | None = None
     oos_streak: int = 0
     ended: bool = False
+    last_focus: str = ""                                     # how the last search utterance was interpreted (see focus.py)
     handoff: Handoff | None = None
     misheard: int = 0
+
+    @property
+    def focus(self) -> str:
+        """What the call is about right now, in one readable line (shown in the debug trace)."""
+        from .focus import describe
+
+        if self.state in (State.SLOT, State.CONTACT, State.CONFIRM):
+            what = "booking a test drive"
+        elif self.state is State.NEGOTIATING:
+            what = f"the price of car {self.car}"
+        elif self.car:
+            what = f"one car ({self.car})"
+        elif self.shown:
+            what = f"{len(self.shown)} cars just read out"
+        else:
+            what = "no car yet"
+        return f"{what}; looking for: {describe(self.filters)}" + (f"; already shown: {len(self.excluded)}" if self.excluded else "")
+
