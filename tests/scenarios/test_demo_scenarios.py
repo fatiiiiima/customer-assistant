@@ -328,3 +328,45 @@ def test_the_session_says_what_the_call_is_about_and_how_the_last_search_line_wa
     assert r.debug.focus.startswith("refine") and "one car" in r.debug.about and "color=red, make=nissan" in r.debug.about
     r = c.say("camry")                              # the colour is kept: it says a red Camry does not exist
     assert r.debug.focus.startswith("refine") and "in red" in r.reply and c.s.last_focus == r.debug.focus
+
+
+def test_how_much_is_it_gives_the_asking_price_and_does_not_start_haggling(call):
+    c = call({})
+    c.say("do you have a toyota camry")
+    r = c.say("how much is it")
+    assert r.debug.intent == "ask_car_info" and "78,500" in r.reply and c.s.state.value == "answering" and not r.debug.decision
+
+
+def test_a_booking_request_that_names_a_day_goes_straight_to_that_day(call):
+    c = call({"ok can i come see it saturday afternoon": "book_test_drive"})
+    c.say("do you have a toyota camry")
+    r = c.say("ok can i come see it saturday afternoon")
+    assert "Saturday" in r.reply and "today" not in r.reply and c.s.state.value == "slot"
+
+
+def test_yes_to_hear_more_or_book_gives_the_details_then_offers_the_booking(call):
+    c = call({"yes": "confirm_yes"})
+    r = c.say("do you have a toyota camry")                          # "...Would you like to hear more, or book a test drive?"
+    r = c.say("yes")
+    assert r.reply.startswith("It's white, GCC spec") and "Dubai Showroom" in r.reply and "58,000" not in r.reply     # new information only
+    assert r.reply.endswith("Would you like to book a test drive?")
+    assert c.s.pending is not None and c.s.pending.kind == "offer_booking"
+
+
+def test_a_price_question_with_no_bargaining_states_the_price_even_if_the_model_says_lowest_price(call):
+    c = call({"ok and the price?": "ask_lowest_price", "what is the price": "ask_lowest_price"})
+    c.say("do you have a toyota camry")
+    for q in ("ok and the price?", "what is the price"):
+        r = c.say(q)
+        assert "78,500" in r.reply and not r.debug.decision and c.s.state.value == "answering", (q, r.reply)
+    c2 = call({"what's your best price": "ask_lowest_price"})
+    c2.say("do you have a toyota camry")
+    assert "subject to confirmation" in c2.say("what's your best price").reply          # real bargaining still negotiates
+
+
+def test_a_bare_time_after_a_day_was_discussed_means_that_day(call):
+    c = call({"ok can i come see it saturday afternoon": "book_test_drive", "4 pm is good": "give_slot"})
+    c.say("do you have a toyota camry")
+    c.say("ok can i come see it saturday afternoon")
+    r = c.say("4 pm is good")
+    assert "Saturday" in r.reply and "4:00 PM" in r.reply and "Which day" not in r.reply

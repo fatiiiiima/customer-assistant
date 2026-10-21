@@ -53,9 +53,9 @@ class OllamaBackend(NluBackend):
                 raise BackendTimeout(f"{self.name} exceeded {self.cfg.timeout_s}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
 
-    def _json(self, state: State, car: str | None, text: str, schema: dict, max_tokens: int) -> tuple[dict, str, float]:
+    def _json(self, state: State, car: str | None, text: str, schema: dict, max_tokens: int, last_agent: str = "") -> tuple[dict, str, float]:
         t0 = time.perf_counter()
-        r = self._chat(prompts.system_prompt(state, self.mode), prompts.user_message(state, car, text), schema, max_tokens)
+        r = self._chat(prompts.system_prompt(state, self.mode), prompts.user_message(state, car, text, last_agent), schema, max_tokens)
         raw = r.message.content or ""
         try:
             return json.loads(raw), raw, (time.perf_counter() - t0) * 1000
@@ -69,8 +69,8 @@ class OllamaBackend(NluBackend):
                   options={"num_predict": 1, "num_ctx": self.cfg.num_ctx})
 
     # -- interface ---------------------------------------------------------------------------
-    def classify(self, state: State, car: str | None, text: str) -> IntentResult:
-        obj, raw, ms = self._json(state, car, text, prompts.intent_only_schema(state), self.cfg.max_intent_tokens)
+    def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult:
+        obj, raw, ms = self._json(state, car, text, prompts.intent_only_schema(state), self.cfg.max_intent_tokens, last_agent)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
     def complete_json(self, state: State, car: str | None, text: str) -> dict:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from ..models import CarView
@@ -33,6 +33,7 @@ class Session:
     last_variant: dict[str, int] = field(default_factory=dict)
     negotiation: dict[str, NegotiationState] = field(default_factory=dict)
     offered_slots: list[datetime] = field(default_factory=list)
+    slot_day: date | None = None                             # the day being discussed ("Saturday afternoon"), so a bare time means that day
     draft_slot: datetime | None = None
     draft_name: str | None = None
     draft_phone: str | None = None
@@ -42,9 +43,18 @@ class Session:
     pending: Pending | None = None
     oos_streak: int = 0
     ended: bool = False
+    history: list[tuple[str, str]] = field(default_factory=list)      # ("customer" | "agent", what was said), this call only, in memory
     last_focus: str = ""                                     # how the last search utterance was interpreted (see focus.py)
     handoff: Handoff | None = None
     misheard: int = 0
+
+    def remember(self, who: str, text: str) -> None:
+        """Keep the conversation so far (this call only; never written to a log). The reply writer and the intent call read it."""
+        self.history.append((who, text))
+        del self.history[:-16]
+
+    def last_agent(self) -> str:
+        return next((t for w, t in reversed(self.history) if w == "agent"), "")
 
     @property
     def focus(self) -> str:

@@ -18,7 +18,7 @@ def sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.?!])\s+", text.strip()) if s]
 
 
-def check(reply: str, max_cars: int = MAX_CARS, max_sentences: int = MAX_SENTENCES) -> list[str]:
+def check(reply: str, max_cars: int = MAX_CARS, max_sentences: int = MAX_SENTENCES, max_words: int = MAX_WORDS) -> list[str]:
     """Violations of the voice rules (empty list = fine)."""
     out: list[str] = []
     n = len(sentences(reply))
@@ -26,8 +26,8 @@ def check(reply: str, max_cars: int = MAX_CARS, max_sentences: int = MAX_SENTENC
         out.append("empty reply")
     if n > max_sentences:
         out.append(f"{n} sentences (max {max_sentences})")
-    if len(reply.split()) > MAX_WORDS:
-        out.append(f"{len(reply.split())} words (max {MAX_WORDS})")
+    if len(reply.split()) > max_words:
+        out.append(f"{len(reply.split())} words (max {max_words})")
     if _MARKDOWN.search(reply):
         out.append("markdown or bullets")
     if _URL.search(reply):

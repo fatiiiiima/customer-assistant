@@ -21,7 +21,7 @@ _ARABIC = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿ]")
 class IntentClassifier(Protocol):
     name: str
 
-    def classify(self, state: State, car: str | None, text: str) -> IntentResult: ...
+    def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult: ...
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class NluPipeline:
     def __init__(self, classifier: IntentClassifier | None, rules: RuleEngine) -> None:
         self.classifier, self.rules = classifier, rules
 
-    def understand(self, state: State, car: str | None, text: str) -> Understanding:
+    def understand(self, state: State, car: str | None, text: str, last_agent: str = "") -> Understanding:
         t0 = time.perf_counter()
         if _ARABIC.search(text):               # English only for now: the dialogue engine says so and offers a human
             return Understanding(Intent.OUT_OF_SCOPE, "language", language="ar", ms=(time.perf_counter() - t0) * 1000)
@@ -48,7 +48,7 @@ class NluPipeline:
             return Understanding(hit.intent, "rules", rule=hit.rule, ms=(time.perf_counter() - t0) * 1000)
         if self.classifier is None:
             raise RuntimeError("no LLM backend configured and the rules declined this utterance")
-        res = self.classifier.classify(state, car, text)       # BackendError propagates: the engine hands off to a human
+        res = self.classifier.classify(state, car, text, last_agent)       # BackendError propagates: the engine hands off to a human
         intent, why = repair(res.intent, state, text)
         return Understanding(intent, "llm", backend=res.backend, ms=(time.perf_counter() - t0) * 1000,
                              repaired=f"{res.intent.value} -> {intent.value}: {why}" if why else None)

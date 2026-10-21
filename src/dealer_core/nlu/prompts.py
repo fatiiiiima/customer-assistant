@@ -37,8 +37,10 @@ def system_prompt(state: State, mode: str) -> str:
     return static_system() if mode == "static" else state_system(state)
 
 
-def user_message(state: State, car: str | None, text: str) -> str:
-    return f"STATE: {state.value}\nCAR_IN_FOCUS: {car or 'none'}\nCUSTOMER: {text}"
+def user_message(state: State, car: str | None, text: str, last_agent: str = "") -> str:
+    """`last_agent` is what the agent just said, so a bare "yes" or "nissan" is read in context."""
+    said = f"AGENT_JUST_SAID: {last_agent[:240]}\n" if last_agent else ""
+    return f"STATE: {state.value}\nCAR_IN_FOCUS: {car or 'none'}\n{said}CUSTOMER: {text}"
 
 
 def intent_only_schema(state: State) -> dict:

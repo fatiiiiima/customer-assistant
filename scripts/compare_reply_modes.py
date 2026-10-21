@@ -25,7 +25,7 @@ CALLS = [
     ["good morning", "i need a family car", "something with low mileage", "show me something different", "the cheapest one"],
     ["hey", "a pickup please", "do you have anything else", "do you have a camry", "is it red", "what colour is it", "thanks bye"],
 ]
-ELIGIBLE = {"search_cars", "ask_car_info", "out_of_scope"}
+ELIGIBLE = {"search_cars", "ask_car_info", "out_of_scope", "greet", "confirm_yes", "make_offer", "ask_lowest_price", "book_test_drive", "give_slot", "give_contact", "ask_policy"}
 
 
 def run(cfg, chain, **flags):
@@ -56,7 +56,7 @@ def main() -> int:
     chain = BackendChain.from_config(cfg, primary=a.backend)
     print("loading model...", flush=True)
     chain.start()
-    modes = {"template": dict(lead_in=False, draft=False), "lead-in": dict(lead_in=True, draft=False), "draft": dict(lead_in=False, draft=True), "mixed": dict(lead_in=True, draft=True)}
+    modes = {"template": dict(lead_in=False, draft=False), "lead-in": dict(lead_in=True, draft=False), "draft": dict(lead_in=False, draft=True), "mixed": dict(lead_in=True, draft=True), "conversational": dict(reply_mode="conversational")}
     results = {m: run(cfg, chain, **f) for m, f in modes.items() if m in a.modes.split(",")}
     print("\n" + "=" * 100 + "\nTURN TIME (ms) for turns the mode can change (search / car question / off-topic)")
     print(f"{'mode':10s} {'turns':>5s} {'p50':>7s} {'p95':>7s} {'max':>7s} {'model text used':>16s}")

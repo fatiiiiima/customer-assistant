@@ -89,8 +89,8 @@ class BackendChain:
                     self.active = i + 1      # a hard failure demotes it
         raise BackendError(f"all NLU backends failed; last error: {last}")
 
-    def classify(self, state: State, car: str | None, text: str) -> IntentResult:
-        return self._call(lambda b: b.classify(state, car, text))      # type: ignore[return-value]
+    def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult:
+        return self._call(lambda b: b.classify(state, car, text, last_agent))      # type: ignore[return-value]
 
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._call(lambda b: b.complete_json(state, car, text))  # type: ignore[return-value]

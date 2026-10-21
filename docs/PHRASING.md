@@ -68,3 +68,16 @@ new commitment words or promises; negation unchanged; plain characters; at most 
 Measured live (iGPU, 22 eligible turns of invented conversations, not a tuned or held-out set), mixed mode vs template-only:
 turn time p50 ~1.0 s, p95 ~2.4 s, worst ~4 s (a long single-car answer routed through the model); model text used on ~55% of turns.
 Pure draft mode on every eligible turn (`scripts/compare_reply_modes.py --modes draft`): p50 ~2.2 s, p95 ~3.4-4 s: too slow, so it is not the default.
+
+## Conversational mode (BUILT; DEFAULT; `dialogue.reply_mode: conversational|hybrid|template`, CLI `--mode`, `--template-only`)
+Owner direction: the model finds the intent and then writes the reply, using the conversation history; latency is accepted.
+* The intent call now also sees what the agent just said (so a bare "yes" or "nissan" is read in context). Rules still answer the clear cases.
+* `Session.history` keeps the call so far (this call only, in memory, never logged). `dialogue/writer.py` gives the model: the history,
+  what the customer just said, the REPLY the code decided (facts + next step) and a fact sheet of the cars involved (never VIN or floor price).
+* Two risk tiers (`risk_of`): LOW (search, car questions, small talk) may add true facts from the sheet and chat; HIGH (price, negotiation, booking,
+  read-back, confirmation, hand-off, policy) must keep EVERY number, name, date and key phrase ("subject to confirmation", "colleague") and add none;
+  the model sees no fact sheet or old numbers for HIGH. `dialogue.high_risk_drafts: false` makes HIGH replies exact templates again.
+* Verifier (any failure -> the template is spoken): no new number or name; every word ordinary or from the facts/conversation; the question
+  survives; offered options and quoted phrases survive; enumerations keep every item in order; no new commitment words; negation unchanged.
+* Measured live (iGPU, 27 turns of invented conversations): model text used on ~70-78% of turns; turn time p50 ~2.2 s, p95 ~4.5-5.8 s, worst ~6.7 s
+  (fast turns 1.1-1.5 s). Long replies and fact-heavy replies are the slow ones. Text mode only; voice latency to be measured next.

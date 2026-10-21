@@ -44,7 +44,7 @@ priced shall let lets i've we've i'm we're you've you'd you'll we'd don't doesn'
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CAPITAL = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-Z][A-Za-z0-9]+\b")
-_CHARS = re.compile("^[A-Za-z0-9 ,'" + chr(0x2019) + ".!?%-]+$")
+_CHARS = re.compile("^[A-Za-z0-9 ,'" + chr(0x2019) + ".!?%:;-]+$")
 _NEG = re.compile(_NEGATION.pattern + "|" + r"\bno\b|\bnone\b|\bwithout\b", re.I)
 _QUOTED = re.compile(r"(?:^|\s)'([^']{4,}?)'(?=[\s.,!?]|$)")          # 'just show me', not the apostrophes in it's ... you'd
 

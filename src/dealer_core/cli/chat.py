@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backend", help="llm backend from config (openvino_gpu | openvino_gpu_small | openvino_cpu | ollama); default llm.text_backend")
     ap.add_argument("--inventory", choices=["demo", "seed"], default="demo", help="demo = 16 hand-written fake cars; seed = 60 random fake cars")
     ap.add_argument("--clock", choices=["demo", "real"], default="demo", help="demo = frozen at the next Monday 10:00 (scripted demos look the same any day)")
+    ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the spoken reply; default dialogue.reply_mode (conversational)")
     ap.add_argument("--no-draft", action="store_true", help="keep the lead-ins but do not let the model rewrite whole short replies")
     ap.add_argument("--template-only", action="store_true", help="switch the hybrid lead-ins off (templates only, fastest, fully fixed wording)")
     ap.add_argument("--hybrid", action="store_true", help="hybrid replies: a verified model-written lead-in sentence before low-risk templated answers")
@@ -67,8 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     cfg = load_config()
     app = build_app(cfg, inventory=a.inventory, backend=a.backend, clock=demo_clock(cfg) if a.clock == "demo" else None,
-                    lead_in=False if a.template_only else (True if a.hybrid else None),
-                    draft=False if (a.template_only or a.no_draft) else None)
+                    reply_mode="template" if a.template_only else ("hybrid" if a.hybrid else a.mode),
+                    draft=False if a.no_draft else None, lead_in=True if a.no_draft else None)
     try:
         start(app)
     except BackendError as e:

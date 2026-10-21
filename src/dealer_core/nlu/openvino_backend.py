@@ -75,9 +75,9 @@ class OpenVinoBackend(NluBackend):
             self._configs[key] = cfg
         return self._configs[key]
 
-    def _run(self, kind: str, state: State, car: str | None, text: str) -> tuple[dict, str, float]:
+    def _run(self, kind: str, state: State, car: str | None, text: str, last_agent: str = "") -> tuple[dict, str, float]:
         self._ensure_loaded()
-        prompt = self._prompt(prompts.system_prompt(state, self.mode), prompts.user_message(state, car, text))
+        prompt = self._prompt(prompts.system_prompt(state, self.mode), prompts.user_message(state, car, text, last_agent))
         cfg = self._gen_config(kind, state)
         t0 = time.perf_counter()
         fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
@@ -102,8 +102,8 @@ class OpenVinoBackend(NluBackend):
             self._pool.submit(lambda p=prompt, c=self._gen_config("intent", state): self._pipe.generate([p], c)).result()
 
     # -- interface ---------------------------------------------------------------------------
-    def classify(self, state: State, car: str | None, text: str) -> IntentResult:
-        obj, raw, ms = self._run("intent", state, car, text)
+    def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult:
+        obj, raw, ms = self._run("intent", state, car, text, last_agent)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
     def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
@@ -115,7 +115,7 @@ class OpenVinoBackend(NluBackend):
         prompt = self._prompt(system, user)
         fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
         try:
-            return fut.result(timeout=LEAD_TIMEOUT_S * (2 if max_tokens > 36 else 1))
+            return fut.result(timeout=LEAD_TIMEOUT_S * (3.5 if max_tokens > 80 else 2 if max_tokens > 36 else 1))
         except FutureTimeout as e:
             raise BackendTimeout(f"{self.name} lead-in exceeded {LEAD_TIMEOUT_S}s") from e
 

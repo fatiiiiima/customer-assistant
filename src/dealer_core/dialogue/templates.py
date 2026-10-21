@@ -113,6 +113,15 @@ def car_summary(c: CarView, branch_name: str) -> str:
             "What else would you like to know?")
 
 
+def more_details(c: CarView, branch_name: str) -> str:
+    """"yes" to "would you like to hear more, or book a test drive?": the details, then the booking offer."""
+    gearbox = f"{'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox"
+    service = "a full service history" if c.service_history else "no service history on file"
+    # only what the listing did not already say (it gave the name, kilometres and price)
+    return (f"It's {c.color}, {c.regional_spec} spec, with {gearbox} and {service}, at our {branch_name}. "
+            "Would you like to book a test drive?")
+
+
 def attribute_clause(key: str, c: CarView, branch_name: str) -> str | None:
     return {
         "km": f"it has {c.km:,} kilometres", "color": f"it's {c.color}", "year": f"it's a {c.year} model",

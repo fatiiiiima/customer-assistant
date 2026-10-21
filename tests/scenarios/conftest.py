@@ -19,7 +19,7 @@ class FakeClassifier:
     def __init__(self, table):
         self.table, self.calls = {k.lower(): Intent(v) for k, v in table.items()}, []
 
-    def classify(self, state, car, text):
+    def classify(self, state, car, text, last_agent=""):
         self.calls.append((state.value, text))
         if text.lower() not in self.table:
             raise AssertionError(f"the rules declined {text!r} in state {state.value} and the fake LLM has no answer for it")

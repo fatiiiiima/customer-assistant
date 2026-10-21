@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Config
 from .dialogue.draft import DraftWriter
+from .dialogue.writer import ReplyWriter
 from .dialogue.leadin import LeadInWriter
 from .dialogue.machine import DialogueEngine
 from .dialogue.phrasebook import Phrasebook
@@ -50,7 +51,8 @@ def demo_clock(cfg: Config) -> Callable[[], datetime]:
 
 def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = None, classifier: IntentClassifier | None = None,
               clock: Callable[[], datetime] | None = None, chain: BackendChain | None = None,
-              lead_in: bool | None = None, lead_backend=None, draft: bool | None = None) -> App:
+              lead_in: bool | None = None, lead_backend=None, draft: bool | None = None,
+              reply_mode: str | None = None) -> App:
     """inventory: 'demo' (16 hand-written fake cars) or 'seed' (60 random fake cars).
     backend: a name from config llm.backends (default: llm.text_backend). Pass `classifier` to inject a fake (tests),
     or `chain` to reuse one started BackendChain across many calls."""
@@ -68,10 +70,14 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         classifier = chain
     rules = RuleEngine(inv.vocabulary, load_enabled_intents(ROOT / "config" / "nlu_gates.yaml"))
     phrasebook = Phrasebook.from_file(ROOT / "config" / "phrase_variants.yaml") if cfg.dialogue.variants else Phrasebook()
-    use_lead = cfg.dialogue.lead_in if lead_in is None else lead_in
+    mode = reply_mode or cfg.dialogue.reply_mode
+    if lead_in is not None or draft is not None:
+        mode = "hybrid"                              # the explicit lead-in / draft switches belong to the hybrid mode
+    use_lead = lead_in if lead_in is not None else (mode == "hybrid" and cfg.dialogue.lead_in)
     writer_backend = lead_backend or chain
     writer = LeadInWriter(writer_backend, set(cfg.dialogue.lead_in_intents)) if use_lead and writer_backend is not None else None
-    use_draft = cfg.dialogue.draft if draft is None else draft
+    use_draft = draft if draft is not None else (mode == "hybrid" and cfg.dialogue.draft)
     drafter = DraftWriter(writer_backend, set(cfg.dialogue.lead_in_intents)) if use_draft and writer_backend is not None else None
-    engine = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed, writer, drafter)
+    engine = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed, writer, drafter,
+                            ReplyWriter(writer_backend, cfg.dialogue.high_risk_drafts) if mode == "conversational" and writer_backend is not None else None)
     return App(engine, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

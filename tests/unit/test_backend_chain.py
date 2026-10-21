@@ -14,7 +14,7 @@ class Fake(NluBackend):
     def health(self):
         return BackendHealth(self.healthy, "fake")
 
-    def classify(self, state, car, text):
+    def classify(self, state, car, text, last_agent=""):
         self.calls += 1
         if self.fail:
             raise BackendError("boom")
@@ -78,7 +78,7 @@ def test_static_prompt_is_identical_for_every_state():
 class SlowOnce(Fake):
     """Times out on its first call, fine afterwards (a cold start)."""
 
-    def classify(self, state, car, text):
+    def classify(self, state, car, text, last_agent=""):
         self.calls += 1
         if self.calls == 1:
             raise BackendTimeout("cold")

@@ -66,7 +66,7 @@ def test_writer_gives_the_model_only_the_caller_and_the_facts_and_falls_back_on_
 def test_engine_drafts_only_short_car_answers_and_no_match_never_prices_or_listings():
     from scenarios.conftest import Call
 
-    c = Call({"how much is it": "ask_lowest_price"})
+    c = Call({"can you do 70000": "make_offer"})
     fb = FakeBackend("Yes, the car is white. Anything else you'd like to know?")
     c.app.engine.drafter = DraftWriter(fb, {"search_cars", "ask_car_info", "out_of_scope"})
     c.say("do you have a toyota camry")                              # a listing: never drafted
@@ -78,7 +78,7 @@ def test_engine_drafts_only_short_car_answers_and_no_match_never_prices_or_listi
     assert r.debug.draft and len(fb.seen) == 2
     c.say("do you have a toyota camry")
     n = len(fb.seen)
-    r = c.say("how much is it")                                      # a price turn: never drafted, exact template
+    r = c.say("can you do 70000")                                    # a price turn: never drafted, exact template
     assert len(fb.seen) == n and not r.debug.draft and "subject to confirmation" in r.reply
 
 

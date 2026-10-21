@@ -17,12 +17,22 @@ _PRICE_WORDS = re.compile(r"price|cost|cheap|lower|lowest|less|best|deal|discoun
                           r"how about|what about|can you do|could you do|any chance")
 
 
+# Words that ask for a better price. Without any of them a price question is just a question.
+_BARGAIN = re.compile(r"lowest|best|cheaper|cheap|discount|less|negotiat|deal|final|can you do|could you do|any room|reduce|drop|bottom|"
+                      r"flexib|come down|lower|knock|haggle|offer|budget|afford|too (?:much|high|expensive)|expensive|steep|min(?:imum)?|last price|"
+                      r"special|bargain|take off|off the|hundred|thousand|\bk\b")
+
+
 def repair(intent: Intent, state: State, text: str) -> tuple[Intent, str | None]:
     """Returns (intent, reason). `reason` is None when nothing was changed."""
     allowed = STATE_SPEC[state][0] if state in STATE_SPEC else []
     # "ask_lowest_price" means asking for the best/lowest price WITHOUT naming one. If the caller names an amount it is an offer.
     if intent is Intent.ASK_LOWEST_PRICE and Intent.MAKE_OFFER in allowed and ex.offer_amount(text) is not None:
         return Intent.MAKE_OFFER, "named an amount, so it is an offer, not a lowest-price question"
+    # A price question with no bargaining in it ("how much is it", "ok and the price?") asks the asking price: answer with the price,
+    # do not open a negotiation. The model often labels these "lowest price".
+    if intent is Intent.ASK_LOWEST_PRICE and Intent.ASK_CAR_INFO in allowed and ex.offer_amount(text) is None and not _BARGAIN.search(text.lower()) and re.search(r"price|cost|how much|asking", text.lower()):
+        return Intent.ASK_CAR_INFO, "no bargaining in it: a plain price question is answered with the asking price"
     # A price intent changes the negotiation (it can spend a round and speak a "final" price), so it needs some price wording.
     # "bently" on its own is not one. Fall back to out_of_scope, which only asks the caller to say it again.
     if intent in (Intent.ASK_LOWEST_PRICE, Intent.MAKE_OFFER) and ex.offer_amount(text) is None and not _PRICE_WORDS.search(text.lower()):

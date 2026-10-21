@@ -30,6 +30,7 @@ from . import focus as F
 from . import templates as T
 from .draft import DraftWriter
 from .leadin import LeadInWriter
+from .writer import ReplyWriter, WriterInput, fact_sheet, risk_of
 from .phrasebook import Phrasebook
 from . import voice_rules
 from .session import Pending, Session
@@ -50,6 +51,7 @@ class TurnDebug:
     note: str = ""
     lead_in: str = ""                  # the model-written lead-in sentence, when a hybrid reply used one
     lead_ms: float = 0.0
+    risk: str = ""                     # conversational mode: "low" | "high" (how strictly the model-written reply is verified)
     about: str = ""                    # what the call is about after this turn (Session.focus)
     focus: str = ""                    # how the caller's words were interpreted (focus.decide), for the trace
     draft: str = ""                    # EXPERIMENT: the model-written full reply that replaced the template (draft mode)
@@ -64,8 +66,9 @@ class TurnResult:
 
 class DialogueEngine:
     def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7,
-                 lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None) -> None:
-        self.svc, self.nlu, self.writer, self.drafter = svc, nlu, lead_writer, drafter
+                 lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None,
+                 reply_writer: ReplyWriter | None = None) -> None:
+        self.svc, self.nlu, self.writer, self.drafter, self.reply_writer = svc, nlu, lead_writer, drafter, reply_writer
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
 
     def _say(self, s: Session, sid: str, **values: object) -> str:
@@ -77,7 +80,9 @@ class DialogueEngine:
         return Session(rng=random.Random(self.variant_seed))
 
     def opening(self, s: Session) -> str:
-        return self._say(s, "opening")
+        line = self._say(s, "opening")
+        s.remember("agent", line)
+        return line
 
     def handle(self, s: Session, text: str) -> TurnResult:
         t0 = time.perf_counter()
@@ -86,18 +91,31 @@ class DialogueEngine:
             dbg.note = "session already ended"
             return TurnResult(T.HANDOFF_WAIT if s.handoff else self._say(s, "goodbye"), dbg, True)
         try:
-            u = self.nlu.understand(s.state, s.car, text)
+            u = self.nlu.understand(s.state, s.car, text, s.last_agent())
         except (BackendError, RuntimeError) as e:        # every NLU backend failed: never leave the caller hanging
             dbg.note = f"NLU unavailable: {e}"
             reply = self._handoff(s, dbg, EscalationReason.SYSTEM_FAULT, "I'm having a technical problem. Let me connect you with a colleague.")
-            return self._finish(s, dbg, reply, t0)
+            return self._finish(s, dbg, reply, t0, text)
         dbg.intent, dbg.nlu_ms = u.intent.value, u.ms
         if u.repaired:
             dbg.note = f"intent repaired by a consistency check ({u.repaired})"
         dbg.via = {"rules": f"rules:{u.rule}", "llm": f"llm:{u.backend}"}.get(u.via, u.via)
         reply = self._dispatch(s, u, text, dbg)
         reply = self._with_lead_in(s, u.intent.value, text, dbg, reply)
-        return self._finish(s, dbg, reply, t0)
+        return self._finish(s, dbg, reply, t0, text)
+
+    def _conversational(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str) -> str:
+        """The model writes the reply from the conversation, the fact sheet and the CORE; verify_reply decides if it may be spoken."""
+        dbg.risk = risk_of(intent, dbg.state_before, s.state.value, dbg.decision, dbg.tools, bool(s.handoff))
+        cars = {c.stock_id: c for c in ([self._car(s)] if s.car and self._car(s) else []) + list(s.shown)}
+        sheet = fact_sheet(list(cars.values()), self._branch_name)
+        out = self.reply_writer.write(WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history), sheet=sheet))
+        dbg.lead_ms = out.ms
+        if out.text:
+            dbg.draft = out.text
+            return out.text
+        dbg.note = (dbg.note + "; " if dbg.note else "") + f"model reply dropped ({out.why_not})"
+        return core
 
     @staticmethod
     def _draftable(intent: str, dbg: TurnDebug) -> bool:
@@ -109,6 +127,8 @@ class DialogueEngine:
 
     def _with_lead_in(self, s: Session, intent: str, text: str, dbg: TurnDebug, reply: str) -> str:
         """Hybrid mode: put a verified model-written sentence in front of a low-risk templated reply (see leadin.py)."""
+        if self.reply_writer is not None:
+            return self._conversational(s, intent, text, dbg, reply)
         if self.drafter is not None and not s.ended and self._draftable(intent, dbg):
             out = self.drafter.write(text, reply)
             dbg.lead_ms = out.ms
@@ -127,10 +147,14 @@ class DialogueEngine:
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"lead-in dropped ({out.why_not})"
         return reply
 
-    def _finish(self, s: Session, dbg: TurnDebug, reply: str, t0: float) -> TurnResult:
+    def _finish(self, s: Session, dbg: TurnDebug, reply: str, t0: float, user_text: str | None = None) -> TurnResult:
         dbg.state_after = s.state.value
         dbg.about = s.focus
-        dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (1 if (dbg.lead_in or dbg.draft) else 0))
+        if user_text is not None:
+            s.remember("customer", user_text)
+            s.remember("agent", reply)
+        dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + (2 if dbg.draft and self.reply_writer else 1 if (dbg.lead_in or dbg.draft) else 0),
+                                           max_words=70 if (dbg.draft and self.reply_writer) else voice_rules.MAX_WORDS)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         return TurnResult(reply, dbg, s.ended)
 
@@ -249,6 +273,14 @@ class DialogueEngine:
             if yes:
                 return self._start_booking(s, "", dbg)
             return "No problem. Is there anything else I can help with?"
+        if p.kind == "more_or_book":
+            if yes:
+                car = self.svc.get_car(p.value)
+                if car is not None:
+                    s.car = car.stock_id
+                    s.pending = Pending("offer_booking")
+                    return T.more_details(car, self._branch_name(car))
+            return "No problem. Is there anything else I can help with?"
         if p.kind == "search_other":
             if yes:
                 s.filters, s.narrow_asks, s.shown, s.car = dict(p.value), 0, [], None
@@ -326,6 +358,8 @@ class DialogueEngine:
         s.shown = list(res.cars)
         s.car = res.cars[0].stock_id if len(res.cars) == 1 else None
         reply = T.cars_listed(list(res.cars))
+        if len(res.cars) == 1:
+            s.pending = Pending("more_or_book", res.cars[0].stock_id)
         if ex.asks_if_only_one(text):             # "do you only have one Camry?": answer the question first
             if res.total == 1:
                 reply = (f"Yes, that's the only {T.car_name(res.cars[0])} I have right now. "
@@ -452,6 +486,10 @@ class DialogueEngine:
         self._tool(dbg, f"car_status({car.stock_id})", status.value if status else "unknown")
         if status is not CarStatus.AVAILABLE:
             return self._car_gone(s, car, status.value if status else "unavailable", dbg)
+        s.slot_day = None
+        if parse_when(text, self._now(), self.svc.slots.tz(car.branch_id)).found:
+            s.state = State.SLOT
+            return self._give_slot(s, text, dbg)
         offers: list[datetime] = []
         today = self._now().astimezone(self.svc.slots.tz(car.branch_id)).date()
         for k in range(0, self.svc.cfg.test_drive.horizon_days + 1):
@@ -502,12 +540,14 @@ class DialogueEngine:
                 s.offered_slots = list(alts)
                 return self._alternatives("We have no free slots then.", alts, now)
             pick = [free[0], free[len(free) // 2]] if len(free) > 1 else [free[0]]
-            s.offered_slots = pick
+            s.offered_slots, s.slot_day = pick, w.day
             return f"On {w.day:%A} I can do {' or '.join(T.when_short(p, now).split(' at ')[-1] for p in pick)}. Which would you like?"
         if chosen is None and w.time and not w.day:
             same = [o for o in s.offered_slots if o.timetz().replace(tzinfo=None) == w.time]
             if len(same) == 1:
                 chosen = same[0]
+            elif s.slot_day:                                   # "4 pm is good" after "on Saturday I can do 12:00 or 2:30"
+                chosen = combine(s.slot_day, w.time, tz)
             else:
                 return "Which day would that be?"
         if chosen is None:
