@@ -40,7 +40,8 @@ rag = [
 ]
 # Phase 3: Pipecat extras are confirmed against current docs before use.
 voice = [
-    "pipecat-ai[local]",    # BSD-2; [local] = PyAudio for the microphone and speaker. VAD (Silero) and Smart Turn v3 ship inside the package.
+    "pipecat-ai[local,websocket]",    # BSD-2; [local] = PyAudio for the microphone and speaker, [websocket] = FastAPI for browser connections. VAD (Silero) and Smart Turn v3 ship inside the package.
+    "uvicorn",            # BSD-3; serves the FastAPI app for the website voice button
 ]
 record = [
     "sounddevice>=0.5.6",

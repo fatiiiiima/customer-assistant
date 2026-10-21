@@ -47,7 +47,7 @@ def when_full(dt: datetime) -> str:
 
 def describe_filters(f: dict) -> str:
     """'SUVs under 150,000 dirhams' / 'Toyota Land Cruisers from 2020' / 'cars'."""
-    noun = {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "pickup": "pickups"}.get(f.get("body_type", ""), "cars")
+    noun = {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "pickup": "pickups", "van": "vans"}.get(f.get("body_type", ""), "cars")
     if f.get("model"):
         noun = f"{f.get('make', '').title()} {f['model'].title()}s".strip()
     elif f.get("make"):
@@ -125,7 +125,7 @@ def more_details(c: CarView, branch_name: str) -> str:
 def attribute_clause(key: str, c: CarView, branch_name: str) -> str | None:
     return {
         "km": f"it has {c.km:,} kilometres", "color": f"it's {c.color}", "year": f"it's a {c.year} model",
-        "price": f"it's priced at {money(c.price)}", "fuel": f"it runs on {c.fuel}",
+        "price": f"it's priced at {money(c.price)}", "fuel": ("it's electric" if c.fuel == "electric" else "it's a hybrid" if c.fuel == "hybrid" else f"it runs on {c.fuel}"),
         "transmission": f"it has {'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox",
         "spec": f"it's {c.regional_spec} spec",
         "service": "it has a full service history" if c.service_history else "there is no service history on file",

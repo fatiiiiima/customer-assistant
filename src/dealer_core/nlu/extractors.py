@@ -6,6 +6,8 @@ for sale. Fuzzy matching (rapidfuzz) tolerates speech-recognition slips such as 
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import re
 from dataclasses import dataclass
 
@@ -19,7 +21,7 @@ from ..tools.phones import normalize_phone
 MAKE_ALIASES = {"mercedes benz": "mercedes", "benz": "mercedes", "merc": "mercedes", "chevy": "chevrolet", "landrover": "land rover"}
 BODY = {"suv": "suv", "suvs": "suv", "crossover": "suv", "4x4": "suv", "sedan": "sedan", "sedans": "sedan", "saloon": "sedan",
         "hatchback": "hatchback", "hatch": "hatchback", "coupe": "coupe", "pickup": "pickup", "pickups": "pickup",
-        "truck": "pickup", "trucks": "pickup"}
+        "truck": "pickup", "trucks": "pickup", "van": "van", "vans": "van", "minivan": "van", "minivans": "van"}
 # Makes a caller may ask for that we may not stock. Without these, "do you have a Bentley?" finds no make at all and the agent
 # cannot say "no Bentley in stock". Names that are also ordinary words (seat, smart, mini) are left out on purpose.
 WELL_KNOWN_MAKES = ["bentley", "ferrari", "lamborghini", "rolls royce", "aston martin", "maserati", "bugatti", "mclaren", "porsche",
@@ -48,6 +50,11 @@ def tokens_of(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------------- vehicles
+@lru_cache(maxsize=512)
+def spoken_form(model: str) -> str:
+    return " ".join(tokens_of(model))
+
+
 def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
     """{'make': ..., 'model': ...} (either may be absent) found in the tokens, with fuzzy matching on longer names."""
     out: dict = {}
@@ -73,7 +80,9 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
             if scored:
                 out["make"] = max(scored, key=lambda x: x[1][1])[1][0]
     flat = [(model, make) for make, models in vocab.items() for model in models]
-    hits = [(m, mk) for m, mk in flat if f" {m} " in text and (len(m) > 2 or "make" in out)]
+    # Models with digits ("m3", "320i", "c 300") are matched in the form the number normaliser gives the caller's words ("m three"), as well as as written
+    hits = [(m, mk) for m, mk in flat if (f" {m} " in text or (any(ch.isdigit() for ch in m) and f" {spoken_form(m)} " in text))
+            and (len(m) > 2 or "make" in out)]
     if not hits:
         long_models = [(m, mk) for m, mk in flat if len(m) >= 6]
         for g in grams:

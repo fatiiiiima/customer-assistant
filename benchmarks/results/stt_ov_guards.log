@@ -1,0 +1,17 @@
+== ovg:whisper-tiny-int8-ov@CPU+hot
+   [office noise] scripted WER 1.259 (cap 0.55) numbers 3/17 | spontaneous WER 0.857
+== ovg:whisper-tiny-int8-ov@CPU+hot+cap
+   [office noise] scripted WER 0.689 (cap 0.55) numbers 3/17 | spontaneous WER 0.519
+== ovg:whisper-tiny-int8-ov@CPU+hot+cap+rep
+   [office noise] scripted WER 0.599 (cap 0.584) numbers 4/17 | spontaneous WER 0.425
+== ovg:whisper-tiny-int8-ov@CPU+hot+cap+chk
+   [office noise] scripted WER 0.565 (cap 0.55) numbers 3/17 | spontaneous WER 0.442
+== ovg:whisper-tiny-int8-ov@CPU+hot+cap+rep+chk
+   [office noise] scripted WER 0.599 (cap 0.584) numbers 4/17 | spontaneous WER 0.425
+== ovg:whisper-base-int8-ov@CPU+hot
+   [office noise] scripted WER 0.695 (cap 0.426) numbers 7/17 | spontaneous WER 0.362
+== ovg:whisper-base-int8-ov@CPU+hot+cap+chk
+   [office noise] scripted WER 0.445 (cap 0.426) numbers 7/17 | spontaneous WER 0.362
+== ovg:whisper-base-int8-ov@CPU+hot+cap+rep+chk
+   [office noise] scripted WER 0.452 (cap 0.428) numbers 6/17 | spontaneous WER 0.384
+saved C:\dev\voice-agent\benchmarks\results\stt_ov_guards.md

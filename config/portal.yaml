@@ -1,0 +1,18 @@
+# Overlay for the AGMC website's voice agent (merged on top of default.yaml): ONE showroom, open daily 9AM-8PM like the site, hourly slots,
+# fixed prices (the site has no negotiation).
+branches:
+  - id: AGMC-HQ
+    name: AGMC showroom on Sheikh Zayed Road
+    timezone: Asia/Dubai
+    working_hours:
+      mon: ["09:00", "20:00"]
+      tue: ["09:00", "20:00"]
+      wed: ["09:00", "20:00"]
+      thu: ["09:00", "20:00"]
+      fri: ["09:00", "20:00"]
+      sat: ["09:00", "20:00"]
+      sun: ["09:00", "20:00"]
+test_drive:
+  slot_minutes: 60
+negotiation:
+  enabled: false

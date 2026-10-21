@@ -1,0 +1,2 @@
+[faster-whisper:tiny.en-int8+hotwords] denoise (noisereduce, isolated env): cap-WER 0.738 median 0.8 nums 2/17 terms 10/37 runaway []
+saved C:\dev\voice-agent\benchmarks\results\stt_mitigations_denoise_check.md

@@ -1,0 +1,9 @@
+== ovw:whisper-small-int8-ov@CPU+hot
+   [office noise] scripted WER 0.323 (cap 0.323) numbers 8/17 | spontaneous WER 0.262
+== ovw:whisper-small.en-int8-ov@CPU+hot
+   ERROR RuntimeError: Check '!language.has_value()' failed at C:\Jenkins\workspace\private-ci\ie\build-windows-vs2022\b\repos\openvino.genai\src\cpp\src\whisper\generation_config.cpp:98:
+Cannot specify 'language' for not multilingual model.
+
+== fw:small.en+hot
+   [office noise] scripted WER 0.351 (cap 0.347) numbers 6/17 | spontaneous WER 0.25
+saved C:\dev\voice-agent\benchmarks\results\stt_engines_small.md

@@ -1,0 +1,4 @@
+﻿id,state,car_in_focus,utterance,gold_intent,gold_slots_json,source,notes,ambiguous,also_ok_intents,state_guess,other_plausible_states
+spont001,answering,,i didn't say that can you read my question properly,confirm_no,{},spoken,complaint about a misunderstanding; agent should apologise and re-ask,1,angry,1,confirm
+spont002,interest,,the weather is really hot today,out_of_scope,{},spoken,,0,,1,
+spont003,answering,S1042,"i'm not looking for something like that, can you please point me to the other models",search_cars,{},spoken,,1,confirm_no,1,interest

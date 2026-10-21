@@ -1,5 +1,95 @@
 {
  "results": {
+  "ov_2507_nocal": {
+   "label": "ov_2507_nocal",
+   "sets": {
+    "dev": {
+     "n": 31,
+     "intent": 1.0,
+     "exact": 0.3225806451612903,
+     "exact_ground": 0.8387096774193549,
+     "intent_only_acc": 1.0,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 1955.939400009811,
+     "intent_ms_p50": 777.9833000386134
+    },
+    "heldout": {
+     "n": 40,
+     "intent": 0.925,
+     "exact": 0.475,
+     "exact_ground": 0.875,
+     "intent_only_acc": 0.925,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2278.557399986312,
+     "intent_ms_p50": 781.5426499582827
+    },
+    "fresh": {
+     "n": 29,
+     "intent": 0.9310344827586207,
+     "exact": 0.4827586206896552,
+     "exact_ground": 0.8275862068965517,
+     "intent_only_acc": 0.9310344827586207,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2283.3504999871366,
+     "intent_ms_p50": 950.0352999893948
+    },
+    "ALL": {
+     "n": 100,
+     "intent": 0.95,
+     "exact": 0.43,
+     "exact_ground": 0.85,
+     "intent_only_acc": 0.95,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2185.541650018422,
+     "intent_ms_p50": 792.3628500138875
+    }
+   }
+  },
+  "ollama_2507": {
+   "label": "ollama_2507",
+   "sets": {
+    "dev": {
+     "n": 31,
+     "intent": 1.0,
+     "exact": 0.5483870967741935,
+     "exact_ground": 0.8387096774193549,
+     "intent_only_acc": 0.967741935483871,
+     "intent_only_agrees": 0.967741935483871,
+     "json_ms_p50": 2597.691400034819,
+     "intent_ms_p50": 824.0127000026405
+    },
+    "heldout": {
+     "n": 40,
+     "intent": 0.925,
+     "exact": 0.6,
+     "exact_ground": 0.85,
+     "intent_only_acc": 0.925,
+     "intent_only_agrees": 1.0,
+     "json_ms_p50": 2149.1506500169635,
+     "intent_ms_p50": 741.6028500301763
+    },
+    "fresh": {
+     "n": 29,
+     "intent": 0.9655172413793104,
+     "exact": 0.5517241379310345,
+     "exact_ground": 0.8620689655172413,
+     "intent_only_acc": 0.9310344827586207,
+     "intent_only_agrees": 0.9655172413793104,
+     "json_ms_p50": 2175.0796000123955,
+     "intent_ms_p50": 759.0377000160515
+    },
+    "ALL": {
+     "n": 100,
+     "intent": 0.96,
+     "exact": 0.57,
+     "exact_ground": 0.85,
+     "intent_only_acc": 0.94,
+     "intent_only_agrees": 0.98,
+     "json_ms_p50": 2264.498150005238,
+     "intent_ms_p50": 788.123150006868
+    }
+   }
+  },
   "ov_orig": {
    "label": "ov_orig",
    "sets": {
@@ -89,54 +179,19 @@
      "intent_ms_p50": 911.7889500048477
     }
    }
-  },
-  "ollama_2507": {
-   "label": "ollama_2507",
-   "sets": {
-    "dev": {
-     "n": 31,
-     "intent": 1.0,
-     "exact": 0.5483870967741935,
-     "exact_ground": 0.8387096774193549,
-     "intent_only_acc": 0.967741935483871,
-     "intent_only_agrees": 0.967741935483871,
-     "json_ms_p50": 2597.691400034819,
-     "intent_ms_p50": 824.0127000026405
-    },
-    "heldout": {
-     "n": 40,
-     "intent": 0.925,
-     "exact": 0.6,
-     "exact_ground": 0.85,
-     "intent_only_acc": 0.925,
-     "intent_only_agrees": 1.0,
-     "json_ms_p50": 2149.1506500169635,
-     "intent_ms_p50": 741.6028500301763
-    },
-    "fresh": {
-     "n": 29,
-     "intent": 0.9655172413793104,
-     "exact": 0.5517241379310345,
-     "exact_ground": 0.8620689655172413,
-     "intent_only_acc": 0.9310344827586207,
-     "intent_only_agrees": 0.9655172413793104,
-     "json_ms_p50": 2175.0796000123955,
-     "intent_ms_p50": 759.0377000160515
-    },
-    "ALL": {
-     "n": 100,
-     "intent": 0.96,
-     "exact": 0.57,
-     "exact_ground": 0.85,
-     "intent_only_acc": 0.94,
-     "intent_only_agrees": 0.98,
-     "json_ms_p50": 2264.498150005238,
-     "intent_ms_p50": 788.123150006868
-    }
-   }
   }
  },
  "pairs": {
+  "ov_2507_nocal:ollama_2507": {
+   "n": 100,
+   "diff_pts": 0.0,
+   "ci_low": -5.0,
+   "ci_high": 5.0,
+   "cand_only": 3,
+   "base_only": 3,
+   "p_mcnemar": 1.0,
+   "verdict": "INCONCLUSIVE: the interval spans the threshold. Proceed with the candidate for the voice path, keep the baseline as the configured fallback, and re-run when the labelled set grows"
+  },
   "ov_orig:ollama_orig": {
    "n": 100,
    "diff_pts": -5.0,
@@ -147,15 +202,15 @@
    "p_mcnemar": 0.266845703125,
    "verdict": "INCONCLUSIVE: the interval spans the threshold. Proceed with the candidate for the voice path, keep the baseline as the configured fallback, and re-run when the labelled set grows"
   },
-  "ov_orig:ollama_2507": {
+  "ov_2507_nocal:ov_orig": {
    "n": 100,
-   "diff_pts": -8.0,
-   "ci_low": -16.0,
-   "ci_high": 0.0,
-   "cand_only": 4,
-   "base_only": 12,
-   "p_mcnemar": 0.076812744140625,
-   "verdict": "INCONCLUSIVE: the interval spans the threshold. Proceed with the candidate for the voice path, keep the baseline as the configured fallback, and re-run when the labelled set grows"
+   "diff_pts": 8.0,
+   "ci_low": 0.0,
+   "ci_high": 16.0,
+   "cand_only": 13,
+   "base_only": 5,
+   "p_mcnemar": 0.09625244140625,
+   "verdict": "NO LARGE DROP: the candidate is within the threshold"
   }
  }
 }

@@ -127,6 +127,7 @@ class TierCfg(_Strict):
 
 
 class NegotiationCfg(_Strict):
+    enabled: bool = True              # False = fixed prices (the website): the agent never counters, never offers a discount
     # PLACEHOLDERS: to be set by the business.
     max_rounds: int = 3
     counter_steps: int = 3
@@ -211,12 +212,22 @@ def _apply_env_overrides(data: dict[str, Any], environ: dict[str, str]) -> None:
         node[path[-1]] = _coerce(raw)
 
 
-def load_config(path: Path | None = None, environ: dict[str, str] | None = None) -> Config:
-    """Load config. `environ` is injectable for tests; defaults to os.environ (after .env)."""
+def _merge(base: dict, over: dict) -> dict:
+    """Deep merge of `over` onto `base`; lists and scalars in `over` replace (a branch list is replaced wholesale)."""
+    for k, v in over.items():
+        base[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return base
+
+
+def load_config(path: Path | None = None, environ: dict[str, str] | None = None, overlay: Path | None = None) -> Config:
+    """Load config. `environ` is injectable for tests; defaults to os.environ (after .env). `overlay` is a second YAML merged on top
+    (config/portal.yaml: the website's showroom hours and fixed prices)."""
     if environ is None:
         load_dotenv(REPO_ROOT / ".env")
         environ = dict(os.environ)
     data = yaml.safe_load((path or DEFAULT_CONFIG).read_text(encoding="utf-8")) or {}
+    if overlay is not None:
+        data = _merge(data, yaml.safe_load(overlay.read_text(encoding="utf-8")) or {})
     _apply_env_overrides(data, environ)
     cfg = Config.model_validate(data)
 

@@ -19,6 +19,7 @@ class BodyType(str, Enum):
     HATCHBACK = "hatchback"
     COUPE = "coupe"
     PICKUP = "pickup"
+    VAN = "van"
 
 
 class _Frozen(BaseModel):

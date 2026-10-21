@@ -483,7 +483,7 @@ class DialogueEngine:
             spec, relaxed = {}, relaxed or "request"
             cars = self.svc.inventory.search(self._filters({}, s.excluded), 100)
         pick = {"make": lambda c: c.make, "model": lambda c: f"{c.make} {c.model}", "color": lambda c: c.color,
-                "body_type": lambda c: {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "pickup": "pickups"}.get(
+                "body_type": lambda c: {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "pickup": "pickups", "van": "vans"}.get(
                     getattr(c.body_type, "value", c.body_type), str(getattr(c.body_type, "value", c.body_type)))}[attr]
         values: list[str] = []
         for c in cars:
@@ -623,6 +623,11 @@ class DialogueEngine:
         named = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
         if named.get("make") and named["make"] != car.make.lower():          # an offer on a DIFFERENT make is a request to look at that one
             return self._search(s, text, dbg)
+        if not self.svc.cfg.negotiation.enabled:                              # fixed prices: say so, never counter
+            c = self.svc.get_car(car.stock_id) or car
+            s.state, s.pending = State.INTEREST, Pending("offer_booking")
+            return (f"The price on this {T.car_name(c)} is fixed at {T.money(c.price)}, so I can't change it. "
+                    "Would you like to book a test drive?")
         s.state = State.NEGOTIATING
         if intent is Intent.ASK_LOWEST_PRICE:
             return self._price_for(s, None, dbg)

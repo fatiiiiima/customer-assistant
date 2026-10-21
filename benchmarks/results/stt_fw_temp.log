@@ -1,0 +1,17 @@
+== fw:tiny.en+hot
+   [office noise] scripted WER 0.528 (cap 0.52) numbers 8/17 | spontaneous WER 0.467
+== fw:tiny.en+hot
+   [office noise] scripted WER 0.488 (cap 0.481) numbers 7/17 | spontaneous WER 0.451
+== fwt0:tiny.en+hot
+   [office noise] scripted WER 0.579 (cap 0.568) numbers 6/17 | spontaneous WER 0.479
+== fw:base.en+hot
+   [office noise] scripted WER 0.515 (cap 0.431) numbers 7/17 | spontaneous WER 0.463
+== fw:base.en+hot
+   [office noise] scripted WER 0.438 (cap 0.417) numbers 8/17 | spontaneous WER 0.429
+== fwt0:base.en+hot
+   [office noise] scripted WER 0.467 (cap 0.442) numbers 6/17 | spontaneous WER 0.367
+== fw:small.en+hot
+   [office noise] scripted WER 0.336 (cap 0.332) numbers 7/17 | spontaneous WER 0.23
+== fwt0:small.en+hot
+   [office noise] scripted WER 0.342 (cap 0.338) numbers 6/17 | spontaneous WER 0.456
+saved C:\dev\voice-agent\benchmarks\results\stt_fw_temp.md

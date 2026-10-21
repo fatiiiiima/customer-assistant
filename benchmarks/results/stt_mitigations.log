@@ -1,0 +1,11 @@
+[faster-whisper:tiny.en-int8+hotwords] baseline (none): cap-WER 0.546 median 0.538 nums 7/17 terms 15/37 runaway []
+[faster-whisper:tiny.en-int8+hotwords] gain normalisation: cap-WER 0.547 median 0.5 nums 6/17 terms 14/37 runaway []
+[faster-whisper:tiny.en-int8+hotwords] high-pass 100 Hz: cap-WER 0.528 median 0.5 nums 7/17 terms 13/37 runaway []
+[faster-whisper:tiny.en-int8+hotwords] VAD trim (energy): cap-WER 0.576 median 0.538 nums 5/17 terms 12/37 runaway []
+[faster-whisper:tiny.en-int8+hotwords] denoise (noisereduce): cap-WER 0.681 median 0.7 nums 2/17 terms 12/37 runaway []
+[openvino-whisper:whisper-tiny-int8-ov@CPU+prompt] baseline (none): cap-WER 0.55 median 0.5 nums 3/17 terms 20/37 runaway ['num06']
+[openvino-whisper:whisper-tiny-int8-ov@CPU+prompt] gain normalisation: cap-WER 0.569 median 0.556 nums 5/17 terms 20/37 runaway []
+[openvino-whisper:whisper-tiny-int8-ov@CPU+prompt] high-pass 100 Hz: cap-WER 0.551 median 0.538 nums 3/17 terms 20/37 runaway []
+[openvino-whisper:whisper-tiny-int8-ov@CPU+prompt] VAD trim (energy): cap-WER 0.562 median 0.571 nums 4/17 terms 19/37 runaway ['phone02']
+[openvino-whisper:whisper-tiny-int8-ov@CPU+prompt] denoise (noisereduce): cap-WER 0.773 median 0.818 nums 0/17 terms 11/37 runaway ['phone01']
+saved C:\dev\voice-agent\benchmarks\results\stt_mitigations.md

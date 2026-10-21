@@ -8,6 +8,9 @@ Modes:
     normal        every line in script.tsv         -> benchmarks/recordings/<id>.wav
     noisy         car* and num* lines only         -> <id>_noisy.wav
     spk2          every line, second speaker       -> <id>_spk2.wav
+    quiet         every line, quiet room           -> <id>_quiet.wav   (scored as its own condition)
+    headset       every line, headset mic          -> <id>_headset.wav (scored as its own condition)
+    raw           every line, Windows enhancements off / WASAPI exclusive -> <id>_raw.wav (own condition)
     spontaneous   your own sentence + typed text   -> benchmarks/spontaneous/spontNNN.wav/.txt
     convert       *.m4a in recordings/ -> WAV (originals kept)
 
@@ -39,7 +42,8 @@ SILENT_PEAK = 0.01       # < -40 dBFS peak: probably the wrong mic / muted
 CLIP_SAMPLES = 5         # this many full-scale samples counts as clipped
 SHORT_S = 1.5
 NOISY_PREFIXES = ("car", "num")
-SUFFIXES = {"normal": "", "noisy": "_noisy", "spk2": "_spk2"}
+SUFFIXES = {"normal": "", "noisy": "_noisy", "spk2": "_spk2", "quiet": "_quiet", "headset": "_headset", "raw": "_raw"}
+CAPTURE_LOG = REC_DIR / "capture_log.tsv"
 
 SPONT_NOTE = """\
 SPONTANEOUS TEST SET - HELD OUT.
@@ -122,18 +126,44 @@ def clear_line() -> None:
 class Recorder:
     """Mic stream that runs for the whole session (cheap) and keeps a short pre-roll."""
 
-    def __init__(self, device: int | str | None):
+    def __init__(self, device: int | str | None, exclusive: bool = False):
         import sounddevice as sd
+        from math import gcd
 
         self.sd = sd
         self.chunks: list[np.ndarray] = []
         self.recording = False
         self.level = 0.0
+        self.exclusive = exclusive
+        extra = None
+        if exclusive:
+            # WASAPI exclusive mode bypasses the Windows audio-effects chain (APOs). The device must run at its
+            # native rate, so capture there and resample to 16 kHz when the take is finished.
+            wasapi = next(i for i, h in enumerate(sd.query_hostapis()) if h["name"] == "Windows WASAPI")
+            if device is None or sd.query_devices(device)["hostapi"] != wasapi:
+                device = sd.query_hostapis(wasapi)["default_input_device"]
+            extra = sd.WasapiSettings(exclusive=True)
+        info = sd.query_devices(device, "input") if device is not None else sd.query_devices(kind="input")
+        self.sr = int(info["default_samplerate"]) if exclusive else SR
+        self.device_name = info["name"]
+        self.api = sd.query_hostapis(info["hostapi"])["name"]
+        self._gcd = gcd(SR, self.sr)
         self._pre = np.zeros(0, dtype=np.int16)
         self.stream = sd.InputStream(
-            samplerate=SR, channels=1, dtype="int16", device=device,
-            blocksize=int(SR * 0.05), callback=self._cb,
+            samplerate=self.sr, channels=1, dtype="int16", device=device, extra_settings=extra,
+            blocksize=int(self.sr * 0.05), callback=self._cb,
         )
+
+    def banner(self) -> str:
+        mode = "WASAPI EXCLUSIVE (Windows audio effects bypassed)" if self.exclusive else "shared mode (Windows audio effects, if enabled, are applied)"
+        return f"Input: {self.device_name} | API: {self.api} | {mode} | capture {self.sr} Hz -> saved as 16000 Hz"
+
+    def to_16k(self, pcm: np.ndarray) -> np.ndarray:
+        if self.sr == SR or pcm.size == 0:
+            return pcm
+        from scipy.signal import resample_poly
+        out = resample_poly(pcm.astype(np.float32), SR // self._gcd, self.sr // self._gcd)
+        return np.clip(np.round(out), -32768, 32767).astype(np.int16)
 
     def _cb(self, indata, frames, time_info, status):
         block = indata[:, 0].copy()
@@ -141,7 +171,7 @@ class Recorder:
         if self.recording:
             self.chunks.append(block)
         else:
-            keep = int(SR * PREROLL_S)
+            keep = int(self.sr * PREROLL_S)
             self._pre = np.concatenate([self._pre, block])[-keep:]
 
     def __enter__(self):
@@ -159,7 +189,7 @@ class Recorder:
     def end(self) -> np.ndarray:
         time.sleep(TAIL_S)
         self.recording = False
-        return np.concatenate(self.chunks) if self.chunks else np.zeros(0, dtype=np.int16)
+        return self.to_16k(np.concatenate(self.chunks)) if self.chunks else np.zeros(0, dtype=np.int16)
 
     def cancel(self) -> None:
         self.recording = False
@@ -245,6 +275,16 @@ def load_script() -> list[tuple[str, str]]:
     return rows
 
 
+def log_capture(rec: "Recorder", path: Path, mode: str) -> None:
+    """One provenance row per saved clip: which device/API/mode produced it."""
+    new = not CAPTURE_LOG.exists()
+    with CAPTURE_LOG.open("a", encoding="utf-8") as f:
+        if new:
+            f.write("timestamp\tfile\tmode\tdevice\tapi\texclusive\tcapture_hz\n")
+        f.write(f"{dt.datetime.now().isoformat(timespec='seconds')}\t{path.name}\t{mode}\t{rec.device_name}\t{rec.api}\t"
+                f"{rec.exclusive}\t{rec.sr}\n")
+
+
 def log_redo(name: str) -> None:
     new = not REDO_LOG.exists()
     with REDO_LOG.open("a", encoding="utf-8") as f:
@@ -280,7 +320,8 @@ def run_clips(args) -> None:
         print("Nothing to do.")
         return
 
-    with Recorder(args.device) as rec:
+    with Recorder(args.device, args.exclusive) as rec:
+        print(rec.banner() + "\n")
         for i, (cid, text) in enumerate(todo, 1):
             path = REC_DIR / f"{cid}{suffix}.wav"
             print(f"[{i}/{len(todo)}] {path.name}")
@@ -303,6 +344,7 @@ def run_clips(args) -> None:
                     continue
                 if verdict == "keep":
                     save_wav(path, pcm)
+                    log_capture(rec, path, args.mode)
                     print(f"  saved {path.relative_to(BENCH_DIR.parent)}\n")
                 else:
                     print("  skipped\n")
@@ -325,7 +367,8 @@ def run_spontaneous(args) -> None:
 
     print("\nSpontaneous mode: say a sentence of your own, then type exactly what you said.")
     print("These are a held-out set: never use them for tuning.\n")
-    with Recorder(args.device) as rec:
+    with Recorder(args.device, args.exclusive) as rec:
+        print(rec.banner() + "\n")
         while True:
             sid = next_id()
             print(f"[{sid}]")
@@ -348,6 +391,7 @@ def run_spontaneous(args) -> None:
                 print("  discarded\n")
                 continue
             save_wav(SPONT_DIR / f"{sid}.wav", pcm)
+            log_capture(rec, SPONT_DIR / f"{sid}.wav", "spontaneous")
             (SPONT_DIR / f"{sid}.txt").write_text(text + "\n", encoding="utf-8")
             print(f"  saved {sid}.wav + {sid}.txt\n")
     print("Done.")
@@ -364,7 +408,7 @@ def run_convert(args) -> None:
     n_ok = 0
     for src in files:
         base = src.stem
-        for suf in ("_noisy", "_spk2"):
+        for suf in ("_noisy", "_spk2", "_quiet", "_headset", "_raw"):
             if base.endswith(suf):
                 base = base[: -len(suf)]
         if base not in known:
@@ -398,15 +442,19 @@ def run_convert(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", nargs="?", default="normal",
-                    choices=["normal", "noisy", "spk2", "spontaneous", "convert"])
+                    choices=["normal", "noisy", "spk2", "quiet", "headset", "raw", "spontaneous", "convert"])
     ap.add_argument("--resume", action="store_true",
                     help="skip clips whose WAV already exists (continue where you stopped)")
     ap.add_argument("--ids", help="comma-separated ids to record, e.g. car03,num05")
     ap.add_argument("--device", help="input device index or name (see --list-devices)")
     ap.add_argument("--list-devices", action="store_true")
+    ap.add_argument("--exclusive", action="store_true",
+                    help="WASAPI exclusive mode: bypasses Windows audio effects (default for the raw mode)")
+    ap.add_argument("--shared", action="store_true", help="raw mode only: use shared mode (you turned enhancements off in Windows)")
     ap.add_argument("--force", action="store_true", help="convert: overwrite existing WAVs")
     args = ap.parse_args()
 
+    args.exclusive = (args.exclusive or args.mode == "raw") and not args.shared
     if args.device is not None and args.device.isdigit():
         args.device = int(args.device)
     if args.list_devices:

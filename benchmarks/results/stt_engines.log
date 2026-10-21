@@ -1,0 +1,16 @@
+== ovw:whisper-tiny-int8-ov@CPU+hot
+   [office noise] scripted WER 1.259 (cap 0.55) numbers 3/17 | spontaneous WER 0.857
+== ovw:whisper-tiny-int8-ov@CPU
+   [office noise] scripted WER 1.456 (cap 0.599) numbers 5/17 | spontaneous WER 0.404
+== ovw:whisper-base-int8-ov@CPU+hot
+   [office noise] scripted WER 0.695 (cap 0.426) numbers 7/17 | spontaneous WER 0.362
+== fw:tiny.en+hot
+   [office noise] scripted WER 0.577 (cap 0.548) numbers 6/17 | spontaneous WER 0.466
+== fw:tiny.en
+   [office noise] scripted WER 0.601 (cap 0.58) numbers 6/17 | spontaneous WER 0.397
+== fw:base.en+hot
+   [office noise] scripted WER 0.451 (cap 0.427) numbers 9/17 | spontaneous WER 0.51
+== moonshine:base
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+   [office noise] scripted WER 0.385 (cap 0.366) numbers 6/17 | spontaneous WER 0.561
+saved C:\dev\voice-agent\benchmarks\results\stt_engines.md

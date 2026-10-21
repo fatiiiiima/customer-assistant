@@ -52,13 +52,18 @@ def demo_clock(cfg: Config) -> Callable[[], datetime]:
 def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = None, classifier: IntentClassifier | None = None,
               clock: Callable[[], datetime] | None = None, chain: BackendChain | None = None,
               lead_in: bool | None = None, lead_backend=None, draft: bool | None = None,
-              reply_mode: str | None = None) -> App:
+              reply_mode: str | None = None, portal_data: Path | None = None) -> App:
     """inventory: 'demo' (16 hand-written fake cars) or 'seed' (60 random fake cars).
     backend: a name from config llm.backends (default: llm.text_backend). Pass `classifier` to inject a fake (tests),
     or `chain` to reuse one started BackendChain across many calls."""
     db = SqliteDb(":memory:")
     inv = SqliteInventoryRepo(db)
-    if inventory == "demo":
+    if inventory == "portal":                    # the website's own cars, read from its data.js
+        from .site.portal import load_portal_inventory
+        if portal_data is None:
+            raise ValueError("inventory='portal' needs portal_data=<path to the site's data.js>")
+        load_portal_inventory(portal_data, inv, cfg.branches[0].id)
+    elif inventory == "demo":
         seed_demo_inventory(inv)
     else:
         seed_inventory(inv, [b.id for b in cfg.branches])
