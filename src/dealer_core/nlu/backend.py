@@ -49,9 +49,14 @@ class NluBackend(ABC):
     def warm_up(self) -> None:
         """Optional: pre-compile grammars / load weights so the first real caller does not pay the cold-start cost."""
 
-    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str:
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
         """Free text, a few words: the conversational lead-in for hybrid replies (verified by the caller before use)."""
         raise BackendError(f"{self.name} cannot write lead-ins")
+
+    def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
+                       deadline_s: float | None = None) -> Iterator[str]:
+        """Free text as it is produced (pieces of a few characters). Backends that cannot stream give the whole text at once."""
+        yield self.lead_in(system, user, max_tokens, temperature, deadline_s)
 
     @abstractmethod
     def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult:

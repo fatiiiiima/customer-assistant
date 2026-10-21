@@ -152,12 +152,24 @@ class SendDetailsCfg(_Strict):
 class DialogueCfg(_Strict):
     variants: bool = False                       # true: use human-approved wording variants (config/phrase_variants.yaml)
     reply_mode: Literal["conversational", "hybrid", "template"] = "conversational"   # who writes the spoken reply (see dialogue/writer.py)
-    judge: bool = True                           # conversational mode: a second strict yes/no check by the model for made-up statements
+    judge: bool = False                          # conversational mode: a second strict yes/no check by the model for made-up statements
+    retries: int = 0                             # extra tries when a model reply is rejected (each costs a full generation); speed profile: 0
+    reply_deadline_ms: int = 0                   # stop the model-written reply after this long and speak the standard wording (0 = no limit; voice sets one)
+    reply_max_words: int = 0                     # ask the model for at most this many words (0 = no limit; voice sets one)
+    max_reply_tokens: int = 70                   # cap on the model-written reply (the main driver of reply time)
     high_risk_drafts: bool = True                # conversational mode: let the model word price/booking/hand-off replies too (exact figures verified)
     lead_in: bool = False                        # hybrid replies: a verified model-written sentence before low-risk templated answers
     draft: bool = False                          # EXPERIMENT: the model rewrites the whole low-risk reply (verified); overrides lead_in
     lead_in_intents: list[str] = Field(default_factory=lambda: ["search_cars", "ask_car_info", "out_of_scope"])
     variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
+
+
+class VoiceCfg(_Strict):
+    reply_deadline_ms: int = 2200                # model-written reply must be ready by then, else the standard wording is spoken
+    reply_max_words: int = 20
+    reply_max_tokens: int = 48
+    opener: bool = True                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
 
 
 class Config(_Strict):
@@ -172,6 +184,7 @@ class Config(_Strict):
     negotiation: NegotiationCfg
     send_details: SendDetailsCfg = Field(default_factory=SendDetailsCfg)
     dialogue: DialogueCfg = Field(default_factory=DialogueCfg)
+    voice: VoiceCfg = Field(default_factory=VoiceCfg)
 
     @property
     def cloud_active(self) -> bool:

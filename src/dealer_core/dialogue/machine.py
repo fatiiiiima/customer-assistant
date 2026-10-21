@@ -76,6 +76,7 @@ class DialogueEngine:
                  lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None,
                  reply_writer: ReplyWriter | None = None) -> None:
         self.svc, self.nlu, self.writer, self.drafter, self.reply_writer = svc, nlu, lead_writer, drafter, reply_writer
+        self.stream_high_risk = False                # voice: price / booking / hand-off replies are spoken from the exact standard wording
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
 
     def _say(self, s: Session, sid: str, **values: object) -> str:
@@ -91,7 +92,9 @@ class DialogueEngine:
         s.remember("agent", line)
         return line
 
-    def handle(self, s: Session, text: str) -> TurnResult:
+    def _begin(self, s: Session, text: str):
+        """Understand the caller and let the code decide what to say. Returns a finished TurnResult (an early exit) or
+        (understanding, debug, t0, core) where `core` is the standard wording for this turn."""
         t0 = time.perf_counter()
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
@@ -110,9 +113,66 @@ class DialogueEngine:
         if u.repaired:
             dbg.note = f"intent repaired by a consistency check ({u.repaired})"
         dbg.via = {"rules": f"rules:{u.rule}", "llm": f"llm:{u.backend}"}.get(u.via, u.via)
-        reply = self._dispatch(s, u, text, dbg)
-        reply = self._with_lead_in(s, u.intent.value, text, dbg, reply)
+        return u, dbg, t0, self._dispatch(s, u, text, dbg)
+
+    def handle(self, s: Session, text: str) -> TurnResult:
+        begun = self._begin(s, text)
+        if isinstance(begun, TurnResult):
+            return begun
+        u, dbg, t0, core = begun
+        reply = self._with_lead_in(s, u.intent.value, text, dbg, core)
         return self._finish(s, dbg, reply, t0, text)
+
+    def handle_stream(self, s: Session, text: str):
+        """Like handle(), but yields the reply one sentence at a time, each as soon as it is ready AND safe to say, and finally the TurnResult.
+        Voice uses this: the caller hears the first sentence while the model is still writing the rest."""
+        begun = self._begin(s, text)
+        if isinstance(begun, TurnResult):
+            yield begun.reply
+            yield begun
+            return
+        u, dbg, t0, core = begun
+        spoken: list[str] = []
+        if self.reply_writer is not None and not s.ended:
+            for sentence in self._conversational_stream(s, u.intent.value, text, dbg, core):
+                spoken.append(sentence)
+                yield sentence
+        if not spoken:                                                   # nothing usable from the model: the standard wording
+            spoken = [core]
+            yield core
+        yield self._finish(s, dbg, " ".join(spoken), t0, text)
+
+    def _conversational_stream(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str):
+        dbg.risk = risk_of(intent, dbg.state_before, s.state.value, dbg.decision, dbg.tools, bool(s.handoff))
+        if intent == "out_of_scope" and "colleague" not in core.lower():
+            dbg.risk = "chat"
+        if dbg.risk == "high" and not self.stream_high_risk:             # price, booking, hand-off: the exact standard wording, spoken at once
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "exact wording used for a price/booking/hand-off turn"
+            return
+        cars = {c.stock_id: c for c in ([self._car(s)] if s.car and self._car(s) else []) + list(s.shown)}
+        facts = self._facts(s, intent, dbg, dbg.risk, fact_sheet(list(cars.values()), self._branch_name))
+        w = WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history), facts=facts,
+                        awaiting=bool(s.pending) or s.state in (State.SLOT, State.CONTACT, State.CONFIRM))
+        parts: list[str] = []
+        if dbg.risk == "chat":
+            out = self.reply_writer._write_chat(w, time.perf_counter())
+            dbg.lead_ms = out.ms
+            if out.text:
+                parts.append(out.text)
+                yield out.text
+        else:
+            for sentence in self.reply_writer.stream(w):
+                parts.append(sentence)
+                yield sentence
+            info = self.reply_writer.last_stream
+            dbg.lead_ms = info.get("first_ms", 0.0)
+            if info.get("stopped") or info.get("appended") or info.get("whole_reply_issues"):
+                dbg.note = (dbg.note + "; " if dbg.note else "") + "stream: " + "; ".join(
+                    x for x in (info.get("stopped", ""), "question appended" if info.get("appended") else "",
+                                f"whole-reply check: {info['whole_reply_issues']}" if info.get("whole_reply_issues") else "") if x)
+        if parts:
+            dbg.draft = " ".join(parts)
+            dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), core.lower()).ratio(), 2)
 
     def _facts(self, s: Session, intent: str, dbg: TurnDebug, risk: str, sheet: str) -> str:
         """Everything the system knows for this turn, as plain lines for the author: what the customer wanted, what the system did, the

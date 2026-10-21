@@ -46,3 +46,13 @@ def test_angry_needs_a_sign_of_anger():
     assert repair(Intent.ANGRY, State.ANSWERING, "ok whatever")[0] is Intent.OUT_OF_SCOPE
     for really_angry in ("this is useless", "you are wasting my time", "this is a joke", "i am so frustrated with you", "what a scam"):
         assert repair(Intent.ANGRY, State.ANSWERING, really_angry)[0] is Intent.ANGRY, really_angry
+
+
+def test_an_amount_with_offer_wording_is_an_offer_even_if_the_model_says_car_question():
+    from dealer_core.dialogue.states import Intent, State
+    from dealer_core.nlu.consistency import repair
+
+    for said in ("how about 125,000", "what about one hundred and twenty five thousand", "can you do 120000"):
+        assert repair(Intent.ASK_CAR_INFO, State.NEGOTIATING, said, True)[0] is Intent.MAKE_OFFER, said
+    assert repair(Intent.ASK_CAR_INFO, State.NEGOTIATING, "how many kilometres are on 2021 model", True)[0] is Intent.ASK_CAR_INFO
+    assert repair(Intent.ASK_CAR_INFO, State.NEGOTIATING, "how about the colour", True)[0] is Intent.ASK_CAR_INFO         # no amount: not an offer

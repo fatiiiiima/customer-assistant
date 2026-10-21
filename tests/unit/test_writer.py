@@ -148,7 +148,7 @@ class FakeBackend:
     def __init__(self, reply=None, error=None):
         self.reply, self.error, self.seen = reply, error, []
 
-    def lead_in(self, system, user, max_tokens=36, temperature=None):
+    def lead_in(self, system, user, max_tokens=36, temperature=None, deadline_s=None):
         self.seen.append((system, user, max_tokens, temperature))
         if self.error:
             raise self.error
@@ -225,18 +225,18 @@ class JudgeBackend(FakeBackend):
         super().__init__(reply)
         self.verdict, self.judged = verdict, 0
 
-    def lead_in(self, system, user, max_tokens=36, temperature=None):
+    def lead_in(self, system, user, max_tokens=36, temperature=None, deadline_s=None):
         if "check a car dealership assistant" in system:
             self.judged += 1
             return self.verdict
-        return super().lead_in(system, user, max_tokens, temperature)
+        return super().lead_in(system, user, max_tokens, temperature, deadline_s)
 
 
 def test_the_models_own_check_rejects_an_unsupported_statement_and_passes_a_supported_one():
-    ok = ReplyWriter(JudgeBackend(GOOD, "NO")).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    ok = ReplyWriter(JudgeBackend(GOOD, "NO"), judge=True).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
     assert ok.text == GOOD
     bad = JudgeBackend(GOOD, "YES")
-    out = ReplyWriter(bad).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    out = ReplyWriter(bad, judge=True, retries=1).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
     assert out.text is None and "own check" in out.why_not and bad.judged == 2                  # tried again, judged again, then gave up
     assert ReplyWriter(JudgeBackend(GOOD, "YES"), judge=False).write(WriterInput("yes", LOW_CORE, "low", [], FACTS)).text == GOOD
 
@@ -246,3 +246,120 @@ def test_the_dealership_name_and_a_polite_no_problem_are_not_violations():
     assert v("Welcome to AGMC! What kind of car can I help you find today?", core, facts="", hist="") == []
     assert v("No problem at all. What kind of car are you looking for?", core, facts="", hist="") == []
     assert any("negation" in p for p in v("We don't have that. What kind of car are you looking for?", core, facts="", hist=""))
+
+
+def test_voice_limits_are_passed_to_the_model():
+    fb = FakeBackend(GOOD)
+    w = ReplyWriter(fb, deadline_s=2.2, max_words=20)
+    w.write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    system, user, max_tokens, temperature = fb.seen[0]
+    assert "under 20 words" in user and max_tokens == w.max_tokens
+
+
+def test_a_deadline_makes_the_standard_wording_win():
+    class Slow(FakeBackend):
+        def lead_in(self, system, user, max_tokens=36, temperature=None, deadline_s=None):
+            from dealer_core.nlu.backend import BackendTimeout
+            raise BackendTimeout("stopped at the deadline")
+
+    out = ReplyWriter(Slow(), deadline_s=1.0).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    assert out.text is None and "backend: BackendTimeout" in out.why_not
+
+
+# ---------------------------------------------------------------- streaming (voice)
+class StreamBackend(FakeBackend):
+    """Yields the reply in small pieces, like a model decoding."""
+
+    def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None):
+        self.seen.append((system, user, max_tokens, temperature))
+        if self.error:
+            raise self.error
+        text = self.reply
+        for i in range(0, len(text), 7):
+            yield text[i:i + 7]
+
+
+SEARCH_CORE = "I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams. Which one would you like to hear more about?"
+SEARCH_FACTS = "What the customer wanted: they are looking for cars (a search)."
+
+
+def stream(reply, core=SEARCH_CORE, facts=SEARCH_FACTS, caller="toyota please", risk="low", awaiting=False, **kw):
+    w = ReplyWriter(StreamBackend(reply), **kw)
+    return list(w.stream(WriterInput(caller, core, risk, [], facts, awaiting))), w.last_stream
+
+
+def test_a_good_reply_is_spoken_sentence_by_sentence():
+    said, info = stream("Got it! I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams. Which one catches your eye?")
+    assert said == ["Got it!", "I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams.",
+                    "Which one catches your eye?"] and not info["appended"] and info["first_ms"] >= 0
+
+
+def test_a_cut_off_sentence_is_never_spoken_and_the_missing_facts_and_question_are_added():
+    said, info = stream("Got it! Two Toyotas: the 2018 Prado at 105,000 and the 2021 Land Cruiser at")
+    assert said[0] == "Got it!" and not any(s.endswith(" at") for s in said)
+    assert any("105,000" in s and "148,000" in s for s in said) and said[-1].endswith("Which one would you like to hear more about?") and info["appended"]
+
+
+def test_a_reaction_without_the_answer_gets_the_answer_added():
+    core = "Yes, it's GCC spec. Anything else you'd like to know?"
+    said, info = stream("Ah, yes!", core=core, facts="What the customer wanted: they asked about a car.", caller="is it gcc spec")
+    assert said == ["Ah, yes!", "It's GCC spec."] and info["appended"]            # no doubled "yes"
+
+
+def test_the_first_unsafe_sentence_stops_the_stream_and_what_was_safe_stands():
+    said, info = stream("Got it! We have a 2019 Lexus at 99,000 dirhams. Which one catches your eye?")
+    assert said[0] == "Got it!" and not any("Lexus" in s or "99,000" in s for s in said)
+    assert "new" in info["stopped"] and said[-1].endswith("Which one would you like to hear more about?")
+
+
+def test_nothing_usable_means_nothing_is_yielded_so_the_standard_wording_is_used():
+    said, info = stream("We have a 2019 Lexus at 99,000 dirhams.")
+    assert said == [] and info["sentences"] == 0
+
+
+def test_price_and_booking_turns_are_not_streamed_when_high_risk_is_off():
+    said, info = stream("The best I can do is 52,200 dirhams, subject to confirmation.", core=PRICE, facts=PRICE_FACTS, risk="high", high_risk=False)
+    assert said == [] and "standard wording" in info["stopped"]
+
+
+def test_a_backend_failure_in_the_middle_keeps_what_was_already_said():
+    class Breaks(StreamBackend):
+        def lead_in_stream(self, *a, **k):
+            yield "Got it! "
+            raise TimeoutError("stopped")
+
+    w = ReplyWriter(Breaks("x"))
+    said = list(w.stream(WriterInput("toyota please", SEARCH_CORE, "low", [], SEARCH_FACTS)))
+    assert said[0] == "Got it!" and "backend" in w.last_stream["stopped"] and said[-1].endswith("Which one would you like to hear more about?")
+
+
+def test_engine_handle_stream_yields_sentences_then_the_turn_result():
+    from scenarios.conftest import Call
+    from dealer_core.dialogue.machine import TurnResult
+
+    c = Call({})
+    c.app.engine.reply_writer = ReplyWriter(StreamBackend(
+        "Ah, Altima and Mustang! I have a 2019 Nissan Altima at 52,500 dirhams and a 2018 Ford Mustang at 120,000 dirhams. Which one are you curious about?"))
+    items = list(c.app.engine.handle_stream(c.s, "a red car"))
+    assert isinstance(items[-1], TurnResult) and all(isinstance(x, str) for x in items[:-1]) and len(items) >= 3
+    assert items[-1].reply == " ".join(items[:-1]) and items[-1].debug.draft
+    # price turns are spoken from the exact standard wording, not streamed from the model
+    c2 = Call({"can you do 100000": "make_offer"})
+    c2.app.engine.reply_writer = ReplyWriter(StreamBackend("Whatever I like!"))
+    c2.say("do you have a toyota camry")
+    items = list(c2.app.engine.handle_stream(c2.s, "can you do 100000"))
+    assert "subject to confirmation" in items[0] and not items[-1].debug.draft
+
+
+def test_when_the_system_is_waiting_on_a_specific_answer_the_closing_question_must_be_about_it():
+    core = "Great, Saturday at 4:00 PM. Can I have your name and mobile number?"
+    said, info = stream("Lovely, Saturday it is! What else can I help you with?", core=core, facts="What the customer wanted: they gave a time.", awaiting=True)
+    assert said[-1] == "Can I have your name and mobile number?" and info["appended"]
+    said, _ = stream("Lovely, Saturday at 4:00 PM it is! Could I take your name and mobile number?", core=core, facts="What the customer wanted: they gave a time.", awaiting=True)
+    assert said[-1] == "Could I take your name and mobile number?"
+
+
+def test_the_models_question_is_held_so_missing_facts_come_before_it():
+    said, _ = stream("Ah, nice! We've got two Toyota SUVs. Which one would you like to hear more about?")
+    assert said[-1].endswith("hear more about?") and said.index(next(s for s in said if "105,000" in s)) < len(said) - 1
+    assert sum(s.endswith("?") for s in said) == 1                                    # the question is asked once

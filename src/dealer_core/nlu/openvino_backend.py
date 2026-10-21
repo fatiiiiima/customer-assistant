@@ -106,20 +106,80 @@ class OpenVinoBackend(NluBackend):
         obj, raw, ms = self._run("intent", state, car, text, last_agent)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
-    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str:
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
+        """Free text. With `deadline_s` the generation is STOPPED when the time is up and BackendTimeout is raised (no partial text)."""
         from ..dialogue.leadin import LEAD_TIMEOUT_S
 
         self._ensure_loaded()
-        cfg = self._ov.GenerationConfig()
+        ov = self._ov
+        cfg = ov.GenerationConfig()
         cfg.do_sample, cfg.max_new_tokens = False, max_tokens
         if temperature:                                    # free-text replies are sampled so the wording varies; intents stay greedy
             cfg.do_sample, cfg.temperature, cfg.top_p, cfg.top_k = True, temperature, 0.9, 40
         prompt = self._prompt(system, user)
-        fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
+        limit = deadline_s or LEAD_TIMEOUT_S * (3.5 if max_tokens > 80 else 2 if max_tokens > 36 else 1)
+        started = time.perf_counter()
+        timed_out = threading.Event()
+
+        def streamer(_piece: str):
+            if time.perf_counter() - started > limit:
+                timed_out.set()
+                return ov.StreamingStatus.STOP
+            return ov.StreamingStatus.RUNNING
+
+        fut = self._pool.submit(lambda: str(self._pipe.generate(prompt, cfg, streamer)))
         try:
-            return fut.result(timeout=LEAD_TIMEOUT_S * (3.5 if max_tokens > 80 else 2 if max_tokens > 36 else 1))
+            text = fut.result(timeout=limit + 5.0)         # the streamer stops generation at `limit`; this is only a safety net
         except FutureTimeout as e:
-            raise BackendTimeout(f"{self.name} lead-in exceeded {LEAD_TIMEOUT_S}s") from e
+            raise BackendTimeout(f"{self.name} lead-in exceeded {limit}s") from e
+        if timed_out.is_set():
+            raise BackendTimeout(f"{self.name} lead-in stopped at its {limit:.1f}s deadline")
+        return text
+
+    def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
+                       deadline_s: float | None = None) -> Iterator[str]:
+        """Pieces of free text as the model produces them. Generation is STOPPED when the consumer stops iterating or the deadline passes
+        (the iterator then simply ends: what was already yielded stands)."""
+        from ..dialogue.leadin import LEAD_TIMEOUT_S
+
+        self._ensure_loaded()
+        ov = self._ov
+        cfg = ov.GenerationConfig()
+        cfg.do_sample, cfg.max_new_tokens = False, max_tokens
+        if temperature:
+            cfg.do_sample, cfg.temperature, cfg.top_p, cfg.top_k = True, temperature, 0.9, 40
+        prompt = self._prompt(system, user)
+        limit = deadline_s or LEAD_TIMEOUT_S * 3
+        started = time.perf_counter()
+        pieces: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        def streamer(piece: str):
+            pieces.put(piece)
+            return ov.StreamingStatus.STOP if (stop.is_set() or time.perf_counter() - started > limit) else ov.StreamingStatus.RUNNING
+
+        def work():
+            try:
+                self._pipe.generate(prompt, cfg, streamer)
+            except Exception as e:                               # surfaced to the consumer below
+                pieces.put(e)
+            finally:
+                pieces.put(None)
+
+        self._pool.submit(work)
+        try:
+            while True:
+                try:
+                    item = pieces.get(timeout=limit + 5.0)
+                except queue.Empty as e:
+                    raise BackendTimeout(f"{self.name} produced nothing within {limit + 5:.0f}s") from e
+                if item is None:
+                    return
+                if isinstance(item, Exception):
+                    raise BackendError(f"{type(item).__name__}: {item}") from item
+                yield item
+        finally:
+            stop.set()
 
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._run("json", state, car, text)[0]

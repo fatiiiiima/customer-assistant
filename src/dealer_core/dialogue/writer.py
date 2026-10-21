@@ -234,6 +234,66 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
     return problems
 
 
+_COVER_STOP = {"yes", "the", "and", "with", "have", "has", "not", "you", "your", "would", "like", "are", "for", "that", "this", "its", "our", "any",
+               "can", "right", "now", "here", "there", "what", "which", "one", "was", "were", "but", "also", "just", "very", "some", "than", "then"}
+
+
+def _keywords(text: str) -> set[str]:
+    return {w.rstrip("s") for w in re.findall(r"[a-z]+", text.lower()) if len(w) > 2 and w not in _COVER_STOP}
+
+
+def covers(reply: str, sentence: str) -> bool:
+    """Does `reply` already say what the standard-wording `sentence` says? (every figure of it, and at least one of its key words)."""
+    low = reply.lower()
+    for n in numbers(sentence):
+        if n not in numbers(reply) and not (n.isdigit() and 1 <= int(n) <= 20 and re.search(r"\b" + _NUMBER_WORDS[int(n) - 1] + r"\b", low)):
+            return False
+    kws = _keywords(sentence)
+    return not kws or bool(kws & _keywords(reply))
+
+
+def verify_sentence(sentence: str, user_text: str, core: str, facts: str, history: str) -> list[str]:
+    """Is this ONE sentence safe to say now, before the rest of the reply exists? The same hard-safety checks as verify_reply that can be made
+    on a single sentence: plain characters, no invented number / name / claim / colour, no commitment, no invented negation. (Checks that need the
+    whole reply - the closing question, kept list items, dropped figures - are made when the stream ends; the system's own question is appended
+    if the model did not ask it.)"""
+    problems: list[str] = []
+    if not sentence.strip():
+        return ["empty"]
+    if not _CHARS.match(sentence.strip()):
+        problems.append("characters other than plain letters, digits and basic punctuation")
+    if len(sentence.split()) > 32:
+        problems.append("a very long sentence")
+    extra = numbers(sentence) - (numbers(core) | numbers(user_text) | numbers(facts) | numbers(history))
+    if extra:
+        problems.append(f"new number(s) {sorted(extra)[:3]}")
+    known = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", core + " " + user_text + " " + facts + " " + history)} | {"agmc"}
+    stems = {w.rstrip("s") for w in known}
+    new_caps = {w for w in capitals(sentence) if w not in known and w.rstrip("s") not in stems}
+    if new_caps:
+        problems.append(f"new name(s) {sorted(new_caps)[:3]}")
+    allowed_text = (core + " " + user_text + " " + facts + " " + history).lower()
+    for m in CLAIMS.finditer(sentence):
+        if m.group(0).lower() not in allowed_text:
+            problems.append(f"a claim the facts do not support: '{m.group(0).strip()}'")
+            break
+    from ..nlu.extractors import COLORS
+
+    supported = (core + " " + facts + " " + user_text).lower()
+    for colour in sorted({w for w in re.findall(r"[a-z]+", sentence.lower()) if w in COLORS}):
+        if colour not in supported:
+            problems.append(f"a colour the facts do not support: '{colour}'")
+            break
+    if FORBIDDEN.search(sentence) and not FORBIDDEN.search(core) and not FORBIDDEN.search(facts):
+        problems.append(f"new commercial/commitment word '{FORBIDDEN.search(sentence).group(0)}'")
+    if _PROMISE.search(sentence) and not _PROMISE.search(core):
+        problems.append("new first-person promise or ability")
+    polite = re.sub(r"\bno (?:problem|worries)\b|\bnot a problem\b|\bno need\b", "", sentence, flags=re.I)
+    if not _NEG.search(core) and not _NEG.search(facts) and _NEG.search(polite):
+        problems.append("a negation the facts do not support")
+    return problems
+
+
 def fact_sheet(cars, branch_name) -> str:
     """The true details of the cars involved (what the agent may say). Never includes VIN or floor price."""
     lines = []
@@ -308,8 +368,13 @@ class WriterInput:
 class ReplyWriter:
     """Calls the model for the reply and verifies it. `high_risk=False` keeps price/booking/hand-off replies as the standard wording."""
 
-    def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE, judge: bool = True) -> None:
+    def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE, judge: bool = False,
+                 retries: int = RETRIES, max_tokens: int = WRITE_TOKENS, deadline_s: float | None = None, max_words: int = 0) -> None:
         self.backend, self.high_risk, self.temperature, self.judge = backend, high_risk, temperature, judge
+        self.retries, self.max_tokens = retries, max_tokens
+        self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
+        self.opener = False                                                # voice: open with a 5-word reaction so speech can start within a second
+        self.last_stream: dict = {}                                        # what the last stream() did, for the debug trace
 
     def unsupported(self, w: WriterInput, draft: str) -> bool:
         """The model's own strict yes/no check for a FALSE STATEMENT (the word-level checks cannot see "we do have red cars from a few makes").
@@ -340,14 +405,15 @@ class ReplyWriter:
                    "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
                 + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
                 + ("\n\nThe STANDARD WORDING repeats what you already said: do not say it the same way; acknowledge it and offer a new next step." if repeat else "")
-                + ("\n\nThis reply carries exact figures or commitments from the system: state them exactly." if w.risk == "high" else ""))
+                + ("\n\nThis reply carries exact figures or commitments from the system: state them exactly." if w.risk == "high" else "")
+                + (f"\n\nThis is spoken on the phone: keep it under {self.max_words} words." if self.max_words else ""))
         history_text = " ".join(t for _, t in w.history)
         feedback, bad, draft = "", [], ""
-        for attempt in range(1 + RETRIES):
+        for attempt in range(1 + self.retries):
             user = base + (f"\n\nYour previous attempt was rejected because: {feedback}. Write the reply again and fix that." if feedback else "")
             try:
                 temp = self.temperature if attempt == 0 or self.temperature is None else min(1.0, self.temperature + 0.3)    # a retry must differ
-                raw = self.backend.lead_in(SYSTEM, user, WRITE_TOKENS, temp)
+                raw = self.backend.lead_in(SYSTEM, user, self.max_tokens, temp, self.deadline_s)
             except Exception as e:
                 return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, f"backend: {type(e).__name__}")
             draft = clean_draft(raw)
@@ -362,6 +428,109 @@ class ReplyWriter:
                 return LeadInOutcome(draft, (time.perf_counter() - t0) * 1000, "" if attempt == 0 else f"after {attempt} retry")
             feedback = "; ".join(bad)
         return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, "; ".join(bad))
+
+    def stream(self, w: WriterInput):
+        """Yield the reply one VERIFIED sentence at a time, as the model produces it, so speech can start after the first sentence.
+
+        * Stops (without error) at the first sentence that fails verification, at the deadline, or at the end. A sentence the model did not finish
+          is never spoken.
+        * A question is held back until the stream ends, so that any fact the model left out is spoken BEFORE the question.
+        * What the system wants said IS said: a fact sentence of the standard wording that the reply does not cover is added as it is, and if the
+          system is waiting on a question that the model did not ask (or asked about something else) the system's own question is asked.
+        * Yields nothing at all if even the first sentence is not usable: the caller then speaks the standard wording.
+        `self.last_stream` describes what happened (for the debug trace)."""
+        t0 = time.perf_counter()
+        self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False}
+        if w.risk == "high" and not self.high_risk:
+            self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
+            return
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-10:])
+        last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
+        closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
+        last_core = (voice_rules.sentences(w.core) or [""])[-1]
+        question = last_core if w.core.rstrip().endswith("?") and not is_generic_closer(last_core) else ""
+        user = (f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
+                f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
+                + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
+                   "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
+                + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
+                + (f"\n\nThis is spoken on the phone: keep it under {self.max_words} words." if self.max_words else "")
+                + ("\n\nBegin with a very short natural reaction of at most 5 words as its own sentence (for example \"Sure thing!\" or \"Ah, good question.\"), "
+                   "then give the answer." if self.opener else ""))
+        history_text = " ".join(t for _, t in w.history)
+        boundary = re.compile(r"(?<=[.!?])\s+")
+        buf, spoken, held, stopped = "", [], [], ""
+
+        def check(sentence: str) -> str | None:
+            nonlocal stopped
+            sentence = clean_draft(sentence)
+            if not sentence:
+                return None
+            bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text)
+            if bad:
+                stopped = "; ".join(bad)
+                return None
+            return sentence
+
+        def release(sentence: str) -> list[str]:
+            """Sentences that may be spoken now (a question waits for the end of the reply)."""
+            out = [held.pop()] if held else []
+            if sentence.rstrip().endswith("?"):
+                held.append(sentence)
+            else:
+                out.append(sentence)
+            return out
+
+        def accept(sentence: str) -> list[str]:
+            spoken.append(sentence)
+            now = release(sentence)
+            if now and not self.last_stream["first_ms"]:
+                self.last_stream["first_ms"] = (time.perf_counter() - t0) * 1000
+            return now
+
+        try:
+            for piece in self.backend.lead_in_stream(SYSTEM, user, self.max_tokens, self.temperature, self.deadline_s):
+                buf += piece
+                while not stopped and (m := boundary.search(buf)):
+                    sentence, buf = buf[:m.start() + 1], buf[m.end():]
+                    ok = check(sentence)
+                    if ok:
+                        for x in accept(ok):
+                            yield x
+                if stopped:
+                    break
+            if not stopped and buf.strip() and re.search(r"[.!?]\s*$", buf):   # the last sentence, only if the model FINISHED it (a cut-off one is dropped)
+                ok = check(buf)
+                if ok:
+                    for x in accept(ok):
+                        yield x
+        except Exception as e:                                                   # backend trouble: what was already said stands
+            stopped = stopped or f"backend: {type(e).__name__}"
+        reply = " ".join(spoken)
+        if spoken:
+            # facts the model's reply does not cover are said as they are, BEFORE the closing question
+            first_word = reply.split()[0].lower().strip("!.,") if reply else ""
+            for sentence in [s for s in voice_rules.sentences(w.core) if not s.rstrip().endswith("?") and not is_generic_closer(s) and not covers(reply, s)]:
+                self.last_stream["appended"] = True
+                if first_word in ("yes", "yeah", "no") or re.search(r"\b(?:yes|yeah)\b", reply.split("!")[0].lower()):
+                    sentence = re.sub(r"^(?:Yes|No),?\s+", "", sentence)             # "Ah, yes!" + "Yes, it's GCC spec." must not say yes twice
+                    sentence = sentence[:1].upper() + sentence[1:]
+                reply += " " + sentence
+                yield sentence
+            keys = question_keys(w.core)
+            asked = held.pop() if held else ""
+            on_topic = not (w.awaiting and keys) or bool(keys & {x.rstrip("s") for x in re.findall(r"[a-z]+", asked.lower())})
+            if asked and on_topic:
+                yield asked
+            elif question:
+                self.last_stream["appended"] = True
+                yield question                                                   # the system is waiting on this: ask it ourselves
+            elif asked:
+                yield asked
+        self.last_stream.update(sentences=len(spoken), stopped=stopped)
+        if spoken:                                                               # diagnostics only: the whole-reply checks, for the debug trace
+            whole = verify_reply(reply, w.caller, w.core, w.facts, history_text, w.risk, last_agent, True)
+            self.last_stream["whole_reply_issues"] = "; ".join(whole)
 
     def _write_chat(self, w: WriterInput, t0: float) -> LeadInOutcome:
         car = next((x.split(":", 1)[1].strip() for x in w.facts.splitlines() if x.startswith("Car under discussion:")), "none")

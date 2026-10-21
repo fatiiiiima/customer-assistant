@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Protocol
 
 from .phrasebook import FORBIDDEN
@@ -110,7 +111,10 @@ Output only the sentence."""
 
 
 class LeadInBackend(Protocol):
-    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str: ...
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str: ...
+
+    def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
+                       deadline_s: float | None = None) -> Iterator[str]: ...
 
 
 @dataclass

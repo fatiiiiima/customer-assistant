@@ -40,7 +40,7 @@ rag = [
 ]
 # Phase 3: Pipecat extras are confirmed against current docs before use.
 voice = [
-    "pipecat-ai",
+    "pipecat-ai[local]",    # BSD-2; [local] = PyAudio for the microphone and speaker. VAD (Silero) and Smart Turn v3 ship inside the package.
 ]
 record = [
     "sounddevice>=0.5.6",

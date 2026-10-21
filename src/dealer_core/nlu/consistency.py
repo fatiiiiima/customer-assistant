@@ -39,7 +39,7 @@ def repair(intent: Intent, state: State, text: str, has_car: bool = False) -> tu
     if intent is Intent.ANGRY and Intent.OUT_OF_SCOPE in allowed and not _ANGER.search(text.lower()):
         return Intent.OUT_OF_SCOPE, "no sign of anger in the words, so it is not an angry customer"
     # An amount said with offer wording about the car being discussed is an offer, not a search ("can you sell the ford at 100,000").
-    if intent is Intent.SEARCH_CARS and has_car and Intent.MAKE_OFFER in allowed and ex.offer_amount(text) is not None \
+    if intent in (Intent.SEARCH_CARS, Intent.ASK_CAR_INFO) and has_car and Intent.MAKE_OFFER in allowed and ex.offer_amount(text) is not None \
             and _OFFER_WORDS.search(text.lower()):
         return Intent.MAKE_OFFER, "an amount with offer wording about the car in focus is an offer"
     # "ask_lowest_price" means asking for the best/lowest price WITHOUT naming one. If the caller names an amount it is an offer.
