@@ -445,8 +445,55 @@ def test_plural_questions_about_other_facts(call):
     assert "kilometres" in r.reply and "Which one do you mean" not in r.reply
 
 
+def test_yes_to_a_preference_question_asks_for_the_preference(call):
+    c = call({"which colours do you have": "search_cars"})
+    c.say("an suv")
+    c.say("which colours do you have")                         # ends with "Do you have a colour in mind?"
+    assert c.say("yes").reply == "Great, which colour?"
+
+
 def test_yes_to_which_one_asks_which_one_instead_of_starting_over(call):
     c = call({"yes": "confirm_yes"})
     c.say("nissan")
     r = c.say("yes")
     assert r.reply.startswith("Happy to.") and "first or the second" in r.reply
+
+
+def test_user_transcript_a_red_is_a_search_not_a_greeting(call):
+    c = call({})                                                           # no model needed: rules must catch it
+    r = c.say("a red")
+    assert r.debug.intent == "search_cars" and r.debug.via.startswith("rules") and "Altima" in r.reply and "Mustang" in r.reply
+
+
+def test_user_transcript_what_makes_are_they_lists_the_makes_in_stock(call):
+    c = call({"what makes are they": "search_cars"})
+    c.say("an suv")
+    r = c.say("what makes are they")
+    assert any(t.startswith("options(make)") for t in r.debug.tools) and "can't search" not in r.reply
+    for make in ("Toyota", "Nissan", "Hyundai", "Kia", "Lexus", "Mitsubishi", "Range Rover"):
+        assert make in r.reply, make
+    c2 = call({"which colours do you have": "search_cars"})
+    c2.say("an suv")
+    assert "white" in c2.say("which colours do you have").reply
+
+
+def test_what_makes_are_they_with_cars_on_screen_names_just_those(call):
+    c = call({"what makes are they": "ask_car_info"})
+    c.say("nissan")                                                        # Altima and Patrol on screen
+    r = c.say("what makes are they")
+    assert "Nissan" in r.reply and "Toyota" not in r.reply
+
+
+def test_options_question_with_no_match_names_what_exists_without_the_colour(call):
+    c = call({"an suv": "search_cars", "what makes are they": "search_cars"})
+    c.say("a red")
+    c.say("an suv")                                                         # no red SUV exists
+    r = c.say("what makes are they")
+    assert "red" in r.reply and "Toyota" in r.reply and "What car do you want" not in r.reply
+
+
+def test_a_singular_colour_question_is_not_the_options_question(call):
+    from dealer_core.nlu import extractors as ex
+    assert ex.asks_options("what colour is it") is None and ex.asks_options("which make is it") is None
+    assert ex.asks_options("what makes are they") == "make" and ex.asks_options("which colours do you have") == "color"
+    assert ex.asks_options("what kind of models") == "model"

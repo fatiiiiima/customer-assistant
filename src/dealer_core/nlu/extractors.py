@@ -136,6 +136,21 @@ def is_bare_vehicle(text: str) -> bool:
     return 0 < len(toks) <= 4 and not (set(toks) & _REQUEST_WORDS)
 
 
+_OPTIONS_Q = re.compile(r"\b(?:what|which)\s+(?:(makes|brands|models|colou?rs|body types|types)|(?:kinds?|sorts?) of\s+(make|brand|model|colou?r|body type)s?)\b")
+_OPTIONS_KEY = {"make": "make", "brand": "make", "model": "model", "color": "color", "colour": "color", "body type": "body_type", "type": "body_type"}
+
+
+def asks_options(text: str) -> str | None:
+    """"what makes are they?" / "which colours do you have?": a question about the OPTIONS in stock (plural: "what colour is it?" is not one).
+    Returns make | model | color | body_type."""
+    m = _OPTIONS_Q.search(" ".join(tokens_of(text)))
+    if not m:
+        return None
+    word = (m.group(1) or m.group(2)).lower()
+    word = word[:-1] if word.endswith("s") else word
+    return _OPTIONS_KEY.get(word)
+
+
 def wants_listing(text: str) -> bool:
     """'just show me' after a narrowing question: stop asking and read out the first matches."""
     return bool(_SHOW_ME.search(" ".join(tokens_of(text))))

@@ -152,6 +152,7 @@ class SendDetailsCfg(_Strict):
 class DialogueCfg(_Strict):
     variants: bool = False                       # true: use human-approved wording variants (config/phrase_variants.yaml)
     reply_mode: Literal["conversational", "hybrid", "template"] = "conversational"   # who writes the spoken reply (see dialogue/writer.py)
+    judge: bool = True                           # conversational mode: a second strict yes/no check by the model for made-up statements
     high_risk_drafts: bool = True                # conversational mode: let the model word price/booking/hand-off replies too (exact figures verified)
     lead_in: bool = False                        # hybrid replies: a verified model-written sentence before low-risk templated answers
     draft: bool = False                          # EXPERIMENT: the model rewrites the whole low-risk reply (verified); overrides lead_in

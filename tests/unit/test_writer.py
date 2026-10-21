@@ -195,3 +195,54 @@ def test_generic_closers_are_not_required_and_a_repeated_real_question_is_fine()
     greet_core = "Hello, this is the AGMC dealership. What kind of car are you looking for?"
     prev = "Hi, welcome to the AGMC dealership. What kind of car are you looking for?"
     assert v("Hello! What kind of car can I help you find today?", greet_core, facts="", hist=prev, prev=prev) == []
+
+
+@pytest.mark.parametrize("draft,reason", [
+    ("Good morning! So you want something red? Which kind of car are you thinking of?", "claim"),             # nobody said good morning
+    ("Great, we've got a few that match. What kind of car are you thinking of?", "claim"),                      # no search was run
+    ("We've got eight SUVs in stock, all red, actually. Would you pick a make or a mileage limit?", "colour"),  # red was said earlier, not about these cars
+])
+def test_invented_stock_greetings_and_colours_are_rejected(draft, reason):
+    core = "I have 8 SUVs. Would you pick a make or a mileage limit?"
+    problems = " | ".join(v(draft, core, user="an suv", facts="What the customer wanted: they are looking for cars (a search).",
+                            hist="a red Hi, welcome to the AGMC dealership. What kind of car are you looking for?"))
+    assert reason in problems, f"{draft!r} -> {problems!r}"
+
+
+def test_a_list_of_makes_may_be_reworded_around_the_items():
+    core = "Among the SUVs, I have Mitsubishi, Kia, Toyota, Hyundai, Nissan, Lexus and Range Rover. Do you have a make in mind?"
+    f = "What the customer wanted: they are looking for cars (a search)."
+    ok = "We've got Mitsubishi, Kia, Toyota, Hyundai, Nissan, Lexus and Range Rover among the SUVs. Any of those you like the sound of?"
+    bad = "Among the SUVs we've got Toyota, Kia and Lexus. Any of those you like the sound of?"
+    assert verify_reply(ok, "what makes are they", core, f, "", "low", awaiting=False) == []        # a preference question: any wording
+    assert any("list" in p for p in verify_reply(bad, "what makes are they", core, f, "", "low", awaiting=False))
+
+
+class JudgeBackend(FakeBackend):
+    """Answers the judge prompt with `verdict`, everything else with the reply."""
+
+    def __init__(self, reply, verdict):
+        super().__init__(reply)
+        self.verdict, self.judged = verdict, 0
+
+    def lead_in(self, system, user, max_tokens=36, temperature=None):
+        if "check a car dealership assistant" in system:
+            self.judged += 1
+            return self.verdict
+        return super().lead_in(system, user, max_tokens, temperature)
+
+
+def test_the_models_own_check_rejects_an_unsupported_statement_and_passes_a_supported_one():
+    ok = ReplyWriter(JudgeBackend(GOOD, "NO")).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    assert ok.text == GOOD
+    bad = JudgeBackend(GOOD, "YES")
+    out = ReplyWriter(bad).write(WriterInput("yes", LOW_CORE, "low", [], FACTS))
+    assert out.text is None and "own check" in out.why_not and bad.judged == 2                  # tried again, judged again, then gave up
+    assert ReplyWriter(JudgeBackend(GOOD, "YES"), judge=False).write(WriterInput("yes", LOW_CORE, "low", [], FACTS)).text == GOOD
+
+
+def test_the_dealership_name_and_a_polite_no_problem_are_not_violations():
+    core = "Hello, this is the AGMC dealership. What kind of car are you looking for?"
+    assert v("Welcome to AGMC! What kind of car can I help you find today?", core, facts="", hist="") == []
+    assert v("No problem at all. What kind of car are you looking for?", core, facts="", hist="") == []
+    assert any("negation" in p for p in v("We don't have that. What kind of car are you looking for?", core, facts="", hist=""))

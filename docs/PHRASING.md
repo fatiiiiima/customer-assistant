@@ -99,3 +99,16 @@ Owner direction (repeated): the model finds the intent and then DRAFTS the reply
   (a retry on a long list). Text only: voice latency is the next measurement.
 * Known weak spots: the model still adds filler now and then (caught by the claim list, but the list is hand-written); greetings can read oddly;
   a few replies fall back to the standard wording; long replies are slow.
+
+### Update: false-statement check, options questions, measured trade-off
+* **Model-as-judge (`dialogue.judge: true`).** After the local checks pass, the model gets a strict yes/no question: does the reply state anything the facts do not
+  support? On 14 hand-written good/bad replies it caught all 4 invented statements (including "we do have red cars from a few makes: ..." and "red Toyotas in other
+  styles") and flagged none of the 6 good replies; it missed 2 that the word-level checks catch ("excellent condition", "Good morning" when nobody said it).
+  A failing judge call counts as "supported" (the local checks already passed). Cost: roughly +0.5-1 s per authored reply.
+* **Options questions** ("what makes are they", "which colours do you have") are answered from the stock (`list_options`), including when the request has no
+  match ("I don't have any red ones, but among the SUVs I have ..."); a plural is required (singular "what colour is it" is a car question).
+* **Gating preserved.** A bare yes/no is read as the answer to the last question deterministically only in states whose allowed intents contain no yes/no
+  (greeting/interest); everywhere else it goes through the model and the closed gate for state-changing intents (e.g. "Yes, that's right" at the booking read-back).
+* **Measured with everything on** (30 turns, iGPU): 67% of replies written by the model (ordinary 13/22, price/booking 5/6, small talk 2/2); median similarity to the
+  standard wording 0.62; turn time median ~3.9 s, p95 ~10 s. The remaining third falls back to the standard wording, mostly because of the judge and the
+  claim checks: that is the price of blocking invented statements with a 4B model.

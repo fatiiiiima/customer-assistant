@@ -28,6 +28,7 @@ FIND_CUE = re.compile(r"\b(?:do you have|have you got|got any|i want|i need|look
 
 class Op(str, Enum):
     REPLAY = "replay"                  # search the stored request exactly as it is (follow-up to "shall I look for a red one?")
+    LIST_OPTIONS = "list_options"      # "what makes are they?": answer with the options that exist
     LIST_ALL = "list_all"              # the caller does not want more questions: read out the matches
     ASK_WHAT = "ask_what"              # nothing to search for yet
     ASK_WHICH = "ask_which"            # pointing at a car that is not on screen
@@ -50,6 +51,7 @@ class Cues:
     bare: bool = False                 # a few words, no request wording ("nissan", "toyota please")
     refers_to_car: bool = False        # "it", "this", "that", "one": the car in focus
     force: bool = False
+    asks_options: str | None = None    # make | model | color | body_type: "what makes are they?"
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,8 @@ def decide(ctx: Ctx, cues: Cues, fits: Callable[[dict], bool]) -> Decision:
         return Decision(Op.REPLAY, spec, "searching the stored request as it is")
     if cues.listing and spec and ctx.narrow_asks > 0:
         return Decision(Op.LIST_ALL, spec, "no preference given: read out the matches instead of asking again", stop_narrowing=True)
+    if cues.asks_options and not new and (spec or ctx.has_shown):
+        return Decision(Op.LIST_OPTIONS, spec, f"asks which {cues.asks_options}s exist: answer with the options in stock")
     if not new and not cues.others:
         if spec and cues.points_at_car:
             return Decision(Op.ASK_WHICH, spec, "points at a car that is not on screen")

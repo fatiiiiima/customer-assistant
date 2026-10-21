@@ -37,7 +37,7 @@ from .writer import INTENT_WORDS, PENDING_WORDS, ReplyWriter, WriterInput, fact_
 from .phrasebook import Phrasebook
 from . import voice_rules
 from .session import Pending, Session
-from .states import Intent, State
+from .states import STATE_SPEC, Intent, State
 
 
 @dataclass
@@ -98,7 +98,9 @@ class DialogueEngine:
             dbg.note = "session already ended"
             return TurnResult(T.HANDOFF_WAIT if s.handoff else self._say(s, "goodbye"), dbg, True)
         try:
-            answer = plain_answer(text) if s.pending else None
+            # A bare yes/no answers the last question. Only in states whose allowed intents do not include yes/no at all (the model cannot
+            # say it there); everywhere else it goes through the normal path, so the closed gate on state-changing intents still applies.
+            answer = plain_answer(text) if Intent.CONFIRM_YES not in STATE_SPEC[s.state][0] else None
             u = Understanding(answer, "rules", rule="pending-answer") if answer else self.nlu.understand(s.state, s.car, text, s.last_agent())
         except (BackendError, RuntimeError) as e:        # every NLU backend failed: never leave the caller hanging
             dbg.note = f"NLU unavailable: {e}"
@@ -137,7 +139,8 @@ class DialogueEngine:
         cars = {c.stock_id: c for c in ([self._car(s)] if s.car and self._car(s) else []) + list(s.shown)}
         sheet = fact_sheet(list(cars.values()), self._branch_name)
         out = self.reply_writer.write(WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history),
-                                                  facts=self._facts(s, intent, dbg, dbg.risk, sheet)))
+                                                  facts=self._facts(s, intent, dbg, dbg.risk, sheet),
+                                                  awaiting=bool(s.pending) or s.state in (State.SLOT, State.CONTACT, State.CONFIRM)))
         dbg.lead_ms = out.ms
         if out.text:
             dbg.draft = out.text
@@ -233,6 +236,10 @@ class DialogueEngine:
             r = self._pending(s, intent, text, dbg)
             if r is not None:
                 return r
+        # ---- "what makes / colours / models do you have?": answered from the stock, whatever label the model gave it
+        if intent in (Intent.SEARCH_CARS, Intent.ASK_CAR_INFO, Intent.ASK_POLICY, Intent.OUT_OF_SCOPE) and s.car is None \
+                and ex.asks_options(text):
+            return self._list_options(s, ex.asks_options(text) or "make", dbg)
         # ---- intents that mean the same thing in every state
         if intent is Intent.ANGRY:
             return self._handoff(s, dbg, EscalationReason.ANGRY, "I'm sorry about that. Let me connect you with a colleague right away.")
@@ -344,12 +351,15 @@ class DialogueEngine:
         """Interpret what the caller wants (focus.decide: one named operation, shown in the trace), then search and answer."""
         new = ex.search_filters(text, self.svc.inventory.vocabulary())
         cues = F.Cues(new=new, others=ex.wants_others(text), listing=ex.wants_listing(text), points_at_car=ex.points_at_a_car(text),
-                      bare=ex.is_bare_vehicle(text), refers_to_car=bool(set(ex.tokens_of(text)) & {"it", "this", "that", "one"}), force=force)
+                      bare=ex.is_bare_vehicle(text), refers_to_car=bool(set(ex.tokens_of(text)) & {"it", "this", "that", "one"}), force=force,
+                      asks_options=ex.asks_options(text))
         ctx = F.Ctx(spec=dict(s.filters), narrow_asks=s.narrow_asks, has_shown=bool(s.car or s.shown))
         d = F.decide(ctx, cues, lambda spec: bool(self.svc.inventory.count(self._filters(spec, s.excluded))))
         dbg.focus = s.last_focus = f"{d.op.value}: {d.reason}"
         if d.op is F.Op.ASK_WHICH:
             return self._ask_which(s)
+        if d.op is F.Op.LIST_OPTIONS:
+            return self._list_options(s, cues.asks_options or "make", dbg)
         if d.op is F.Op.CANNOT_FILTER:
             dbg.note = "search request with no filter I can apply: said so instead of repeating the last answer"
             return self._say(s, "cannot_filter")
@@ -402,6 +412,39 @@ class DialogueEngine:
         return SearchFilters(max_price=d.get("max_price"), make=d.get("make"), model=d.get("model"), body_type=d.get("body_type"),
                              color=d.get("color"), year_min=d.get("year_min"), max_km=d.get("max_km"), exclude_stock_ids=tuple(sorted(excluded)))
 
+    def _list_options(self, s: Session, attr: str, dbg: TurnDebug) -> str:
+        """"What makes are they?": the distinct makes/models/colours/types among the cars on screen, or among those that match the request."""
+        spec, relaxed = dict(s.filters), ""
+        cars = list(s.shown) if len(s.shown) >= 2 else self.svc.inventory.search(self._filters(spec, s.excluded), 100)
+        if not cars and spec.get("color"):                    # nothing matches the whole request: say what exists without the colour
+            relaxed = spec.pop("color")
+            cars = self.svc.inventory.search(self._filters(spec, s.excluded), 100)
+        if not cars:                                          # still nothing: everything in stock
+            spec, relaxed = {}, relaxed or "request"
+            cars = self.svc.inventory.search(self._filters({}, s.excluded), 100)
+        pick = {"make": lambda c: c.make, "model": lambda c: f"{c.make} {c.model}", "color": lambda c: c.color,
+                "body_type": lambda c: {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "pickup": "pickups"}.get(
+                    getattr(c.body_type, "value", c.body_type), str(getattr(c.body_type, "value", c.body_type)))}[attr]
+        values: list[str] = []
+        for c in cars:
+            v = pick(c)
+            if v not in values:
+                values.append(v)
+        values = values[:8]
+        self._tool(dbg, f"options({attr})", f"{len(values)} distinct among {len(cars)} car(s)")
+        if not values:
+            return self._say(s, "ask_what_car")
+        listed = ", ".join(values[:-1]) + (" and " if len(values) > 1 else "") + values[-1]
+        drop = {"make": ("make", "model"), "model": ("model",), "color": ("color",), "body_type": ("body_type",)}[attr]
+        noun = T.describe_filters({k: v for k, v in spec.items() if k not in drop}) if spec else "cars"
+        ask = {"make": "Do you have a make in mind?", "model": "Do any of those catch your eye?", "color": "Do you have a colour in mind?",
+               "body_type": "Which kind do you prefer?"}[attr]
+        lead = {"make": f"Among the {noun}, I have {listed}.", "model": f"Among the {noun}, I have the {listed}.",
+                "color": f"The {noun} come in {listed}.", "body_type": f"I have {listed}."}[attr]
+        if relaxed and relaxed != "request":
+            lead = f"I don't have any {relaxed} ones, but " + lead[0].lower() + lead[1:]
+        return f"{lead} {ask}"
+
     def _other_filters(self, s: Session, color: str) -> dict:
         """What to search if the caller says yes to "shall I look for a red car instead?": the colour and the budget, year, mileage."""
         keep = {k: v for k, v in s.filters.items() if k in ("max_price", "year_min", "max_km")}
@@ -439,6 +482,9 @@ class DialogueEngine:
 
     # ------------------------------------------------------------------------------------------------ car questions
     def _car_info(self, s: Session, text: str, dbg: TurnDebug) -> str:
+        options = ex.asks_options(text)
+        if options and s.car is None and (s.shown or s.filters):          # "what makes are they?" about the cars on screen or the request
+            return self._list_options(s, options, dbg)
         if s.car is None and len(s.shown) >= 2 and set(ex.tokens_of(text)) & _PLURAL and ex.selection(text, s.shown) is None:
             question = text if (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS) else s.unanswered_q
             if question:                                             # "are they red?" / "either of them": answer for every car shown
@@ -731,6 +777,11 @@ class DialogueEngine:
             return "Great. Would you like to book a test drive for it?"
         if len(s.shown) >= 2:                      # "yes" to "which one would you like to hear more about?": that does not pick one
             return "Happy to. " + self._ask_which(s)
+        asked = s.last_agent().lower()             # "yes" to "do you have a colour in mind?" means: yes, ask me which
+        for word, follow_up in (("colour", "Great, which colour?"), ("make in mind", "Great, which make?"), ("budget", "Great, what budget do you have in mind?"),
+                                ("mileage", "Great, what mileage limit?"), ("kind do you prefer", "Great, which kind?")):
+            if word in asked:
+                return follow_up
         return "Great. What kind of car are you looking for?"
 
     def _no(self, s: Session, text: str, dbg: TurnDebug) -> str:

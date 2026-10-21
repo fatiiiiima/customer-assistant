@@ -79,5 +79,5 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
     use_draft = draft if draft is not None else (mode == "hybrid" and cfg.dialogue.draft)
     drafter = DraftWriter(writer_backend, set(cfg.dialogue.lead_in_intents)) if use_draft and writer_backend is not None else None
     engine = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed, writer, drafter,
-                            ReplyWriter(writer_backend, cfg.dialogue.high_risk_drafts) if mode == "conversational" and writer_backend is not None else None)
+                            ReplyWriter(writer_backend, cfg.dialogue.high_risk_drafts, judge=cfg.dialogue.judge) if mode == "conversational" and writer_backend is not None else None)
     return App(engine, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

@@ -47,7 +47,9 @@ CLAIMS = re.compile(r"\b(?:\w+\s)?condition\b|pristine|immaculate|spotless|flawl
                     r"one[- ]owner|single owner|reliable|powerful|economical|efficient|spacious|luxurious|low[- ]mileage|high[- ]mileage|fully loaded|"
                     r"sunroof|leather|navigation|bluetooth|camera|turbo|\bv6\b|\bv8\b|\bawd\b|\b4wd\b|warranty|guarantee|financ\w*|\bloans?\b|insurance|"
                     r"delivery|trade[- ]?in|discount\w*|\bfree\b|last one|only one left|in demand|opening hours|open until|open till|sold out|"
-                    r"inside and out|runs (?:great|perfectly|like)|never been|no accidents?|\bsolid\b|no issues|no problems|trouble[- ]free|hassle[- ]free|"
+                    r"inside and out|runs (?:great|perfectly|like)|never been|no accidents?|good (?:morning|afternoon|evening|night)|"
+                    r"(?:we(?:'ve| have| do have)(?: got)?|i(?:'ve| have)(?: got)?) (?:a few|some|several|plenty|lots|many|loads)|that match|all (?:of them )?(?:are )?(?:red|white|black|blue|grey|gray|silver|brown|green)|"
+                    r"\bsolid\b|no issues|no problems|trouble[- ]free|hassle[- ]free|"
                     r"top[- ]notch|great shape|good shape|excellent shape|runs well|drives (?:great|well|beautifully)|smooth ride|fuel[- ]efficient|"
                     r"great (?:car|deal|value|price)|good (?:deal|value|price)|bargain|steal", re.I)
 
@@ -80,9 +82,9 @@ def list_items(core: str) -> list[str]:
     items: list[str] = []
     for sentence in re.split(r"(?<=[.!?])\s+", core):
         if sentence.count(",") >= 3:
-            parts = [re.sub(r"^.*\b(?:only on|only)\s+", "", x.strip().rstrip(".?!").lower())
+            parts = [re.sub(r"^.*\b(?:only on|only|i have|we have|we've got|come in|are)\s+(?:the\s+)?", "", x.strip().rstrip(".?!").lower())
                      for x in re.split(r",\s*|\s+and\s+|\s+or\s+", sentence)]
-            short = [x for x in parts if 1 <= len(x.split()) <= 3 and not re.search(r"\d", x)]
+            short = [x for x in parts if 1 <= len(x.split()) <= 3 and not re.search(r"\d", x) and not x.startswith(("among", "but ", "so ", "and "))]
             if len(parts) >= 4 and len(short) >= 0.75 * len(parts):        # a real enumeration, not a description with commas
                 items.extend(short)
     return items
@@ -126,6 +128,7 @@ def verify_chat(draft: str, user_text: str, core: str, facts: str, history: str)
     if _DEALERSHIP_CLAIM.search(draft):
         problems.append("a claim about the dealership")
     known = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", user_text + " " + core + " " + facts + " " + history)}
+    known |= {"agmc"}
     new_caps = {w for w in capitals(draft) if w not in known and w.rstrip("s") not in {k.rstrip("s") for k in known}}
     if new_caps:
         problems.append(f"new name(s) {sorted(new_caps)[:3]}")
@@ -137,7 +140,8 @@ def verify_chat(draft: str, user_text: str, core: str, facts: str, history: str)
     return problems
 
 
-def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str, risk: str, previous_agent: str = "") -> list[str]:
+def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str, risk: str, previous_agent: str = "",
+                 awaiting: bool = True) -> list[str]:
     """Why `draft` may NOT be spoken instead of the standard wording `core` (empty list = it may). `facts` is everything the model was told."""
     problems: list[str] = []
     draft = draft.strip()
@@ -166,7 +170,7 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
     if high and numbers(core) - numbers(draft):
         problems.append(f"dropped number(s) {sorted(numbers(core) - numbers(draft))[:3]}")
     # names (makes, models, places, acronyms)
-    known_caps = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", core + " " + user_text + " " + facts + " " + history)}
+    known_caps = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", core + " " + user_text + " " + facts + " " + history)} | {"agmc"}
     stems = {w.rstrip("s") for w in known_caps}
     new_caps = {w for w in capitals(draft) if w not in known_caps and w.rstrip("s") not in stems}
     if new_caps:
@@ -185,12 +189,19 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
         if m.group(0).lower() not in allowed_text:
             problems.append(f"a claim the facts do not support: '{m.group(0).strip()}'")
             break
+    # a colour said about the cars must come from the facts or the customer's latest words, not from earlier in the conversation
+    from ..nlu.extractors import COLORS
+    supported = (core + " " + facts + " " + user_text).lower()
+    for colour in sorted({w for w in re.findall(r"[a-z]+", draft.lower()) if w in COLORS}):
+        if colour not in supported:
+            problems.append(f"a colour the facts do not support: '{colour}'")
+            break
     # the question the system is waiting on must still be asked
     keys = question_keys(core)
     if core.rstrip().endswith("?") and not is_generic_closer(voice_rules.sentences(core)[-1]):
         if not draft.rstrip().endswith("?"):
             problems.append("the next-step question was dropped")
-        elif keys and not (keys & {w.rstrip("s") for w in re.findall(r"[a-z]+", voice_rules.sentences(draft)[-1].lower())}):
+        elif awaiting and keys and not (keys & {w.rstrip("s") for w in re.findall(r"[a-z]+", voice_rules.sentences(draft)[-1].lower())}):
             problems.append("the closing question is about something else than the system is waiting for")
     for q in _QUOTED.findall(core):
         if q not in draft:
@@ -209,7 +220,8 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
     if _PROMISE.search(draft) and not _PROMISE.search(core):
         problems.append("new first-person promise or ability")
     first_core = (voice_rules.sentences(core) or [core])[0]
-    if (not _NEG.search(core) and not _NEG.search(facts) and _NEG.search(draft)) or (_NEG.search(first_core) and not _NEG.search(draft)):
+    polite = re.sub(r"\bno (?:problem|worries)\b|\bnot a problem\b|\bno need\b", "", draft, flags=re.I)
+    if (not _NEG.search(core) and not _NEG.search(facts) and _NEG.search(polite)) or (_NEG.search(first_core) and not _NEG.search(draft)):
         problems.append("negation differs from the facts")            # "no Bentleys" must stay a no; an invented "no issues" is not allowed
     if previous_agent:
         if draft.strip().lower() == previous_agent.strip().lower():
@@ -268,6 +280,8 @@ STANDARD WORDING: Hello, this is the AGMC dealership. What kind of car are you l
 SAY: Good morning! Lovely to have you at AGMC. What kind of car can I help you find today?
 Output only the SAY line."""
 
+JUDGE_SYSTEM = """You check a car dealership assistant's reply for made-up facts. FACTS are everything that is true. Does REPLY state or imply anything about the cars, the stock, prices, colours, history or the dealership that is NOT supported by FACTS? Answer with exactly one word: YES (it contains something unsupported) or NO (everything is supported)."""
+
 SYSTEM_CHAT = """You are the voice of a friendly sales assistant at AGMC, a used-car dealership in the UAE, on the phone. The customer just said
 something unrelated to cars. Reply with two short spoken sentences: first, react warmly and briefly to what they said, the way a friendly
 person would (no advice, no facts, no numbers, no opinions about the dealership); second, bring the conversation back to the cars with one
@@ -288,13 +302,25 @@ class WriterInput:
     risk: str
     history: list[tuple[str, str]]
     facts: str = ""                # everything the system knows for this turn, as plain lines
+    awaiting: bool = True          # the system is waiting for a specific answer (pending yes/no or a booking step)
 
 
 class ReplyWriter:
     """Calls the model for the reply and verifies it. `high_risk=False` keeps price/booking/hand-off replies as the standard wording."""
 
-    def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE) -> None:
-        self.backend, self.high_risk, self.temperature = backend, high_risk, temperature
+    def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE, judge: bool = True) -> None:
+        self.backend, self.high_risk, self.temperature, self.judge = backend, high_risk, temperature, judge
+
+    def unsupported(self, w: WriterInput, draft: str) -> bool:
+        """The model's own strict yes/no check for a FALSE STATEMENT (the word-level checks cannot see "we do have red cars from a few makes").
+        Measured on hand-written good and bad replies: it caught every invented statement and flagged no good reply. A failure of the check
+        itself counts as 'supported' because the local checks already passed."""
+        facts = (w.facts + "\nTrue statements: " + w.core + "\nThe customer said: " + w.caller).strip()
+        try:
+            verdict = self.backend.lead_in(JUDGE_SYSTEM, f"FACTS: {facts}\nREPLY: {draft}\nAnswer YES or NO:", 3, None)
+        except Exception:
+            return False
+        return verdict.strip().upper().startswith("YES")
 
     def write(self, w: WriterInput) -> LeadInOutcome:
         t0 = time.perf_counter()
@@ -325,11 +351,13 @@ class ReplyWriter:
             except Exception as e:
                 return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, f"backend: {type(e).__name__}")
             draft = clean_draft(raw)
-            bad = verify_reply(draft, w.caller, w.core, w.facts, history_text, w.risk, last_agent)
+            bad = verify_reply(draft, w.caller, w.core, w.facts, history_text, w.risk, last_agent, w.awaiting)
             if bad and question and all("question" in p for p in bad) and not draft.rstrip().endswith("?"):
                 fixed = (draft.rstrip(".! ") + ". " + question).strip()          # the model wrote the body; the system asks its own question
-                if not verify_reply(fixed, w.caller, w.core, w.facts, history_text, w.risk, last_agent):
+                if not verify_reply(fixed, w.caller, w.core, w.facts, history_text, w.risk, last_agent, w.awaiting):
                     draft, bad = fixed, []
+            if not bad and self.judge and self.unsupported(w, draft):
+                bad = ["it states something the facts do not support (the model's own check)"]
             if not bad:
                 return LeadInOutcome(draft, (time.perf_counter() - t0) * 1000, "" if attempt == 0 else f"after {attempt} retry")
             feedback = "; ".join(bad)
