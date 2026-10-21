@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backend", help="llm backend from config; default llm.text_backend")
     ap.add_argument("--runs", type=int, default=1, help="runs per scenario (the first is shown unless --quiet)")
     ap.add_argument("--only", type=int, nargs="*", help="scenario numbers to run (1-based)")
-    ap.add_argument("--draft", action="store_true", help="EXPERIMENT: the model rewrites the whole low-risk reply (verified, falls back to the template)")
+    ap.add_argument("--no-draft", action="store_true", help="keep the lead-ins but do not let the model rewrite whole short replies")
     ap.add_argument("--template-only", action="store_true", help="switch the hybrid lead-ins off (templates only, fastest, fully fixed wording)")
     ap.add_argument("--hybrid", action="store_true", help="hybrid replies (model-written lead-in before low-risk templated answers)")
     ap.add_argument("--debug", action="store_true", help="show the per-turn trace for every turn")
@@ -117,8 +117,8 @@ def main(argv: list[str] | None = None) -> int:
         ok_runs, fail_msgs, ms = 0, [], []
         print("=" * 100 + f"\n{sc['name']}\n" + "=" * 100)
         for run in range(a.runs):
-            app = build_app(cfg, chain=chain, clock=clock, lead_in=False if (a.template_only or a.draft) else (True if a.hybrid else None),
-                    draft=True if a.draft else (False if a.template_only else None))
+            app = build_app(cfg, chain=chain, clock=clock, lead_in=False if a.template_only else (True if a.hybrid else None),
+                    draft=False if (a.template_only or a.no_draft) else None)
             f, llm_ms = run_once(app, sc, show=(run == 0 and not a.quiet) or False, debug=a.debug, pause=a.pause)
             ms += llm_ms
             if f:

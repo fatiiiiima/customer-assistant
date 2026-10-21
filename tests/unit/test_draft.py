@@ -63,16 +63,22 @@ def test_writer_gives_the_model_only_the_caller_and_the_facts_and_falls_back_on_
     assert DraftWriter(FakeBackend(error=TimeoutError()), {"search_cars"}).write(USER, CORE).text is None
 
 
-def test_engine_draft_replaces_only_eligible_turns():
+def test_engine_drafts_only_short_car_answers_and_no_match_never_prices_or_listings():
     from scenarios.conftest import Call
 
     c = Call({"how much is it": "ask_lowest_price"})
-    fb = FakeBackend("Yes, I do have a 2021 Toyota Camry with 58,000 kilometres, priced at 78,500 dirhams. Want to hear more, or book a test drive?")
+    fb = FakeBackend("Yes, the car is white. Anything else you'd like to know?")
     c.app.engine.drafter = DraftWriter(fb, {"search_cars", "ask_car_info", "out_of_scope"})
-    r = c.say("do you have a toyota camry")
-    assert r.reply.startswith("Yes, I do have") and r.debug.draft and not r.debug.violations
+    c.say("do you have a toyota camry")                              # a listing: never drafted
+    assert fb.seen == []
+    r = c.say("is it white")                                         # a short answer about the car: drafted
+    assert r.reply.startswith("Yes, the car is white.") and r.debug.draft and not r.debug.violations and len(fb.seen) == 1
+    fb.reply = "Oh, no Bentleys in stock right now. Would you like to adjust your budget or try a different car type?"
+    r = c.say("do you have a bentley")                               # nothing matches: drafted
+    assert r.debug.draft and len(fb.seen) == 2
+    c.say("do you have a toyota camry")
     n = len(fb.seen)
-    r = c.say("how much is it")                                       # a price turn: never drafted, exact template
+    r = c.say("how much is it")                                      # a price turn: never drafted, exact template
     assert len(fb.seen) == n and not r.debug.draft and "subject to confirmation" in r.reply
 
 
@@ -94,3 +100,21 @@ def test_apostrophes_are_not_mistaken_for_quoted_phrases():
 def test_i_contractions_are_not_names():
     core = "I have 8 SUVs. Would you pick a make or a mileage limit?"
     assert verify_draft("Sure, I've got 8 SUVs. Would you pick a make or a mileage limit?", "an suv", core) == []
+
+
+@pytest.mark.parametrize("draft", [
+    "The car is white inside and out. Anything else you'd like to know?",            # an invented detail
+    "Yes, it's white and in excellent condition. Anything else you'd like to know?",
+    "Yes, it's white, one owner. Anything else you'd like to know?",
+])
+def test_invented_descriptive_details_are_rejected_even_when_numbers_and_names_are_fine(draft):
+    core = "Yes, it's white. Anything else you'd like to know?"
+    assert any("not in the facts" in p for p in verify_draft(draft, "is it white", core)), draft
+
+
+@pytest.mark.parametrize("draft", [
+    "Yes, the car is white. Anything else you'd like to know?",
+    "Right, it's white. Is there anything else you'd like to know?",
+])
+def test_plain_rewrites_still_pass(draft):
+    assert verify_draft(draft, "is it white", "Yes, it's white. Anything else you'd like to know?") == []

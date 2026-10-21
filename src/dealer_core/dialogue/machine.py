@@ -96,9 +96,17 @@ class DialogueEngine:
         reply = self._with_lead_in(s, u.intent.value, text, dbg, reply)
         return self._finish(s, dbg, reply, t0)
 
+    @staticmethod
+    def _draftable(intent: str, dbg: TurnDebug) -> bool:
+        """Short, fact-light replies the model may rewrite whole: an answer about the car in focus, or a "nothing matches" reply.
+        Everything else eligible for text from the model gets the lead-in only."""
+        if intent == "ask_car_info":
+            return any(t.startswith("get_car(") for t in dbg.tools)
+        return intent == "search_cars" and any("-> 0 match" in t for t in dbg.tools)
+
     def _with_lead_in(self, s: Session, intent: str, text: str, dbg: TurnDebug, reply: str) -> str:
         """Hybrid mode: put a verified model-written sentence in front of a low-risk templated reply (see leadin.py)."""
-        if self.drafter is not None and not s.ended and intent in self.drafter.intents:
+        if self.drafter is not None and not s.ended and self._draftable(intent, dbg):
             out = self.drafter.write(text, reply)
             dbg.lead_ms = out.ms
             if out.text:

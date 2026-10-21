@@ -56,3 +56,15 @@ Owner direction: "half template, half LLM". Implemented as a verified lead-in (`
 * Voice-rule limit is 3 sentences only for a turn that has a lead-in.
 * Default for everything including the scripted demo (owner decision). Scripted scenarios: 20/20 per scenario with it on. Because lead-in text
   comes from the model, the exact words of a lead-in can differ between runs/versions; the facts, numbers and next steps cannot.
+
+## Draft mode for short replies (BUILT; ON by default, owner decision) - `dialogue.draft`, `--no-draft`, `--template-only`
+Where it applies: an answer about the car in focus (`ask_car_info` with a `get_car` result) and a "nothing matches" reply, only when the
+fact text is at most 28 words. The model rewrites the whole reply from the facts the code produced; everything else eligible for model
+text gets the lead-in instead. Prices, dates, bookings, confirmations, policy and hand-offs are never model-written.
+Verifier (any failure -> the template): every number in the facts survives and no new number appears; no new capitalised name; every word
+is one the caller said, one in the facts, or from a fixed list of ordinary words (this is what stops invented details such as "white
+inside and out", which numbers/names checks cannot see); the closing question survives; quoted phrases and offered options survive; no
+new commitment words or promises; negation unchanged; plain characters; at most 3 sentences / 55 words.
+Measured live (iGPU, 22 eligible turns of invented conversations, not a tuned or held-out set), mixed mode vs template-only:
+turn time p50 ~1.0 s, p95 ~2.4 s, worst ~4 s (a long single-car answer routed through the model); model text used on ~55% of turns.
+Pure draft mode on every eligible turn (`scripts/compare_reply_modes.py --modes draft`): p50 ~2.2 s, p95 ~3.4-4 s: too slow, so it is not the default.

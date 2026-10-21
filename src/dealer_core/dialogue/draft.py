@@ -19,7 +19,7 @@ import re
 import time
 
 from . import voice_rules
-from .leadin import _NEGATION, _PROMISE, LeadInBackend, LeadInOutcome
+from .leadin import _NEGATION, _PROMISE, ALLOWED, LeadInBackend, LeadInOutcome, words
 from .phrasebook import FORBIDDEN
 
 MAX_SENTENCES = 3
@@ -27,6 +27,20 @@ MAX_WORDS = 55
 DRAFT_TOKENS = 80
 MAX_CORE_WORDS = 28        # longer replies (lists of several cars) are spoken from the template: slow to rewrite, little to gain
 DRAFT_TIMEOUT_S = 8.0
+
+# Ordinary words a rewrite may use besides the caller's, the facts' and the lead-in list. Nothing here asserts a property of a car.
+DRAFT_EXTRA = frozenset("""
+stock currently available moment today now right actually really quite pretty simply exactly
+adjust tweak change try consider explore different kind type budget mileage year make model
+vehicle vehicles anything else another otherwise instead alternatively
+know learn hear tell talk discuss help assist
+yes yeah yep correct indeed
+sorry afraid unfortunately
+thanks thank welcome
+about around roughly
+drive test book schedule arrange
+priced shall let lets i've we've i'm we're you've you'd you'll we'd don't doesn't isn't aren't haven't hasn't didn't wasn't
+""".split())
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CAPITAL = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-Z][A-Za-z0-9]+\b")
@@ -79,6 +93,11 @@ def verify_draft(draft: str, user_text: str, core: str) -> list[str]:
     options = {w for w in ("first", "second", "third") if re.search(r"\b" + w + r"\b", core.lower())}
     if options - set(re.findall(r"[a-z]+", draft.lower())):
         problems.append("the options offered (first/second/third) were dropped")
+    known_words = ALLOWED | DRAFT_EXTRA | set(words(user_text)) | set(words(core))
+    unknown = [w for w in words(draft) if w not in known_words and w.replace("'s", "") not in known_words
+               and w.rstrip("s") not in {k.rstrip("s") for k in known_words}]
+    if unknown:
+        problems.append(f"words that are not in the facts or the caller's words: {', '.join(unknown[:4])}")
     if core.rstrip().endswith("?") and not draft.rstrip().endswith("?"):
         problems.append("the next-step question was dropped")
     for q in _QUOTED.findall(core):
