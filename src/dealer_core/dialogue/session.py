@@ -44,6 +44,7 @@ class Session:
     oos_streak: int = 0
     ended: bool = False
     history: list[tuple[str, str]] = field(default_factory=list)      # ("customer" | "agent", what was said), this call only, in memory
+    unanswered_q: str = ""                                   # a car question we had to ask "which one?" about, kept so "either of them" answers it
     last_focus: str = ""                                     # how the last search utterance was interpreted (see focus.py)
     handoff: Handoff | None = None
     misheard: int = 0

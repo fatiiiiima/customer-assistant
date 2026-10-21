@@ -66,6 +66,9 @@ class TurnResult:
     ended: bool = False
 
 
+_PLURAL = {"they", "them", "both", "either", "all", "these", "those"}
+
+
 class DialogueEngine:
     def __init__(self, svc: DealerService, nlu: NluPipeline, phrasebook: Phrasebook | None = None, variant_seed: int = 7,
                  lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None,
@@ -415,8 +418,14 @@ class DialogueEngine:
 
     # ------------------------------------------------------------------------------------------------ car questions
     def _car_info(self, s: Session, text: str, dbg: TurnDebug) -> str:
+        if s.car is None and len(s.shown) >= 2 and set(ex.tokens_of(text)) & _PLURAL and ex.selection(text, s.shown) is None:
+            question = text if (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS) else s.unanswered_q
+            if question:                                             # "are they red?" / "either of them": answer for every car shown
+                s.unanswered_q = ""
+                return self._about_all(s, question, dbg)
         car = self._resolve_car(s, text)
         if car is None:
+            s.unanswered_q = text if (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS) else s.unanswered_q
             return self._ask_which(s)
         s.state = State.ANSWERING
         keys = ex.attributes_asked(text)
@@ -433,6 +442,36 @@ class DialogueEngine:
             return "I don't have accident records with me, but I can have a colleague confirm." + tail
         clauses = [c for k in keys[:2] if (c := T.attribute_clause(k, car, branch))]
         return T.cap(clauses[0]) + (f" and {clauses[1]}" if len(clauses) > 1 else "") + ". Anything else you'd like to know?"
+
+    def _about_all(self, s: Session, question: str, dbg: TurnDebug) -> str:
+        """A question about "them" (the cars just read out): answer for each car, then say what that means."""
+        cars = [c for c in (self.svc.get_car(x.stock_id) for x in s.shown) if c is not None]
+        self._tool(dbg, f"get_car({', '.join(c.stock_id for c in cars)})", f"{len(cars)} cars")
+        claims = ex.claims_in_question(question)
+        keys = [k for k in ex.attributes_asked(question) if k in ex.CAR_FACTS]
+        key = next(iter(claims), None) or (keys[0] if keys else "color")
+        show = {"color": lambda c: f"is {c.color}", "km": lambda c: f"has {c.km:,} kilometres", "year": lambda c: f"is a {c.year}",
+                "fuel": lambda c: f"runs on {c.fuel}", "transmission": lambda c: f"has {'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox",
+                "spec": lambda c: f"is {c.regional_spec} spec", "service": lambda c: "has a full service history" if c.service_history else "has no service history on file"}
+        get = show.get(key, show["color"])
+        names = [f"{c.make} {c.model}" for c in cars]
+        said = " and ".join(f"the {n} {get(c)}" for n, c in zip(names, cars))
+        verdict, ask = "", "Which one would you like to hear more about?"
+        if key in claims:
+            value = {"color": lambda c: c.color, "year": lambda c: str(c.year), "transmission": lambda c: c.transmission.lower(),
+                     "fuel": lambda c: c.fuel.lower(), "spec": lambda c: c.regional_spec.upper()}[key]
+            want = claims[key]
+            match = [n for n, c in zip(names, cars) if value(c).lower() == want.lower()]
+            if not match:
+                verdict = f", so {'neither' if len(cars) == 2 else 'none'} of them {'is' if len(cars) == 2 else 'are'} {want}"
+                if key == "color":
+                    s.pending = Pending("search_other", self._other_filters(s, want))
+                    ask = f"Would you like me to look for a {want} car instead?"
+            elif len(match) == len(cars):
+                verdict = f", so {'both' if len(cars) == 2 else 'all'} {'are' if len(cars) > 1 else 'is'} {want}"
+            else:
+                verdict = f", so only the {match[0]} is {want}" if len(match) == 1 else ""
+        return T.cap(said) + verdict + f". {ask}"
 
     def _confirm_claims(self, s: Session, car, claims: dict[str, str]) -> str:
         """A yes/no question about the car ("is it red?"): answer yes or no first, then say what it actually is."""
@@ -669,6 +708,8 @@ class DialogueEngine:
         if s.car:
             s.pending = Pending("offer_booking")
             return "Great. Would you like to book a test drive for it?"
+        if len(s.shown) >= 2:                      # "yes" to "which one would you like to hear more about?": that does not pick one
+            return "Happy to. " + self._ask_which(s)
         return "Great. What kind of car are you looking for?"
 
     def _no(self, s: Session, text: str, dbg: TurnDebug) -> str:

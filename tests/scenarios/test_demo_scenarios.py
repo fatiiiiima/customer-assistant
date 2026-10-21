@@ -412,3 +412,41 @@ def test_an_offer_naming_a_different_make_is_a_search_for_that_make(call):
     c.say("do you have a ford mustang")
     r = c.say("can you do the nissan at 100,000")
     assert "Nissan" in r.reply and not r.debug.decision
+
+
+def test_are_they_red_answers_for_every_car_shown(call):
+    c = call({"either of them": "ask_car_info", "yes": "confirm_yes"})
+    c.say("nissan")                                                       # Altima and Patrol on screen
+    r = c.say("are they red")
+    assert "Nissan Altima is red" in r.reply or "Altima is red" in r.reply
+    assert "Patrol is black" in r.reply and "neither" not in r.reply and "only the" in r.reply
+    c2 = call({"yes": "confirm_yes"})
+    c2.say("an suv under 150 thousand")
+    c2.say("toyota please")                                               # Prado (blue) and Land Cruiser (white)
+    r = c2.say("are they red")
+    assert "neither of them is red" in r.reply and "look for a red car" in r.reply and c2.s.pending is not None
+    assert "Altima" in c2.say("yes").reply                                 # follow-through: red cars in any make
+
+
+def test_either_of_them_reuses_the_unanswered_question(call):
+    c = call({"either of them": "ask_car_info"})
+    c.say("nissan")
+    r = c.say("what colour is it")                                        # nothing selected: has to ask which one
+    assert "Which one" in r.reply
+    r = c.say("either of them")
+    assert "Altima" in r.reply and "Patrol" in r.reply and "Which one do you mean" not in r.reply
+
+
+def test_plural_questions_about_other_facts(call):
+    c = call({"just show me": "search_cars"})
+    c.say("toyota")
+    c.say("just show me")
+    r = c.say("how many kilometres are they")
+    assert "kilometres" in r.reply and "Which one do you mean" not in r.reply
+
+
+def test_yes_to_which_one_asks_which_one_instead_of_starting_over(call):
+    c = call({"yes": "confirm_yes"})
+    c.say("nissan")
+    r = c.say("yes")
+    assert r.reply.startswith("Happy to.") and "first or the second" in r.reply
