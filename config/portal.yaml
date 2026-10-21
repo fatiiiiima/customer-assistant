@@ -16,3 +16,5 @@ test_drive:
   slot_minutes: 60
 negotiation:
   enabled: false
+send_details:
+  enabled: false        # the website has no message channel: specs and photos are on the car page

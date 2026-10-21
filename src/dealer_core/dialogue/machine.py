@@ -901,6 +901,8 @@ class DialogueEngine:
 
     # ------------------------------------------------------------------------------------------------ details by message
     def _send_details(self, s: Session, text: str, dbg: TurnDebug) -> str:
+        if not self.svc.cfg.send_details.enabled:
+            return "I can't send messages from here, but the full specs and photos are on the car's page on our website. Is there anything else I can help with?"
         car = self._resolve_car(s, text)
         if car is None and not s.shown:
             return self._ask_which(s)

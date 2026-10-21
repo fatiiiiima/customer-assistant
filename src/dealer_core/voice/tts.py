@@ -68,6 +68,7 @@ class PiperSherpa:
             vits=sherpa_onnx.OfflineTtsVitsModelConfig(model=str(next(d.glob("*.onnx"))), tokens=str(d / "tokens.txt"),
                                                        data_dir=str(d / "espeak-ng-data")), num_threads=threads, provider="cpu"))
         self.tts = sherpa_onnx.OfflineTts(cfg)
+        self._lock = threading.Lock()                # one synthesizer shared by every call; one piece at a time keeps it safe
         self.sample_rate: int = self.tts.sample_rate
         self.speaker = speaker
         if speaker >= self.tts.num_speakers:
@@ -92,7 +93,8 @@ class PiperSherpa:
         def run():
             try:
                 for piece in speech_chunks(text):
-                    self.tts.generate(pronounce(piece), sid=self.speaker, speed=speed, callback=cb)
+                    with self._lock:
+                        self.tts.generate(pronounce(piece), sid=self.speaker, speed=speed, callback=cb)
             finally:
                 q.put(None)
 

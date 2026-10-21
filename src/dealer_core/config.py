@@ -147,6 +147,7 @@ class NegotiationCfg(_Strict):
 
 
 class SendDetailsCfg(_Strict):
+    enabled: bool = True              # False (the website): nothing is sent by message; the full specs are on the car's page
     default_channel: str = "whatsapp"
     mock: bool = True
 

@@ -4,6 +4,7 @@ STT must NOT share the iGPU with the language model (measured: sharing slows the
 """
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class WhisperOpenVino:
 
         self.name = f"openvino-whisper:{model_dir.name}@{device}"
         self.pipe = ov.WhisperPipeline(str(model_dir), device, CACHE_DIR=str(cache_dir))
+        self._lock = threading.Lock()
         self.cfg = self.pipe.get_generation_config()
         self.cfg.language = f"<|{language}|>"
         self.cfg.task = "transcribe"
@@ -35,7 +37,8 @@ class WhisperOpenVino:
         self.transcribe_float(np.zeros(SAMPLE_RATE, dtype=np.float32))              # compiles / loads the first time
 
     def transcribe_float(self, audio: np.ndarray) -> str:
-        res = self.pipe.generate(audio.astype(np.float32).tolist(), self.cfg)
+        with self._lock:                                                          # one pipeline shared by every call: it is not re-entrant
+            res = self.pipe.generate(audio.astype(np.float32).tolist(), self.cfg)
         return str(res.texts[0] if hasattr(res, "texts") else res).strip()
 
     def transcribe(self, pcm16: bytes) -> tuple[str, float]:

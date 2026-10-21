@@ -161,6 +161,8 @@ class DealerService:
     # ---- messaging / escalation ----------------------------------------------------------------------------------
     def send_details(self, channel: str, stock_ids: list[str], customer_phone: str) -> SendResult:
         """Full specs, photos and links go out as a message; they are never read aloud."""
+        if not self.cfg.send_details.enabled:
+            return SendResult(False, channel, reason="disabled")
         ch = self.channels.get(channel)
         if ch is None:
             return SendResult(False, channel, reason="unknown_channel")
