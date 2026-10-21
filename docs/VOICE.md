@@ -74,3 +74,13 @@ speech recognition 0.21 s, reply 0.66 s, voice 0.18 s)`. Without `--transcript`,
 ## Measuring: be on AC power
 On battery the CPU is capped (about 2.0 GHz here) and every CPU stage slows down: Whisper base takes ~360 ms instead of ~190 ms. Always plug in and set Windows power mode to
 Best performance before timing or demoing. (`scripts/demo_preflight.py` / `demo_check.cmd` checks this.)
+
+## The website's voice button (AGMC portal)
+
+`serve_portal.cmd` starts a WebSocket voice server (`python -m dealer_core.server`, port 8765) that the portal's mic button (`site/voice.js`) talks to.
+One Pipecat pipeline and one dialogue Session per call; the models (LLM lane, Whisper, Piper) are shared, each behind a lock; calls past `--max-calls`
+(default 2) are told "busy" and the page falls back to text chat. The agent sells the site's own cars (read from `site/data.js`), one showroom open 9 AM-8 PM,
+fixed prices (no negotiation), nothing sent by message (`config/portal.yaml`). The page applies what the server says: transcript lines with response time,
+car cards, and the booking (saved by the site's own `bookTestDrive`). Wire format: `src/dealer_core/server/protocol.py`.
+`scripts/portal_call.py` is a synthetic caller (`--calls N` for several at once). Known limits: no barge-in yet; navigating to another page ends the call;
+HTTPS pages need `wss://` (a TLS front); the reply writer keeps a little per-engine state shared between calls (to fix before the load test).

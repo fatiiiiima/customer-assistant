@@ -88,7 +88,9 @@ class DialogueEngine:
         return Session(rng=random.Random(self.variant_seed))
 
     def opening(self, s: Session) -> str:
-        line = self._say(s, "opening")
+        c = self.svc.get_car(s.car) if s.car else None                     # the website: the caller is already on a car's page
+        line = (f"Hi, welcome to the AGMC dealership. I see you're looking at the {T.car_name(c)}. What would you like to know about it?"
+                if c is not None else self._say(s, "opening"))
         s.remember("agent", line)
         return line
 

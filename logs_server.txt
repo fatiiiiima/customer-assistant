@@ -1,6 +1,0 @@
-[32m2026-10-21 14:20:16.883[0m | [1mINFO    [0m | [36mpipecat[0m:[36m<module>[0m:[36m54[0m - [1m\u14da\u160f\u15e2 Pipecat 1.13.0 (Python 3.12.15 (main, Oct 14 2026, 01:08:45) [MSC v.1944 64 bit (AMD64)]) \u14da\u160f\u15e2[0m
-Loading the language model (first start takes a few seconds)...
-NLU backend active: openvino_gpu (openvino Qwen3-4B-Instruct-2507-int4-ov-nocal@GPU (state prompt))  [11.7 s]
-
-Loading speech models...
-Voice server ready on ws://127.0.0.1:8765/voice  (up to 2 calls; pages allowed: http://localhost:8080, http://127.0.0.1:8080)

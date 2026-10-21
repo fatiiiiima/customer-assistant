@@ -142,7 +142,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     car = hello.get("car")
     if isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
         brain.session.car = car
-        brain.session.state = State.INTEREST
+        brain.session.state = State.ANSWERING
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
 
