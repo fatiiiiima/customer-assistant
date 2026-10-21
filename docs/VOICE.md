@@ -70,3 +70,7 @@ unless you pass `--show-text` (agent side only; nothing the caller says is ever 
 With `--transcript` the call shows a `TIME` line per turn, e.g. `TIME : 1.4 s from the end of your speech to the first sound (waiting for you to finish 0.30 s,
 speech recognition 0.21 s, reply 0.66 s, voice 0.18 s)`. Without `--transcript`, `--debug` prints the same as `[first sound 1.4 s after you finished: ...]`.
 "End of your speech" is the moment the voice detector stopped plus its 0.3 s of silence, so the figure is what you would feel as the wait.
+
+## Measuring: be on AC power
+On battery the CPU is capped (about 2.0 GHz here) and every CPU stage slows down: Whisper base takes ~360 ms instead of ~190 ms. Always plug in and set Windows power mode to
+Best performance before timing or demoing. (`scripts/demo_preflight.py` / `demo_check.cmd` checks this.)
