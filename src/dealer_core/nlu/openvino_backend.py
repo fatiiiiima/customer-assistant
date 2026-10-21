@@ -106,12 +106,14 @@ class OpenVinoBackend(NluBackend):
         obj, raw, ms = self._run("intent", state, car, text, last_agent)
         return IntentResult(Intent(obj["intent"]), ms, self.name, raw)
 
-    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str:
         from ..dialogue.leadin import LEAD_TIMEOUT_S
 
         self._ensure_loaded()
         cfg = self._ov.GenerationConfig()
         cfg.do_sample, cfg.max_new_tokens = False, max_tokens
+        if temperature:                                    # free-text replies are sampled so the wording varies; intents stay greedy
+            cfg.do_sample, cfg.temperature, cfg.top_p, cfg.top_k = True, temperature, 0.9, 40
         prompt = self._prompt(system, user)
         fut = self._pool.submit(lambda: str(self._pipe.generate([prompt], cfg).texts[0]))
         try:

@@ -33,8 +33,8 @@ class OllamaBackend(NluBackend):
         return BackendHealth(True, f"ollama {self.cfg.model}")
 
     # -- internals ---------------------------------------------------------------------------
-    def _chat(self, system: str, user: str, schema: dict | None, max_tokens: int, stream: bool = False):
-        options = {"temperature": self.llm.temperature, "num_ctx": self.cfg.num_ctx, "num_predict": max_tokens}
+    def _chat(self, system: str, user: str, schema: dict | None, max_tokens: int, stream: bool = False, temperature: float | None = None):
+        options = {"temperature": self.llm.temperature if temperature is None else temperature, "num_ctx": self.cfg.num_ctx, "num_predict": max_tokens}
         if self.cfg.num_thread:
             options["num_thread"] = self.cfg.num_thread
         kwargs = dict(model=self.cfg.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -76,8 +76,8 @@ class OllamaBackend(NluBackend):
     def complete_json(self, state: State, car: str | None, text: str) -> dict:
         return self._json(state, car, text, prompts.full_schema(state), self.cfg.max_json_tokens)[0]
 
-    def lead_in(self, system: str, user: str, max_tokens: int = 36) -> str:
-        return self._chat(system, user, None, max_tokens).message.content or ""
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str:
+        return self._chat(system, user, None, max_tokens, temperature=temperature).message.content or ""
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         system = prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences)

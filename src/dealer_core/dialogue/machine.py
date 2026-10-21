@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import random
 import time
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -32,7 +33,7 @@ from .draft import DraftWriter
 from ..nlu.pipeline import Understanding
 from ..nlu.rules import plain_answer
 from .leadin import LeadInWriter
-from .writer import ReplyWriter, WriterInput, fact_sheet, risk_of
+from .writer import INTENT_WORDS, PENDING_WORDS, ReplyWriter, WriterInput, fact_sheet, risk_of
 from .phrasebook import Phrasebook
 from . import voice_rules
 from .session import Pending, Session
@@ -53,6 +54,7 @@ class TurnDebug:
     note: str = ""
     lead_in: str = ""                  # the model-written lead-in sentence, when a hybrid reply used one
     lead_ms: float = 0.0
+    copy_ratio: float = 0.0            # how close the model-written reply is to the standard wording (1.0 = a copy)
     risk: str = ""                     # conversational mode: "low" | "high" (how strictly the model-written reply is verified)
     about: str = ""                    # what the call is about after this turn (Session.focus)
     focus: str = ""                    # how the caller's words were interpreted (focus.decide), for the trace
@@ -110,17 +112,36 @@ class DialogueEngine:
         reply = self._with_lead_in(s, u.intent.value, text, dbg, reply)
         return self._finish(s, dbg, reply, t0, text)
 
+    def _facts(self, s: Session, intent: str, dbg: TurnDebug, risk: str, sheet: str) -> str:
+        """Everything the system knows for this turn, as plain lines for the author: what the customer wanted, what the system did, the
+        pricing decision (if any), the cars involved, and what answer the system is waiting for. No floor price, no VIN."""
+        lines = [f"What the customer wanted: {INTENT_WORDS.get(intent, intent)}."]
+        for t in dbg.tools:
+            lines.append(f"System action: {t}")
+        if dbg.decision:
+            kind, _, rest = dbg.decision.partition(" ")
+            lines.append(f"Pricing decision (final, from the pricing engine): {kind} {rest}. Any amount must be stated as subject to confirmation.")
+        if s.pending:
+            lines.append(f"The system is now waiting for the customer to answer: {PENDING_WORDS.get(s.pending.kind, s.pending.kind)}.")
+        if s.handoff:
+            lines.append("The call is being handed to a colleague.")
+        if risk == "chat" and sheet:
+            lines.append("Car under discussion: " + sheet.splitlines()[0][2:].split(":")[0])
+        return "\n".join(lines)
+
     def _conversational(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str) -> str:
-        """The model writes the reply from the conversation, the fact sheet and the CORE; verify_reply decides if it may be spoken."""
+        """The model authors the reply from the conversation + the facts; verify_reply decides if it may be spoken (else the standard wording)."""
         dbg.risk = risk_of(intent, dbg.state_before, s.state.value, dbg.decision, dbg.tools, bool(s.handoff))
-        if dbg.risk == "low" and intent == "out_of_scope" and "colleague" not in core.lower():
-            dbg.risk = "chat"                      # small talk: friendly wording is fine, facts and claims are not (writer.verify_chat)
+        if intent == "out_of_scope" and "colleague" not in core.lower():
+            dbg.risk = "chat"                      # small talk, even in the middle of a negotiation: friendly, no facts (writer.verify_chat)
         cars = {c.stock_id: c for c in ([self._car(s)] if s.car and self._car(s) else []) + list(s.shown)}
         sheet = fact_sheet(list(cars.values()), self._branch_name)
-        out = self.reply_writer.write(WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history), sheet=sheet))
+        out = self.reply_writer.write(WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history),
+                                                  facts=self._facts(s, intent, dbg, dbg.risk, sheet)))
         dbg.lead_ms = out.ms
         if out.text:
             dbg.draft = out.text
+            dbg.copy_ratio = round(SequenceMatcher(None, out.text.lower(), core.lower()).ratio(), 2)
             return out.text
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"model reply dropped ({out.why_not})"
         return core

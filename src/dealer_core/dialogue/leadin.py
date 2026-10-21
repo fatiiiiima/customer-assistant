@@ -110,7 +110,7 @@ Output only the sentence."""
 
 
 class LeadInBackend(Protocol):
-    def lead_in(self, system: str, user: str) -> str: ...
+    def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None) -> str: ...
 
 
 @dataclass

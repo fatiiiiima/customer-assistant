@@ -81,3 +81,21 @@ Owner direction: the model finds the intent and then writes the reply, using the
   survives; offered options and quoted phrases survive; enumerations keep every item in order; no new commitment words; negation unchanged.
 * Measured live (iGPU, 27 turns of invented conversations): model text used on ~70-78% of turns; turn time p50 ~2.2 s, p95 ~4.5-5.8 s, worst ~6.7 s
   (fast turns 1.1-1.5 s). Long replies and fact-heavy replies are the slow ones. Text mode only; voice latency to be measured next.
+
+## Model-authored replies (CURRENT DEFAULT; supersedes the "conversational mode" notes above)
+Owner direction (repeated): the model finds the intent and then DRAFTS the reply, using history and context. Templates are the fallback only.
+* The code decides what happens (search, car facts, pricing engine, booking rules) and hands the model: the conversation so far (last 10 turns),
+  what the customer just said, FACTS from the system (what they wanted, the actions taken, the pricing decision, what answer the system is waiting
+  for) and the STANDARD WORDING as a reference it must not copy. The model never sees the floor price, VIN or limits, and no longer gets a car's
+  whole spec sheet (it recited it every turn); what a reply may say about a car is what the standard wording says.
+* Replies are sampled (temperature 0.6), so wording varies call to call; facts do not.
+* `verify_reply` checks hard safety, not vocabulary: no invented number or name; no unsupported claim (condition, warranty, sunroof, "no issues"...);
+  the count of results is kept ("6 SUVs", not "a few"); the question the system waits on is still asked (generic "anything else?" is not required);
+  lists keep every item in order; negation of the main message is kept; HIGH-risk replies (price, booking, read-back, hand-off, policy) keep every
+  figure, date, name and key phrase ("subject to confirmation", "colleague"). Small talk has its own check (no facts, no dealership claims, back to cars).
+* A rejected draft gets ONE retry, told why. If only the closing question is missing, the system's own question is appended. Only then the standard wording.
+* Measured live (iGPU, 30 turns of invented conversations; `scripts/measure_authoring.py`): 87% of replies written by the model (ordinary 19/22,
+  price/booking 5/6, small talk 2/2); median similarity to the standard wording 0.73 (1.0 = a copy); turn time median ~2.7 s, p95 ~5 s, worst ~12 s
+  (a retry on a long list). Text only: voice latency is the next measurement.
+* Known weak spots: the model still adds filler now and then (caught by the claim list, but the list is hand-written); greetings can read oddly;
+  a few replies fall back to the standard wording; long replies are slow.

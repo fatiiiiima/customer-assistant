@@ -5,7 +5,7 @@
 - name: "1. Search for an SUV within a budget"
   steps:
     - say: "Hi, I'm looking for an SUV under 150 thousand dirhams"
-      expect: {intent: search_cars, via: rules, state_after: interest, reply_has: ["6 SUVs under 150,000 dirhams", "make"]}
+      expect: {intent: search_cars, via: rules, state_after: interest, reply_has: ["SUV", "150,000", "make"]}
     - say: "Toyota please"
       expect: {intent: search_cars, via: rules, state_after: answering, reply_has: ["Prado", "Land Cruiser", "105,000", "148,000"]}
     - say: "Tell me about the second one"
@@ -22,7 +22,7 @@
     - say: "Does it have a service history?"
       expect: {intent: ask_car_info, via: rules, reply_has: ["service history"]}
     - say: "Has it had any accidents?"
-      expect: {intent: ask_car_info, via: rules, reply_has: ["accident", "colleague"]}
+      expect: {intent: ask_car_info, via: rules, reply_has: ["colleague"]}
 
 - name: "3. Haggle below the floor price"
   steps:
