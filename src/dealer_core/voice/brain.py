@@ -16,10 +16,11 @@ from ..dialogue.machine import DialogueEngine
 
 
 class DealerBrain(FrameProcessor):
-    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, **kwargs) -> None:
+    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine, self.session = engine, engine.new_session()
         self._speak_opening, self._on_turn = speak_opening, on_turn
+        self._on_heard, self._on_say = on_heard, on_say          # transcript hooks: what the caller said / what the agent says (off unless the caller of the pipeline asks)
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
 
@@ -28,7 +29,10 @@ class DealerBrain(FrameProcessor):
         if isinstance(frame, StartFrame):
             await self.push_frame(frame, direction)
             if self._speak_opening:
-                await self.push_frame(TTSSpeakFrame(self.engine.opening(self.session), append_to_context=False))
+                opening = self.engine.opening(self.session)
+                if self._on_say:
+                    self._on_say(opening)
+                await self.push_frame(TTSSpeakFrame(opening, append_to_context=False))
             return
         if isinstance(frame, TranscriptionFrame):
             await self._answer(frame.text)
@@ -38,6 +42,8 @@ class DealerBrain(FrameProcessor):
     async def _answer(self, text: str) -> None:
         """Runs the turn in a worker thread; every sentence goes to the TTS the moment the engine has verified it."""
         async with self._busy:                                      # one turn at a time per caller
+            if self._on_heard:
+                self._on_heard(text)
             t0 = time.perf_counter()
             loop = asyncio.get_running_loop()
             sentences: asyncio.Queue = asyncio.Queue()
@@ -55,6 +61,8 @@ class DealerBrain(FrameProcessor):
                 if isinstance(item, str):
                     if not first_ms:
                         first_ms = (time.perf_counter() - t0) * 1000
+                    if self._on_say:
+                        self._on_say(item)
                     await self.push_frame(TTSSpeakFrame(item, append_to_context=False))
                 else:
                     result = item

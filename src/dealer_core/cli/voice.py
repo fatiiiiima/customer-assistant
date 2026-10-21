@@ -4,7 +4,7 @@ r"""Talk to the agent: microphone in, speaker out. Everything runs on this machi
 
 Use a headset if you can (--headset): with the laptop speaker the microphone hears the agent, so the agent's own voice is ignored while it
 speaks (half duplex) and you cannot interrupt it. Press Ctrl+C to hang up.
-Privacy: the console shows timings and the detected intent only. What you say is not printed or written anywhere unless you pass --show-text.
+Privacy: by default the console shows timings and the detected intent only. What was said is printed with --transcript and written to a file only with --save-transcript.
 """
 from __future__ import annotations
 
@@ -26,6 +26,15 @@ def list_devices() -> None:
         d = p.get_device_info_by_index(i)
         print(f"{i:5d} {d['maxInputChannels']:3d} {d['maxOutputChannels']:4d}  {d['name']}" + ("   <- default input" if i == default_in else "")
               + ("   <- default output" if i == default_out else ""))
+
+
+def _write_transcript(who: str, text: str, to_console: bool, file) -> None:
+    stamp = time.strftime("%H:%M:%S")
+    if to_console:
+        print(f"  {who}: {text}", flush=True)
+    if file:
+        file.write(f"[{stamp}] {who}: {text}\n")
+        file.flush()
 
 
 def _device_names(inp: int | None, out: int | None) -> tuple[str, str]:
@@ -53,7 +62,7 @@ async def run(a: argparse.Namespace) -> None:
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
     print("Loading speech models...", flush=True)
-    parts = load_engines(cfg)
+    parts = load_engines(cfg, a.stt_model)
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=True, audio_out_enabled=True, audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate,
         input_device_index=a.input_device, output_device_index=a.output_device))
@@ -69,8 +78,16 @@ async def run(a: argparse.Namespace) -> None:
     from ..voice.status import StatusLine
 
     probes = {"vad": StatusLine({"vad", "bot"}), "stt": StatusLine({"stt"})}
+    transcript = open(a.save_transcript, "a", encoding="utf-8") if a.save_transcript else None     # only if explicitly asked: the call is otherwise never written to disk
+
+    def heard(text: str) -> None:
+        _write_transcript("YOU  ", text, a.transcript, transcript)
+
+    def said(text: str) -> None:
+        _write_transcript("AGENT", text, a.transcript, transcript)
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=a.stop_secs or cfg.voice.stop_secs,
-                                     half_duplex=not a.headset, on_turn=on_turn, probes=probes)
+                                     half_duplex=not a.headset, on_turn=on_turn, probes=probes,
+                                     on_heard=heard if (a.transcript or transcript) else None, on_say=said if (a.transcript or transcript) else None)
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
     runner = WorkerRunner(handle_sigint=True)
@@ -82,6 +99,8 @@ async def run(a: argparse.Namespace) -> None:
           flush=True)
     t0 = time.time()
     await runner.run()
+    if transcript:
+        transcript.close()
     print(f"\nCall ended after {time.time() - t0:.0f} s, {len(brain.turn_log)} turns.")
 
 
@@ -95,9 +114,12 @@ def main() -> int:
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--template-only", action="store_true", help="fixed wording only (fastest)")
     ap.add_argument("--stop-secs", type=float, help="silence that ends your turn; default voice.stop_secs (0.3)")
+    ap.add_argument("--stt-model", help="OpenVINO Whisper folder under models/ov, e.g. whisper-base-int8-ov (default voice.stt_model)")
     ap.add_argument("--clock", choices=["demo", "real"], default="demo")
     ap.add_argument("--debug", action="store_true", help="print the intent and who wrote the reply after every turn (no transcripts)")
-    ap.add_argument("--show-text", action="store_true", help="also print what the agent said (nothing you say is ever printed)")
+    ap.add_argument("--show-text", action="store_true", help="(older) print what the agent said after each turn; --transcript shows both sides")
+    ap.add_argument("--transcript", action="store_true", help="print what you said (as the speech recognizer heard it) and what the agent says, live")
+    ap.add_argument("--save-transcript", metavar="FILE", help="also append the transcript to this file (it holds exactly what was said, so treat it as personal data)")
     a = ap.parse_args()
     if a.list_devices:
         list_devices()

@@ -303,7 +303,7 @@ def test_a_cut_off_sentence_is_never_spoken_and_the_missing_facts_and_question_a
 def test_a_reaction_without_the_answer_gets_the_answer_added():
     core = "Yes, it's GCC spec. Anything else you'd like to know?"
     said, info = stream("Ah, yes!", core=core, facts="What the customer wanted: they asked about a car.", caller="is it gcc spec")
-    assert said == ["Ah, yes!", "It's GCC spec."] and info["appended"]            # no doubled "yes"
+    assert said == ["Yes!", "It's GCC spec."] and info["appended"]            # the filler "Ah" is gone and "yes" is not said twice
 
 
 def test_the_first_unsafe_sentence_stops_the_stream_and_what_was_safe_stands():

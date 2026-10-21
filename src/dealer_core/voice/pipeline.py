@@ -30,10 +30,10 @@ class VoiceParts:
     tts_engine: PiperSherpa
 
 
-def load_engines(cfg: Config, stt_model: str = "whisper-tiny-int8-ov", voice: str | None = None) -> VoiceParts:
+def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = None) -> VoiceParts:
     """Load and warm the local STT and TTS engines (about 5 s, once per process)."""
     models = ROOT / cfg.app.model_dir
-    stt = WhisperOpenVino(models / "ov" / stt_model, models / "ov_cache", "CPU", hotword_terms(ROOT / cfg.stt.hotwords_file))
+    stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", "CPU", hotword_terms(ROOT / cfg.stt.hotwords_file))
     tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0)
     stt.warm_up()
     tts.warm_up()
@@ -54,13 +54,13 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
-                   speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False):
+                   speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
     vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=stop_secs)))
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
-    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn)
+    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
     stages: list[FrameProcessor] = [source] + ([HalfDuplexGate()] if half_duplex else []) + [vad]
     for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):

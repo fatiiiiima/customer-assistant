@@ -13,7 +13,7 @@ microphone -> [half-duplex gate] -> Silero VAD -> Whisper (OpenVINO, CPU) -> Dea
 |---|---|---|
 | Framework | Pipecat 1.13 (BSD-2), `PipelineWorker` / `WorkerRunner` | the brief; checked against the installed 1.13 API (the old `PipelineTask` / `PipelineRunner` are deprecated) |
 | VAD | Silero (bundled in Pipecat), `stop_secs` 0.3 | local, fast; Smart Turn v3 (also bundled) is NOT wired in yet |
-| STT | OpenVINO Whisper tiny int8 on the **CPU**, car-term prompt | Phase 0b winner; never on the iGPU (it would fight the language model) |
+| STT | OpenVINO Whisper **base** int8 on the **CPU** (`voice.stt_model`; tiny is ~0.1 s faster but mishears more), car-term prompt | Phase 0b winner; never on the iGPU (it would fight the language model) |
 | Brain | `DialogueEngine.handle_stream` | same engine as the text chat |
 | TTS | Piper **libritts_r, speaker 1** (owner choice; `tts.voice` / `tts.speaker` in config) fp32 via sherpa-onnx, CPU | Phase 0b: fastest first audio (40-80 ms here). **CC BY 4.0: attribution required** (LibriTTS-R). espeak-ng phoneme data is GPL-3: internal prototype only |
 | Microphone / speaker | Pipecat `LocalAudioTransport` (PyAudio) | |
@@ -58,3 +58,10 @@ unless you pass `--show-text` (agent side only; nothing the caller says is ever 
 * One caller per process. Handling many callers at once is the next step (the iGPU model and the CPU speech models are shared resources).
 * Arabic is detected and a human is offered; no Arabic speech recognition.
 * Streaming checks sentences one at a time; the whole-reply checks (list order, kept counts) are diagnostics only in voice (shown in `--debug` notes).
+
+## Transcript, pronunciation and fillers (added after first live test)
+* `demo_voice.cmd` shows a live transcript of both sides (`YOU` = what the speech recognizer HEARD, which is also how you spot mishearing; `AGENT` = what the agent says,
+  sentence by sentence). It is not written to disk unless you add `--save-transcript FILE`. Without `--transcript` the console shows only timings and intents.
+* Spoken forms: `AGMC` is spelled "eigh gee em see" for the voice (Piper read it as a word, "aagmic"). Chosen by listening-test: a listener model heard "A G M C"
+  correctly for 3 different speakers with this spelling, but "I G M C" with "ay". Also `GCC` and `SUV(s)`. The transcript keeps the written form (`voice/tts.py: PRONUNCIATIONS`).
+* Interjections ("Ah", "Oh", "Ooh", "Hmm", "Ha", "Wow") at the start of a sentence are removed in code, and the prompts no longer teach them.

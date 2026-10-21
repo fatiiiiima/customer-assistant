@@ -40,6 +40,7 @@ def main() -> int:
     ap.add_argument("--backend", default="openvino_gpu")
     ap.add_argument("--stop-secs", type=float, default=None)
     ap.add_argument("--show-text", action="store_true", help="print what the agent said (kept in memory by the harness only; never logged)")
+    ap.add_argument("--stt-model", default=None, help="OpenVINO Whisper folder under models/ov (default voice.stt_model)")
     ap.add_argument("--mode", default=None, choices=["conversational", "hybrid", "template"])
     a = ap.parse_args()
     cfg = load_config()
@@ -48,7 +49,7 @@ def main() -> int:
     chain.start()
     app = build_app(cfg, chain=chain, clock=demo_clock(cfg), reply_mode=a.mode)
     apply_voice_profile(app, cfg)
-    parts = load_engines(cfg)
+    parts = load_engines(cfg, a.stt_model)
     caller = PiperSherpa(ROOT / "models", "amy")                       # a different voice from the agent's, like the earlier benchmarks
     clips = []
     for line in SCRIPT:
@@ -62,8 +63,9 @@ def main() -> int:
               f"{b.get('intent', '-')} / {b.get('via', '-')} / {b.get('model_written', '-')}  {t.note}"
               + (f"\n       first sentence {b['first_sentence_ms']:.0f} ms; {b['note'][:170]}" if b.get('note') else ""))
     if a.show_text:
-        for line, said in zip(SCRIPT, res.transcripts):
-            print(f"\n  CALLER: {line}\n  AGENT : {said}")
+        print("\nTRANSCRIPT (YOU = what the speech recognizer heard):")
+        for who, text in res.events:
+            print(f"  {who:5s}: {text}")
     ok = [t for t in res.turns if t.total_ms]
     if ok:
         tot = [t.total_ms for t in ok]

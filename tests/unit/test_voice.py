@@ -46,3 +46,36 @@ def test_the_default_voice_is_libritts_r_speaker_1():
 
     cfg = load_config(environ={})
     assert cfg.tts.voice == "libritts_r" and cfg.tts.speaker == 1
+
+
+def test_agmc_and_friends_are_spelled_out_for_the_voice_only():
+    from dealer_core.voice.tts import pronounce
+
+    assert pronounce("Welcome to the AGMC dealership.") == "Welcome to the eigh gee em see dealership."
+    assert pronounce("It's GCC spec.") == "It's gee see see spec."
+    assert pronounce("I have 6 SUVs and an SUV.") == "I have 6 ess you vees and an ess you vee."
+    assert pronounce("Agmc is not changed, nor is a Camry") == "Agmc is not changed, nor is a Camry"       # only the exact written forms
+
+
+def test_leading_fillers_are_removed_but_real_words_are_not():
+    from dealer_core.dialogue.draft import clean_draft, strip_fillers
+
+    assert strip_fillers("Ah, good question.") == "Good question."
+    assert strip_fillers("Oh! The Land Cruiser is white.") == "The Land Cruiser is white."
+    assert strip_fillers("Hmm, not quite.") == "Not quite."
+    assert strip_fillers("Ooh, nice pick.") == "Nice pick."
+    assert strip_fillers("Ah!") == ""
+    assert strip_fillers("Ohio is a state") == "Ohio is a state" and strip_fillers("Wowzers") == "Wowzers" and strip_fillers("Ahead of you") == "Ahead of you"
+    assert clean_draft("SAY: Ah, yes, it is.") == "Yes, it is."
+
+
+def test_the_transcript_line_goes_to_the_console_and_the_file_only_when_asked(tmp_path, capsys):
+    from dealer_core.cli.voice import _write_transcript
+
+    f = open(tmp_path / "t.txt", "w", encoding="utf-8")
+    _write_transcript("YOU  ", "hello there", True, f)
+    _write_transcript("AGENT", "Welcome to AGMC.", False, f)
+    f.close()
+    assert "YOU  : hello there" in capsys.readouterr().out and "AGENT: Welcome to AGMC." not in capsys.readouterr().out
+    text = (tmp_path / "t.txt").read_text(encoding="utf-8")
+    assert "YOU  : hello there" in text and "AGENT: Welcome to AGMC." in text

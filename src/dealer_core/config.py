@@ -170,6 +170,7 @@ class VoiceCfg(_Strict):
     reply_max_words: int = 20
     reply_max_tokens: int = 48
     opener: bool = True                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
 
 

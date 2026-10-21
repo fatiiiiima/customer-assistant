@@ -89,6 +89,7 @@ class TurnTiming:
 class OfflineResult:
     turns: list[TurnTiming] = field(default_factory=list)
     brain_log: list[dict] = field(default_factory=list)
+    events: list[tuple[str, str]] = field(default_factory=list)       # ("YOU" | "AGENT", text) in order, as the live transcript would show
     transcripts: list[str] = field(default_factory=list)              # kept in memory for the caller of the harness only; never logged
 
 
@@ -97,6 +98,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
     log: list[tuple[float, str, str]] = []
     reply_wait = asyncio.Event()
     transcripts: list[str] = []
+    events: list[tuple[str, str]] = []
 
     class Recorder(FrameProcessor):
         async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -111,7 +113,8 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
     probes = {name: Probe(name, log, k) for name, k in kinds.items()}
     source = FileSource(clips, log, reply_wait)
     pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes,
-                                     on_turn=lambda r: transcripts.append(r.reply))
+                                     on_turn=lambda r: transcripts.append(r.reply),
+                                     on_heard=lambda t: events.append(("YOU", t)), on_say=lambda t: events.append(("AGENT", t)))
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
     runner = WorkerRunner(handle_sigint=False)
@@ -130,7 +133,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
         player.cancel()
 
     # reduce the event log into per-turn timings
-    result = OfflineResult(brain_log=list(brain.turn_log), transcripts=transcripts)
+    result = OfflineResult(brain_log=list(brain.turn_log), transcripts=transcripts, events=events)
     ends = [t for t, n, k in log if n == "speech"]
     for i, t_end in enumerate(ends):
         nxt = ends[i + 1] if i + 1 < len(ends) else float("inf")

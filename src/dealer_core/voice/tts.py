@@ -6,6 +6,7 @@ only (open licence decision, see docs/LICENSES.md).
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -15,6 +16,22 @@ import numpy as np
 
 VOICES = {"joe": "vits-piper-en_US-joe-medium", "libritts_r": "vits-piper-en_US-libritts_r-medium", "ljspeech": "vits-piper-en_US-ljspeech-medium",
           "alba": "vits-piper-en_GB-alba-medium", "amy": "vits-piper-en_US-amy-low-int8"}
+
+
+# Written form -> what the voice should say. Piper reads "AGMC" as a word ("aagmic"); the letters are spelled the way they are said.
+PRONUNCIATIONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bAGMC\b"), "eigh gee em see"),
+    (re.compile(r"\bGCC\b"), "gee see see"),
+    (re.compile(r"\bSUVs\b"), "ess you vees"),
+    (re.compile(r"\bSUV\b"), "ess you vee"),
+]
+
+
+def pronounce(text: str) -> str:
+    """The text as it should be SPOKEN (the transcript and the logs keep the written form)."""
+    for pattern, spoken in PRONUNCIATIONS:
+        text = pattern.sub(spoken, text)
+    return text
 
 
 def voice_dir(models: Path, voice: str) -> Path:
@@ -43,7 +60,7 @@ class PiperSherpa:
 
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:
         """The whole utterance as float32 samples."""
-        return np.asarray(self.tts.generate(text, sid=self.speaker, speed=speed).samples, dtype=np.float32)
+        return np.asarray(self.tts.generate(pronounce(text), sid=self.speaker, speed=speed).samples, dtype=np.float32)
 
     def stream(self, text: str, speed: float = 1.0) -> Iterator[np.ndarray]:
         """Chunks of float32 samples as the model produces them (first chunk after about one sentence of work)."""
@@ -55,7 +72,7 @@ class PiperSherpa:
 
         def run():
             try:
-                self.tts.generate(text, sid=self.speaker, speed=speed, callback=cb)
+                self.tts.generate(pronounce(text), sid=self.speaker, speed=speed, callback=cb)
             finally:
                 q.put(None)
 

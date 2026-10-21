@@ -126,14 +126,23 @@ REPLY: I have a 2020 Nissan Patrol with 87,500 kilometres at 138,500 dirhams. Wo
 SAY: Sure, I've got a 2020 Nissan Patrol with 87,500 kilometres, priced at 138,500 dirhams. Want to hear more, or shall we set up a test drive?
 CALLER: do you have a ferrari
 REPLY: I don't have any Ferrari cars at the moment. Would you like to change the budget or the type of car?
-SAY: Ah, no Ferraris in stock at the moment. Would you like to try a different budget or type of car?
+SAY: No Ferraris in stock at the moment. Would you like to try a different budget or type of car?
 CALLER: is it a manual
 REPLY: No, it's automatic, not manual. Anything else you'd like to know?
 SAY: Not quite, it's an automatic rather than a manual. Is there anything else you'd like to know?
 CALLER: what is the capital of france
 REPLY: Sorry, I can only help with our used cars. Is there anything else you'd like to know about this one?
-SAY: Ha, that one is outside my area, I only handle our used cars. Is there anything else you'd like to know about this car?
+SAY: That one is outside my area, I only handle our used cars. Is there anything else you'd like to know about this car?
 Output only the SAY line."""
+
+
+_FILLER = re.compile(r"^(?:(?:ah+|oh+|ooh+|aha|hmm+|hm+|mm+|ha(?:ha)*|wow|um+|uh+|eh)(?:\s*[,!.]+|\s+))+", re.I)
+
+
+def strip_fillers(sentence: str) -> str:
+    """Leading interjections ("Ah, ...", "Oh! ...", "Hmm, ...") carry nothing and sound odd on the phone: removed, never spoken."""
+    out = _FILLER.sub("", sentence).strip()
+    return out[:1].upper() + out[1:] if out else out
 
 
 def clean_draft(raw: str) -> str:
@@ -142,7 +151,7 @@ def clean_draft(raw: str) -> str:
     t = re.sub(r"^(?:SAY|REPLY)\s*:\s*", "", t, flags=re.I)
     t = re.sub(r"\s*[–—]\s*", ", ", t)
     t = t.replace("’", "'").replace("‘", "'").replace("“", "").replace("”", "").replace('"', "")
-    return " ".join(t.split())
+    return strip_fillers(" ".join(t.split()))
 
 
 class DraftWriter:
