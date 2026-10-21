@@ -66,7 +66,7 @@ llm:
 # ---- Text-to-speech (swappable) -----------------------------------------
 tts:
   backend: piper                # piper | kokoro (chosen in Phase 0b)
-  voice: amy                    # Piper voice folder (see voice/tts.py). OWNER CHOICE (best pronunciation). Licence "See URL" (Mimic3): UNCONFIRMED, internal prototype only
+  voice: amy_medium             # Piper voice folder (see voice/tts.py). OWNER CHOICE (Amy). fp32 medium: ~3x faster than the int8 low build. Licence "See URL" (Mimic3) UNCONFIRMED and finetuned from lessac (research-only): internal prototype only
   speaker: 0                    # speaker id inside the voice (amy has one; libritts_r has 904)
   cache_dir: models/tts_cache   # pre-rendered fixed phrases
 

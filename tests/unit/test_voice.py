@@ -45,7 +45,7 @@ def test_the_default_voice_is_amy():
     from dealer_core.config import load_config
 
     cfg = load_config(environ={})
-    assert cfg.tts.voice == "amy" and cfg.tts.speaker == 0
+    assert cfg.tts.voice == "amy_medium" and cfg.tts.speaker == 0
 
 
 def test_agmc_and_friends_are_spelled_out_for_the_voice_only():

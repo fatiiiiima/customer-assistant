@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 VOICES = {"joe": "vits-piper-en_US-joe-medium", "libritts_r": "vits-piper-en_US-libritts_r-medium", "ljspeech": "vits-piper-en_US-ljspeech-medium",
-          "alba": "vits-piper-en_GB-alba-medium", "amy": "vits-piper-en_US-amy-low-int8"}
+          "alba": "vits-piper-en_GB-alba-medium", "amy": "vits-piper-en_US-amy-low-int8", "amy_medium": "vits-piper-en_US-amy-medium"}
 
 
 # Written form -> what the voice should say. Piper reads "AGMC" as a word ("aagmic"); the letters are spelled the way they are said.
