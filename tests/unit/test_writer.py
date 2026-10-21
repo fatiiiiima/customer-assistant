@@ -133,3 +133,41 @@ def test_a_rewrite_may_not_silently_drop_items_from_a_list():
                                                          "any budget", core, "", "", "low"))
     assert verify_reply("Sorry, I can't search on that one, only on make, model, body type, colour, budget, year and mileage. What would you like to change?",
                         "any budget", core, "", "", "low") == []
+
+
+def test_a_low_risk_reply_may_not_restate_numbers_already_said_but_may_when_asked():
+    hist = "I have a red 2018 Ford Mustang with 95,000 kilometres, priced at 120,000 dirhams."
+    sheet = "- 2018 Ford Mustang: red, 95,000 kilometres, 120,000 dirhams, automatic gearbox, petrol, GCC spec, at our Dubai Showroom, available"
+    core = "Yes, it's red. Anything else you'd like to know?"
+    assert any("new number" in p for p in verify_reply("Yes, it's red, with 95,000 kilometres at 120,000 dirhams. What else can I tell you?", "is it red", core, sheet, hist, "low"))
+    assert verify_reply("Yes, that's right, it's red. What else can I tell you about it?", "is it red", core, sheet, hist, "low") == []
+    assert verify_reply("It has 95,000 kilometres. Anything else?", "how many km", "It has 95,000 kilometres. Anything else you'd like to know?", sheet, hist, "low") == []
+
+
+def test_the_same_closing_question_twice_in_a_row_is_rejected():
+    prev = "Yes, it's red. Anything else you'd like to know?"
+    core = "It's automatic. Anything else you'd like to know?"
+    bad = verify_reply("Yes, it is automatic. Anything else you'd like to know?", "is it automatic", core, "", prev, "low", previous_agent=prev)
+    assert any("same closing" in p for p in bad)
+    assert verify_reply("Yes, it is automatic. What else can I tell you?", "is it automatic", core, "", prev, "low", previous_agent=prev) == []
+
+
+CHAT_CORE = "I can only help with our used cars. Do you have any other questions about this one?"
+
+
+def test_small_talk_may_be_friendly_but_must_come_back_to_the_cars():
+    ok = "It really is hot today! Anyway, back to the Altima, is there anything else you'd like to know about the car?"
+    assert verify_reply(ok, "its so hot today", CHAT_CORE, SHEET, HIST, "chat") == []
+    assert verify_reply("Ha, I know, the summers here are intense. Anything else about this car?", "its so hot today", CHAT_CORE, SHEET, HIST, "chat") == []
+
+
+@pytest.mark.parametrize("draft,reason", [
+    ("It is hot! We have free coffee in the showroom, though. Any questions about the car?", "commercial"),
+    ("It is hot! We also provide air conditioned test drives. Any questions about the car?", "claim about the dealership"),
+    ("It is 45 degrees today! Any questions about the car?", "new number"),
+    ("It is hot! Do you want to know about the weather tomorrow?", "come back to the cars"),
+    ("I promise to find you a cool car. Anything else about the car?", "commitment"),
+    ("It is hot! Our manager Ahmed says hello. Anything else about the car?", "new name"),
+])
+def test_small_talk_cannot_carry_facts_or_claims(draft, reason):
+    assert reason in " | ".join(verify_reply(draft, "its so hot today", CHAT_CORE, SHEET, HIST, "chat")), draft

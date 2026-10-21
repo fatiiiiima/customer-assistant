@@ -65,6 +65,8 @@ SITUATIONS: dict[str, Situation] = {s.id: s for s in [
               note="the caller asked for something the search cannot filter on"),
     Situation("no_match", "I don't have any {desc} right now. Would you like to change the budget or the type of car?",
               note="nothing in stock matches"),
+    Situation("no_match_budget", "I don't have any {desc}, but the closest I have is a {car} at {price}. Would you like to take a look?",
+              note="nothing within the budget; the nearest option above it is offered"),
     Situation("no_match_make", "I don't have any {desc} right now. Would you like to try another make, or tell me the type of car you want?",
               note="nothing in stock of the make or model asked for (no budget was mentioned)"),
     Situation("no_match_type", "I don't have any {desc} right now. Would you like to try another colour, type or make?",

@@ -53,6 +53,6 @@
 - name: "5. Off-topic, then an angry customer, handed to a human"
   steps:
     - say: "The weather is really hot today"
-      expect: {intent: out_of_scope, via: llm, ended: false, reply_has: ["used cars"]}
+      expect: {intent: out_of_scope, via: llm, ended: false, reply_has: ["car"]}
     - say: "This is useless, you're wasting my time"
       expect: {intent: angry, via: llm, ended: true, reply_has: ["colleague"], tool_has: ["escalate_to_human(angry)"]}

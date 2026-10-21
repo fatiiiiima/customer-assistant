@@ -54,6 +54,8 @@ TOPICS = {"warranty": r"warrant|guarantee", "financing": r"financ|loan|installme
 INFO_RE = re.compile(r"\b(?:how many (?:km|kilomet\w+|miles|owners|keys)|mileage|colou?r|accident\w*|damage\w*|paint\w*|service history|history|"
                      r"gcc|spec|engine|gearbox|transmission|fuel|petrol|diesel|hybrid|which year|what year|model year|owners?|sunroof|"
                      r"leather|cylinders|horsepower|registration|still available|which branch|where is it)\b")
+OFFER_WORDS = re.compile(r"\b(?:can you (?:do|sell)|could you (?:do|sell)|would you (?:do|take|sell)|will you (?:take|do|sell)|i can (?:do|pay)|i could (?:do|pay)|"
+                         r"i will (?:pay|do)|i ?ll (?:pay|do)|how about|what about|take|offer|pay|sell it|sell the \w+)\b")
 OFFER_CUE = re.compile(r"\b(?:offer|pay|give you|take|do it for|do|how about|what about|go for|can you do|would you do|cash|for)\b")
 SEARCH_CUE = re.compile(r"\b(?:looking for|do you have|have any|any|show me|i want|i need|i am after|after a|interested in|budget|"
                         r"something|cheap|find me|searching)\b")
@@ -127,6 +129,8 @@ class RuleEngine:
                  and not (len(v) == 4 and 1990 <= int(v) <= 2030) and (toks[j] if j < len(toks) else "") not in ex.KM_TOKENS]
         if money and not searchish and (state is State.NEGOTIATING or (state is State.ANSWERING and OFFER_CUE.search(norm))):
             return ok(Intent.MAKE_OFFER, "amount")
+        if car and money and state in (State.ANSWERING, State.NEGOTIATING) and OFFER_WORDS.search(norm) and not any(t in ex.BODY for t in toks):
+            return ok(Intent.MAKE_OFFER, "amount-for-this-car")
         has_km = any((toks[j] if j < len(toks) else "") in ex.KM_TOKENS for _, _, j in spans)
         if searchish or (state in (State.INTEREST, State.GREETING) and spans and (SEARCH_CUE.search(norm) or has_km or PRICE_CUE.search(norm))):
             if ex.search_filters(text, vocab):
@@ -145,6 +149,17 @@ class RuleEngine:
         if GREET_RE.match(norm) and len(words) <= 4:
             return ok(Intent.GREET, "greeting")
         return None
+
+
+def plain_answer(text: str) -> Intent | None:
+    """A bare yes / no ("yes", "sure thanks", "no thanks"), whatever the state. Used when the agent is waiting for an answer."""
+    norm = " ".join(ex.tokens_of(expand(text)))
+    words = norm.split()
+    if YES.search(norm) and all(w in FILLER for w in words):
+        return Intent.CONFIRM_YES
+    if NO.search(norm) and len(words) <= 10:
+        return Intent.CONFIRM_NO
+    return None
 
 
 # `parse_when` needs a clock; the rule only asks "is there a date or time in this?", so any fixed reference works.

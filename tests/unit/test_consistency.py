@@ -36,3 +36,13 @@ def test_unstocked_make_is_found_even_misspelled():
     for said in ("do you have a betley", "bently", "do you have a bently car"):
         assert ex.search_filters(said, vocab).get("make") == "bentley", said
     assert ex.search_filters("do you have a camry", vocab).get("make") == "toyota"
+
+
+def test_angry_needs_a_sign_of_anger():
+    from dealer_core.dialogue.states import Intent, State
+    from dealer_core.nlu.consistency import repair
+
+    assert repair(Intent.ANGRY, State.ANSWERING, "its so hot today")[0] is Intent.OUT_OF_SCOPE
+    assert repair(Intent.ANGRY, State.ANSWERING, "ok whatever")[0] is Intent.OUT_OF_SCOPE
+    for really_angry in ("this is useless", "you are wasting my time", "this is a joke", "i am so frustrated with you", "what a scam"):
+        assert repair(Intent.ANGRY, State.ANSWERING, really_angry)[0] is Intent.ANGRY, really_angry

@@ -62,7 +62,13 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
         if exact:
             out["make"] = max(exact, key=len)
         else:
-            scored = [(g, process.extractOne(g, makes, scorer=fuzz.ratio, score_cutoff=80)) for g in grams if len(g) >= 4]
+            # Fuzzy matching only for names of 5+ letters, same first letter and a similar length: "betley" is a Bentley, but "afford"
+            # must not become "ford" and "that" must not become "audi". Short makes (ford, kia, bmw, audi) match exactly or not at all.
+            def candidates(g: str) -> list[str]:
+                return [m for m in makes if len(m) >= 5 and m[0] == g[0] and abs(len(m) - len(g)) <= 2]
+
+            scored = [(g, process.extractOne(g, candidates(g), scorer=fuzz.ratio, score_cutoff=80) if candidates(g) else None)
+                      for g in grams if len(g) >= 4]
             scored = [(g, m) for g, m in scored if m]
             if scored:
                 out["make"] = max(scored, key=lambda x: x[1][1])[1][0]

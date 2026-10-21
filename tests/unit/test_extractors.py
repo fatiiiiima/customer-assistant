@@ -74,3 +74,12 @@ def test_contact_reports_digits_that_are_not_a_valid_uae_number():
 def test_wants_others():
     assert ex.wants_others("show me other models") and ex.wants_others("I'm not looking for something like that")
     assert not ex.wants_others("the first one")
+
+
+def test_fuzzy_make_matching_does_not_turn_ordinary_words_into_makes():
+    vocab = {"ford": ["mustang"], "toyota": ["camry"], "audi": ["a4"], "nissan": ["patrol"]}
+    for said in ("i cant afford that i can do 100,000", "a hybrid please", "what is that", "can you do better"):
+        assert ex.search_filters(said, vocab).get("make") is None, said
+    assert ex.search_filters("do you have a toyoda", vocab).get("make") == "toyota"            # a real slip of the tongue
+    assert ex.search_filters("do you have a nisan patrol", vocab).get("make") == "nissan"
+    assert ex.search_filters("any ford", vocab).get("make") == "ford"                           # short names match exactly

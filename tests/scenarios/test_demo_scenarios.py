@@ -89,10 +89,13 @@ def test_4_book_a_test_drive_with_read_back(call):
 
 
 def test_5a_off_topic_is_redirected_then_offered_a_human(call):
-    c = call({"the weather is really hot today": "out_of_scope", "what is the capital of france": "out_of_scope", "yes please": "confirm_yes"})
+    c = call({"the weather is really hot today": "out_of_scope", "what is the capital of france": "out_of_scope",
+              "tell me a joke": "out_of_scope", "yes please": "confirm_yes"})
     r = c.say("the weather is really hot today")
     assert "used cars" in r.reply and not r.ended
     r = c.say("what is the capital of france")
+    assert "used cars" in r.reply and not r.ended and c.s.pending is None          # still friendly the second time
+    r = c.say("tell me a joke")
     assert "connect you with a colleague" in r.reply and c.s.pending.kind == "handoff_offer"
     r = c.say("yes please")
     assert r.ended and c.app.escalations.handoffs[-1].reason == EscalationReason.OUT_OF_SCOPE.value
@@ -370,3 +373,42 @@ def test_a_bare_time_after_a_day_was_discussed_means_that_day(call):
     c.say("ok can i come see it saturday afternoon")
     r = c.say("4 pm is good")
     assert "Saturday" in r.reply and "4:00 PM" in r.reply and "Which day" not in r.reply
+
+
+def test_no_match_within_the_budget_offers_the_closest_option_and_yes_shows_it(call):
+    c = call({"yes": "confirm_yes"})
+    c.say("do you have a ford")
+    r = c.say("a ford under 100 thousand")
+    assert "closest I have is a 2018 Ford Mustang at 120,000 dirhams" in r.reply and "budget" not in r.reply.split("closest")[0]
+    r = c.say("yes")
+    assert "Mustang" in r.reply and "120,000" in r.reply
+
+
+def test_i_cant_afford_that_is_a_price_offer_not_a_search_for_fords(call):
+    c = call({"i cant afford that i can do 100,000": "make_offer"})
+    c.say("do you have a ford mustang")
+    r = c.say("i cant afford that i can do 100,000")
+    assert r.debug.intent == "make_offer" and r.debug.decision.startswith("counter") and "subject to confirmation" in r.reply
+
+
+def test_a_plain_yes_answers_a_pending_question_in_any_state_without_asking_the_model(call):
+    c = call({})                                                    # the fake model has no answer for "yes": it must not be asked
+    c.say("do you have a ford")
+    r = c.say("a ford under 100 thousand")                          # nothing: the closest option is offered, state is "interest"
+    assert c.s.state.value == "interest" and c.s.pending is not None
+    r = c.say("yes")
+    assert r.debug.via == "rules:pending-answer" and "Mustang" in r.reply and c.clf.calls == []
+
+
+def test_an_offer_with_the_make_in_it_is_still_an_offer_on_the_car_in_focus(call):
+    c = call({"can you bot sell the ford at 100,000": "search_cars"})        # the model says "search"; the safeguard corrects it
+    c.say("do you have a ford mustang")
+    r = c.say("can you bot sell the ford at 100,000")
+    assert r.debug.intent == "make_offer" and r.debug.decision.startswith("counter") and "subject to confirmation" in r.reply
+
+
+def test_an_offer_naming_a_different_make_is_a_search_for_that_make(call):
+    c = call({"can you do the nissan at 100,000": "make_offer"})
+    c.say("do you have a ford mustang")
+    r = c.say("can you do the nissan at 100,000")
+    assert "Nissan" in r.reply and not r.debug.decision

@@ -29,6 +29,8 @@ from ..tools.service import DealerService
 from . import focus as F
 from . import templates as T
 from .draft import DraftWriter
+from ..nlu.pipeline import Understanding
+from ..nlu.rules import plain_answer
 from .leadin import LeadInWriter
 from .writer import ReplyWriter, WriterInput, fact_sheet, risk_of
 from .phrasebook import Phrasebook
@@ -91,7 +93,8 @@ class DialogueEngine:
             dbg.note = "session already ended"
             return TurnResult(T.HANDOFF_WAIT if s.handoff else self._say(s, "goodbye"), dbg, True)
         try:
-            u = self.nlu.understand(s.state, s.car, text, s.last_agent())
+            answer = plain_answer(text) if s.pending else None
+            u = Understanding(answer, "rules", rule="pending-answer") if answer else self.nlu.understand(s.state, s.car, text, s.last_agent())
         except (BackendError, RuntimeError) as e:        # every NLU backend failed: never leave the caller hanging
             dbg.note = f"NLU unavailable: {e}"
             reply = self._handoff(s, dbg, EscalationReason.SYSTEM_FAULT, "I'm having a technical problem. Let me connect you with a colleague.")
@@ -107,6 +110,8 @@ class DialogueEngine:
     def _conversational(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str) -> str:
         """The model writes the reply from the conversation, the fact sheet and the CORE; verify_reply decides if it may be spoken."""
         dbg.risk = risk_of(intent, dbg.state_before, s.state.value, dbg.decision, dbg.tools, bool(s.handoff))
+        if dbg.risk == "low" and intent == "out_of_scope" and "colleague" not in core.lower():
+            dbg.risk = "chat"                      # small talk: friendly wording is fine, facts and claims are not (writer.verify_chat)
         cars = {c.stock_id: c for c in ([self._car(s)] if s.car and self._car(s) else []) + list(s.shown)}
         sheet = fact_sheet(list(cars.values()), self._branch_name)
         out = self.reply_writer.write(WriterInput(caller=text, core=core, risk=dbg.risk, history=list(s.history), sheet=sheet))
@@ -296,7 +301,7 @@ class DialogueEngine:
     # ------------------------------------------------------------------------------------------------ small talk, policy, off-topic
     def _off_topic(self, s: Session) -> str:
         s.oos_streak += 1
-        if s.oos_streak >= 2:
+        if s.oos_streak >= 3:                 # chat twice, then offer a human (a person would not give up on the second remark)
             s.pending = Pending("handoff_offer")
             return "I can only help with our used cars. Would you like me to connect you with a colleague?"
         return self._say(s, "off_topic_ask_car" if s.car is None else "off_topic_this_one")
@@ -395,6 +400,13 @@ class DialogueEngine:
                 s.pending = Pending("search_other", self._other_filters(s, flt["color"]))
                 return self._say(s, "no_match_colour", desc=T.describe_filters({k: v for k, v in flt.items() if k != "color"}),
                                  color=flt["color"], have=have)
+        if flt.get("max_price"):
+            without = SearchFilters(**{**f.model_dump(), "max_price": None})
+            nearest = self.svc.inventory.search(without, 1)             # cheapest first: the closest option above the budget
+            if nearest:
+                c = nearest[0].view()
+                s.pending = Pending("search_other", {k: v for k, v in flt.items() if k != "max_price"})
+                return self._say(s, "no_match_budget", desc=T.describe_filters(flt), car=T.car_name(c), price=T.money(c.price))
         if any(flt.get(k) for k in ("max_price", "year_min", "max_km")):
             return self._say(s, "no_match", desc=T.describe_filters(flt))
         if flt.get("make") or flt.get("model"):
@@ -442,6 +454,9 @@ class DialogueEngine:
         car = self._resolve_car(s, text)
         if car is None:
             return self._ask_which(s)
+        named = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
+        if named.get("make") and named["make"] != car.make.lower():          # an offer on a DIFFERENT make is a request to look at that one
+            return self._search(s, text, dbg)
         s.state = State.NEGOTIATING
         if intent is Intent.ASK_LOWEST_PRICE:
             return self._price_for(s, None, dbg)

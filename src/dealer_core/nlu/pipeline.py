@@ -49,6 +49,6 @@ class NluPipeline:
         if self.classifier is None:
             raise RuntimeError("no LLM backend configured and the rules declined this utterance")
         res = self.classifier.classify(state, car, text, last_agent)       # BackendError propagates: the engine hands off to a human
-        intent, why = repair(res.intent, state, text)
+        intent, why = repair(res.intent, state, text, bool(car))
         return Understanding(intent, "llm", backend=res.backend, ms=(time.perf_counter() - t0) * 1000,
                              repaired=f"{res.intent.value} -> {intent.value}: {why}" if why else None)

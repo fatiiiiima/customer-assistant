@@ -23,9 +23,25 @@ _BARGAIN = re.compile(r"lowest|best|cheaper|cheap|discount|less|negotiat|deal|fi
                       r"special|bargain|take off|off the|hundred|thousand|\bk\b")
 
 
-def repair(intent: Intent, state: State, text: str) -> tuple[Intent, str | None]:
+_ANGER = re.compile(r"\b(?:useless|ridiculous|rip ?off|wast(?:e|ing|ed)|stupid|idiot|unacceptable|terrible|awful|fed up|sick of|scam|liar|nonsense|hate|damn|"
+                    r"shut up|crap|joke|angry|furious|annoy|frustrat|complain|disgust|rubbish|worst|pathetic|outrageous|disappoint|upset|"
+                    r"not happy|unhappy|fuck|shit|wtf|are you serious|what the|sucks|garbage|horrible|pointless|bullshit|lying|cheat|fraud|robbery)")
+
+
+_OFFER_WORDS = re.compile(r"can you (?:do|sell)|could you (?:do|sell)|would you (?:do|take|sell)|will you (?:take|do|sell)|i can (?:do|pay)|"
+                          r"i could (?:do|pay)|how about|what about|take|offer|pay|sell")
+
+
+def repair(intent: Intent, state: State, text: str, has_car: bool = False) -> tuple[Intent, str | None]:
     """Returns (intent, reason). `reason` is None when nothing was changed."""
     allowed = STATE_SPEC[state][0] if state in STATE_SPEC else []
+    # "angry" ends the call with a hand-off, so it needs a sign of anger in the words. "its so hot today" is small talk, not a complaint.
+    if intent is Intent.ANGRY and Intent.OUT_OF_SCOPE in allowed and not _ANGER.search(text.lower()):
+        return Intent.OUT_OF_SCOPE, "no sign of anger in the words, so it is not an angry customer"
+    # An amount said with offer wording about the car being discussed is an offer, not a search ("can you sell the ford at 100,000").
+    if intent is Intent.SEARCH_CARS and has_car and Intent.MAKE_OFFER in allowed and ex.offer_amount(text) is not None \
+            and _OFFER_WORDS.search(text.lower()):
+        return Intent.MAKE_OFFER, "an amount with offer wording about the car in focus is an offer"
     # "ask_lowest_price" means asking for the best/lowest price WITHOUT naming one. If the caller names an amount it is an offer.
     if intent is Intent.ASK_LOWEST_PRICE and Intent.MAKE_OFFER in allowed and ex.offer_amount(text) is not None:
         return Intent.MAKE_OFFER, "named an amount, so it is an offer, not a lowest-price question"
