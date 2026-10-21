@@ -134,6 +134,10 @@ class RuleEngine:
         if car and money and state in (State.ANSWERING, State.NEGOTIATING) and OFFER_WORDS.search(norm) and not any(t in ex.BODY for t in toks):
             return ok(Intent.MAKE_OFFER, "amount-for-this-car")
         has_km = any((toks[j] if j < len(toks) else "") in ex.KM_TOKENS for _, _, j in spans)
+        if money and state in (State.INTEREST, State.GREETING) and not car:         # "a hundred thousand" / "under 100,000 dirhams" alone: the answer to "what's your budget?"
+            counted = {k for _, i, j in spans for k in range(i, j)}
+            if all(k in counted or t in BUDGET_FILLER for k, t in enumerate(toks)) and not has_km:
+                return ok(Intent.SEARCH_CARS, "bare-budget")
         if searchish or (state in (State.INTEREST, State.GREETING) and spans and (SEARCH_CUE.search(norm) or has_km or PRICE_CUE.search(norm))):
             if ex.search_filters(text, vocab):
                 return ok(Intent.SEARCH_CARS, "filters")
@@ -151,6 +155,9 @@ class RuleEngine:
         if GREET_RE.match(norm) and len(words) <= 4:
             return ok(Intent.GREET, "greeting")
         return None
+
+
+BUDGET_FILLER = frozenset("under around about up to budget my is its it's dirham dirhams aed within maximum max below less than roughly approximately almost at most of a the".split())
 
 
 def plain_answer(text: str) -> Intent | None:
