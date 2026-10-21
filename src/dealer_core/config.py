@@ -172,6 +172,9 @@ class VoiceCfg(_Strict):
     reply_max_words: int = 20
     reply_max_tokens: int = 48
     opener: bool = True                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
+    smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
+    smart_fallback_secs: float = 1.0              # with smart_turn: silence after which the turn ends even if the model says "still going"
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
 

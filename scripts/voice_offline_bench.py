@@ -35,12 +35,17 @@ SCRIPT = ["I'm looking for an SUV under one hundred and fifty thousand dirhams",
           "Is it GCC spec", "Can you do one hundred and twenty thousand", "How about one hundred and twenty five thousand"]
 
 
+PAUSE_SCRIPT = ["Hello, I am looking for a|Toyota SUV", "Is the first one|an automatic", "Can I book a test drive|for tomorrow afternoon"]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", default="openvino_gpu")
     ap.add_argument("--stop-secs", type=float, default=None)
     ap.add_argument("--show-text", action="store_true", help="print what the agent said (kept in memory by the harness only; never logged)")
     ap.add_argument("--stt-model", default=None, help="OpenVINO Whisper folder under models/ov (default voice.stt_model)")
+    ap.add_argument("--smart-turn", action="store_true", help="end turns with Smart Turn v3 (short VAD silence + model) instead of a fixed silence")
+    ap.add_argument("--pauses", action="store_true", help="use a script where the caller pauses 0.7 s mid-sentence (a fixed silence cuts these off)")
     ap.add_argument("--mode", default=None, choices=["conversational", "hybrid", "template"])
     a = ap.parse_args()
     cfg = load_config()
@@ -52,11 +57,14 @@ def main() -> int:
     parts = load_engines(cfg, a.stt_model)
     caller = PiperSherpa(ROOT / "models", "amy")                       # a different voice from the agent's, like the earlier benchmarks
     clips = []
-    for line in SCRIPT:
-        samples = soxr.resample(caller.synthesize(line), caller.sample_rate, 16000)
+    for line in (PAUSE_SCRIPT if a.pauses else SCRIPT):
+        pieces = [soxr.resample(caller.synthesize(part), caller.sample_rate, 16000) for part in line.split("|")]
+        gap = np.zeros(int(16000 * 0.7), dtype=np.float32)               # "|" marks a 0.7 s pause inside the sentence
+        samples = np.concatenate([x for i, piece in enumerate(pieces) for x in ((gap, piece) if i else (piece,))])
         clips.append((np.clip(samples, -1, 1) * 32767).astype(np.int16))
     print(f"running {len(clips)} turns in real time (this takes a couple of minutes)...", flush=True)
-    res = asyncio.run(run_offline(app, parts, clips, stop_secs=a.stop_secs or cfg.voice.stop_secs))
+    res = asyncio.run(run_offline(app, parts, clips, stop_secs=a.stop_secs or (cfg.voice.smart_stop_secs if a.smart_turn else cfg.voice.stop_secs),
+                                  smart_turn=a.smart_turn, smart_fallback_secs=cfg.voice.smart_fallback_secs))
     print(f"\n{'turn':>4} {'endpoint':>9} {'STT':>6} {'brain':>7} {'TTS 1st':>8} {'TOTAL':>7}   intent / by / model-written")
     for t, b in zip(res.turns, res.brain_log + [{}] * len(res.turns)):
         print(f"{t.index + 1:4d} {t.endpointing_ms:8.0f}ms {t.stt_ms:5.0f}ms {t.brain_ms:6.0f}ms {t.tts_first_ms:7.0f}ms {t.total_ms:6.0f}ms   "

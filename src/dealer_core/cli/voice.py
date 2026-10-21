@@ -86,7 +86,8 @@ async def run(a: argparse.Namespace) -> None:
         else:
             print(f"  [first sound {total:.1f} s after you finished: {detail}]", flush=True)
 
-    stop_secs = a.stop_secs or cfg.voice.stop_secs
+    smart = cfg.voice.smart_turn and not a.fixed_silence
+    stop_secs = a.stop_secs or (cfg.voice.smart_stop_secs if smart else cfg.voice.stop_secs)
     clock = TurnClock(stop_secs, timing)
     probes = {"vad": StatusLine({"vad", "bot"}, clock=clock, stage="vad"), "stt": StatusLine({"stt"}, clock=clock, stage="stt"),
               "brain": StatusLine(set(), clock=clock, stage="brain")}
@@ -97,7 +98,7 @@ async def run(a: argparse.Namespace) -> None:
 
     def said(text: str) -> None:
         _write_transcript("AGENT", text, a.transcript, transcript)
-    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=a.stop_secs or cfg.voice.stop_secs,
+    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=stop_secs, smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs,
                                      half_duplex=not a.headset, on_turn=on_turn, probes=probes,
                                      on_heard=heard if (a.transcript or transcript) else None, on_say=said if (a.transcript or transcript) else None)
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
@@ -125,6 +126,7 @@ def main() -> int:
     ap.add_argument("--backend", help="llm backend from config; default llm.text_backend")
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--template-only", action="store_true", help="fixed wording only (fastest)")
+    ap.add_argument("--fixed-silence", action="store_true", help="end your turn after a fixed silence instead of Smart Turn (voice.smart_turn)")
     ap.add_argument("--stop-secs", type=float, help="silence that ends your turn; default voice.stop_secs (0.3)")
     ap.add_argument("--stt-model", help="OpenVINO Whisper folder under models/ov, e.g. whisper-base-int8-ov (default voice.stt_model)")
     ap.add_argument("--clock", choices=["demo", "real"], default="demo")

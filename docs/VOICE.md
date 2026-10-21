@@ -84,3 +84,12 @@ fixed prices (no negotiation), nothing sent by message (`config/portal.yaml`). T
 car cards, and the booking (saved by the site's own `bookTestDrive`). Wire format: `src/dealer_core/server/protocol.py`.
 `scripts/portal_call.py` is a synthetic caller (`--calls N` for several at once). Known limits: no barge-in yet; navigating to another page ends the call;
 HTTPS pages need `wss://` (a TLS front); the reply writer keeps a little per-engine state shared between calls (to fix before the load test).
+
+## Smart Turn (end-of-turn detection)
+
+On by default (`voice.smart_turn`); `--fixed-silence` (voice CLI and server) turns it off. A short VAD silence (0.2 s) proposes the end of your turn, Pipecat's
+bundled smart-turn v3 model (BSD-2, local, CPU) decides "finished" or "still going", and a held turn ends anyway after 1.0 s of silence.
+Measured with the synthetic caller, on battery, 6 turns each (`scripts/voice_offline_bench.py --smart-turn [--pauses]`): median end-of-speech to first sound
+1375 ms (fixed 0.35 s silence) -> 1195 ms. With a 0.7 s pause inside the sentence, fixed silence cut 2 of 3 sentences in half ("Hello, I'm looking for" was
+answered as a greeting); Smart Turn kept 2 of 3 whole (it ended "Can I book a test drive?" before "for tomorrow afternoon", a complete question). Not yet
+tried with a real voice and microphone.

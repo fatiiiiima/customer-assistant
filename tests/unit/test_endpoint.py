@@ -1,0 +1,60 @@
+"""SmartEndpointer: a stop is let through only when the turn model says complete (or the fallback silence passes); a held stop swallows the next start."""
+import asyncio
+
+from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState
+from pipecat.frames.frames import InputAudioRawFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+from pipecat.processors.frame_processor import FrameDirection
+
+from dealer_core.voice.endpoint import SmartEndpointer
+
+
+class FakeAnalyzer:
+    def __init__(self, verdicts, fallback_after=None):
+        self.verdicts, self.fallback_after, self.silent = list(verdicts), fallback_after, 0
+
+    def set_sample_rate(self, rate):
+        pass
+
+    async def analyze_end_of_turn(self):
+        return self.verdicts.pop(0), None
+
+    def append_audio(self, buf, is_speech):
+        self.silent = 0 if is_speech else self.silent + 1
+        return EndOfTurnState.COMPLETE if self.fallback_after and self.silent >= self.fallback_after else EndOfTurnState.INCOMPLETE
+
+
+def run(analyzer, frames):
+    ep = SmartEndpointer(analyzer=analyzer)
+    out = []
+
+    async def push(frame, direction=FrameDirection.DOWNSTREAM):
+        out.append(frame)
+    ep.push_frame = push
+
+    async def go():
+        for f in frames:
+            await ep.process_frame(f, FrameDirection.DOWNSTREAM)
+    asyncio.run(go())
+    return ep, [type(f).__name__ for f in out if not isinstance(f, InputAudioRawFrame)]
+
+
+def audio():
+    return InputAudioRawFrame(audio=b"\0" * 640, sample_rate=16000, num_channels=1)
+
+
+def test_complete_turn_passes_through():
+    _, seen = run(FakeAnalyzer([EndOfTurnState.COMPLETE]), [VADUserStartedSpeakingFrame(start_secs=0.2), audio(), VADUserStoppedSpeakingFrame(stop_secs=0.2)])
+    assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"]
+
+
+def test_incomplete_turn_is_held_and_the_continuation_is_one_segment():
+    ep, seen = run(FakeAnalyzer([EndOfTurnState.INCOMPLETE, EndOfTurnState.COMPLETE]),
+                   [VADUserStartedSpeakingFrame(start_secs=0.2), audio(), VADUserStoppedSpeakingFrame(stop_secs=0.2), audio(),
+                    VADUserStartedSpeakingFrame(start_secs=0.2), audio(), VADUserStoppedSpeakingFrame(stop_secs=0.2)])
+    assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"] and ep.held == 1
+
+
+def test_fallback_silence_ends_a_held_turn():
+    _, seen = run(FakeAnalyzer([EndOfTurnState.INCOMPLETE], fallback_after=3),
+                  [VADUserStartedSpeakingFrame(start_secs=0.2), audio(), VADUserStoppedSpeakingFrame(stop_secs=0.2), audio(), audio(), audio(), audio()])
+    assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"]

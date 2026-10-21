@@ -94,7 +94,7 @@ class OfflineResult:
 
 
 async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_secs: float = 0.35, speak_opening: bool = False,
-                      timeout_s: float = 240.0) -> OfflineResult:
+                      timeout_s: float = 240.0, smart_turn: bool = False, smart_fallback_secs: float = 1.0) -> OfflineResult:
     log: list[tuple[float, str, str]] = []
     reply_wait = asyncio.Event()
     transcripts: list[str] = []
@@ -112,7 +112,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
     kinds = {"vad": (VADUserStoppedSpeakingFrame,), "stt": (TranscriptionFrame,), "brain": (TTSSpeakFrame,), "tts": (TTSAudioRawFrame,)}
     probes = {name: Probe(name, log, k) for name, k in kinds.items()}
     source = FileSource(clips, log, reply_wait)
-    pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes,
+    pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes, smart_turn=smart_turn, smart_fallback_secs=smart_fallback_secs,
                                      on_turn=lambda r: transcripts.append(r.reply),
                                      on_heard=lambda t: events.append(("YOU", t)), on_say=lambda t: events.append(("AGENT", t)))
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
