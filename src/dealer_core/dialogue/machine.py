@@ -245,6 +245,11 @@ class DialogueEngine:
             if yes:
                 return self._start_booking(s, "", dbg)
             return "No problem. Is there anything else I can help with?"
+        if p.kind == "search_other":
+            if yes:
+                s.filters, s.narrow_asks, s.shown, s.car = dict(p.value), 0, [], None
+                return self._search(s, "", dbg, force=True)
+            return "No problem. What kind of car are you looking for?"
         if p.kind == "move_existing":
             if yes:
                 s.rescheduling, s.state = p.value, State.SLOT
@@ -262,17 +267,21 @@ class DialogueEngine:
 
     def _policy(self, s: Session, text: str) -> str:
         topic = next((t for t, rx in TOPICS.items() if re.search(rx, " ".join(ex.tokens_of(text)))), None)
+        if topic is None and (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS):
+            return self._ask_which(s)                   # "is it white?" with no car chosen: a car question, not a policy question
         label = T.TOPIC_LABEL.get(topic or "")
         s.pending = Pending("handoff_offer")
         what = f"our confirmed {label} details" if label else "confirmed details on that"
         return f"I don't have {what} with me. Would you like me to connect you with a colleague?"
 
     # ------------------------------------------------------------------------------------------------ search
-    def _search(self, s: Session, text: str, dbg: TurnDebug) -> str:
+    def _search(self, s: Session, text: str, dbg: TurnDebug, force: bool = False) -> str:
         vocab = self.svc.inventory.vocabulary()
         new = ex.search_filters(text, vocab)
         others = ex.wants_others(text)
-        if ex.wants_listing(text) and s.filters and s.narrow_asks > 0:
+        if force:                                   # a "yes, look for one" follow-up: search the filters as they are
+            pass
+        elif ex.wants_listing(text) and s.filters and s.narrow_asks > 0:
             s.narrow_asks = 2                       # the caller does not want more questions: read out the matches
             new = {}
         elif not new and not others and s.filters and ex.points_at_a_car(text):
@@ -289,6 +298,12 @@ class DialogueEngine:
             if not s.filters:
                 s.car, s.shown, s.state, s.narrow_asks = None, [], State.INTEREST, 0
                 return self._say(s, "ask_instead")
+        # "I want a red car" / "an SUV" with no make or model, said about nothing in particular, is a fresh request: the make, model
+        # and body type of the earlier search no longer apply. ("it", "this" or "that" would mean the car in focus.)
+        refers_to_car = bool(set(ex.tokens_of(text)) & {"it", "this", "that", "one"})
+        if (new.get("color") or new.get("body_type")) and not new.get("make") and not new.get("model") and s.narrow_asks == 0                 and not refers_to_car and not force:
+            for k in ("make", "model", "body_type"):
+                s.filters.pop(k, None)
         if new.get("model") or (new.get("make") and s.narrow_asks == 0):
             s.filters = dict(new)
             s.excluded.clear()
@@ -307,7 +322,7 @@ class DialogueEngine:
         s.state = State.ANSWERING
         if res.total == 0:
             s.state, s.shown, s.car = State.INTEREST, [], None
-            return self._say(s, "no_match", desc=T.describe_filters(s.filters))
+            return self._no_match(s, f)
         if res.needs_narrowing and s.narrow_asks < 2:
             s.narrow_asks += 1
             s.state, s.shown, s.car = State.INTEREST, [], None
@@ -325,6 +340,34 @@ class DialogueEngine:
                 reply = reply.replace("I have", "No, I have", 1)
         return reply
 
+    def _other_filters(self, s: Session, color: str) -> dict:
+        """What to search if the caller says yes to "shall I look for a red car instead?": the colour and the budget, year, mileage."""
+        keep = {k: v for k, v in s.filters.items() if k in ("max_price", "year_min", "max_km")}
+        return {**keep, "color": color}
+
+    def _no_match(self, s: Session, f: SearchFilters) -> str:
+        """Nothing matches: say so in terms of what was asked, and offer a next step that fits (not always "change the budget")."""
+        flt = s.filters
+        if flt.get("color") and (flt.get("make") or flt.get("model") or flt.get("body_type")):
+            plain = SearchFilters(**{**f.model_dump(), "color": None})
+            others = self.svc.inventory.search(plain, 100)       # every match without the colour, so the colours named are all of them
+            if others:                            # the model exists, just not in that colour: say what colour it IS
+                colours = sorted({c.color for c in others})
+                if len(others) == 1:
+                    have = f"the one I have is {colours[0]}"
+                elif len(colours) <= 3:
+                    have = f"the ones I have are {', '.join(colours[:-1])} and {colours[-1]}" if len(colours) > 1 else f"the ones I have are {colours[0]}"
+                else:
+                    have = "the ones I have are in other colours"
+                s.pending = Pending("search_other", self._other_filters(s, flt["color"]))
+                return self._say(s, "no_match_colour", desc=T.describe_filters({k: v for k, v in flt.items() if k != "color"}),
+                                 color=flt["color"], have=have)
+        if any(flt.get(k) for k in ("max_price", "year_min", "max_km")):
+            return self._say(s, "no_match", desc=T.describe_filters(flt))
+        if flt.get("make") or flt.get("model"):
+            return self._say(s, "no_match_make", desc=T.describe_filters(flt))
+        return self._say(s, "no_match_type", desc=T.describe_filters(flt))
+
     # ------------------------------------------------------------------------------------------------ car questions
     def _car_info(self, s: Session, text: str, dbg: TurnDebug) -> str:
         car = self._resolve_car(s, text)
@@ -336,7 +379,7 @@ class DialogueEngine:
         branch = self._branch_name(car)
         claims = ex.claims_in_question(text)
         if claims:
-            return self._confirm_claims(car, claims)
+            return self._confirm_claims(s, car, claims)
         if not keys:
             return T.car_summary(car, branch)
         if "accident" in keys:
@@ -346,8 +389,7 @@ class DialogueEngine:
         clauses = [c for k in keys[:2] if (c := T.attribute_clause(k, car, branch))]
         return T.cap(clauses[0]) + (f" and {clauses[1]}" if len(clauses) > 1 else "") + ". Anything else you'd like to know?"
 
-    @staticmethod
-    def _confirm_claims(car, claims: dict[str, str]) -> str:
+    def _confirm_claims(self, s: Session, car, claims: dict[str, str]) -> str:
         """A yes/no question about the car ("is it red?"): answer yes or no first, then say what it actually is."""
         actual = {"color": car.color, "year": str(car.year), "transmission": car.transmission.lower(), "fuel": car.fuel.lower(),
                   "spec": car.regional_spec.upper()}
@@ -355,6 +397,9 @@ class DialogueEngine:
         wrong = [k for k, v in claims.items() if actual[k].lower() != v.lower()]
         if wrong:
             k = wrong[0]
+            if k == "color":
+                s.pending = Pending("search_other", self._other_filters(s, claims[k]))
+                return f"No, it's {actual[k]}, not {claims[k]}. Would you like me to look for a {claims[k]} car instead?"
             return f"No, it's {words[k].format(actual[k])}, not {words[k].format(claims[k])}. Anything else you'd like to know?"
         said = " and ".join(words[k].format(actual[k]) for k in list(claims)[:2])
         return f"Yes, it's {said}. Anything else you'd like to know?"

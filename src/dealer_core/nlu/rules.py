@@ -57,6 +57,7 @@ OFFER_CUE = re.compile(r"\b(?:offer|pay|give you|take|do it for|do|how about|wha
 SEARCH_CUE = re.compile(r"\b(?:looking for|do you have|have any|any|show me|i want|i need|i am after|after a|interested in|budget|"
                         r"something|cheap|find me|searching)\b")
 PRICE_CUE = re.compile(r"\b(?:under|below|less than|up to|max|maximum|budget|around|about|within|not more than|upto)\b")
+FIND_CUE = re.compile(r"\b(?:do you have|have you got|got any|i want|i need|looking for|show me|do you sell|any other|something else)\b")
 WANTS_ANOTHER = re.compile(r"\b(?:(?:another|a different|different|other|any other) (?:car|cars|one|ones|option|options|model|models|vehicle)|"
                            r"something (?:else|different)|show me (?:something|others|other)|i want another|looking for another)\b")
 ORDINAL_RE =re.compile(r"\b(?:first|1st|second|2nd|third|3rd|last) one\b")
@@ -113,9 +114,11 @@ class RuleEngine:
             return ok(Intent.GIVE_SLOT, "when")
         if state is State.CONTACT and ex.contact(text).phone:
             return ok(Intent.GIVE_CONTACT, "phone")
+        if car and not FIND_CUE.search(norm) and (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS):
+            return ok(Intent.ASK_CAR_INFO, "about-this-car")       # "what colour is the camry, is it red": a question about THIS car
         vocab = self.vocabulary()
         vehicle = ex.find_vehicle(toks, vocab)
-        searchish = bool(vehicle) or any(t in ex.BODY for t in toks)
+        searchish = bool(vehicle) or any(t in ex.BODY for t in toks) or bool(FIND_CUE.search(norm) and any(t in ex.COLORS for t in toks))
         money = [v for v, i, j in spans if v.isdigit() and int(v) >= 1000 and not v.startswith("0")
                  and not (len(v) == 4 and 1990 <= int(v) <= 2030) and (toks[j] if j < len(toks) else "") not in ex.KM_TOKENS]
         if money and not searchish and (state is State.NEGOTIATING or (state is State.ANSWERING and OFFER_CUE.search(norm))):

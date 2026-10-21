@@ -172,7 +172,7 @@ def test_colour_is_a_real_filter_and_an_honest_no_match(call):
     c = call({"it should be red": "search_cars", "make it automatic": "search_cars", "what about black": "search_cars"})
     c.say("SUV under 150 thousand")
     r = c.say("it should be red")
-    assert "don't have any red SUVs under 150,000" in r.reply and c.s.filters["color"] == "red"
+    assert "don't have SUVs under 150,000 dirhams in red" in r.reply and "look for a red car" in r.reply and c.s.filters["color"] == "red"
     r = c.say("what about black")
     assert c.s.filters["color"] == "black" and "Patrol" in r.reply          # the only black SUV under 150,000
 
@@ -241,3 +241,54 @@ def test_pointing_at_a_car_with_nothing_on_screen_asks_which_one(call):
     c.say("do you have a bently")                         # no match: nothing on screen
     c.say("an suv under 150 thousand")                    # 6 matches: a narrowing question, still nothing read out
     assert "Which car" in c.say("tell me about the second one").reply
+
+
+def test_user_transcript_bentley_has_no_budget_question(call):
+    c = call({})
+    r = c.say("do u have bentleys")
+    assert "Bentley" in r.reply and "budget" not in r.reply and ("make" in r.reply or "type of car" in r.reply)
+
+
+def test_user_transcript_colour_question_is_about_the_camry_in_focus(call):
+    c = call({"yes": "confirm_yes"})
+    c.say("do u have camry")
+    r = c.say("what color is the camry is it red")
+    assert r.debug.intent == "ask_car_info" and r.reply.startswith("No, it's white, not red.")
+    assert "look for a red car" in r.reply and c.s.pending is not None and c.s.car == "S1060"
+    r = c.say("yes")                                                  # follow-through: search red cars, any make
+    assert r.debug.intent == "confirm_yes" and ("Mustang" in r.reply or "Altima" in r.reply) and "Camry" not in r.reply
+
+
+def test_user_transcript_a_red_car_is_a_fresh_search_not_red_camrys(call):
+    c = call({"i want a red car": "search_cars"})
+    c.say("do u have camry")
+    r = c.say("i want a red car")
+    assert "Camry" not in r.reply and ("Altima" in r.reply or "Mustang" in r.reply)
+    assert "make" not in c.s.filters and "model" not in c.s.filters and c.s.filters.get("color") == "red"
+
+
+def test_colour_no_match_names_every_colour_and_does_not_invent_one(call):
+    c = call({})
+    c.say("an suv under 150 thousand")
+    r = c.say("red suvs")
+    # the 6 SUVs under 150,000 are white, black, grey, silver, blue and brown: more than three colours, so it says so rather than listing a subset
+    assert "in red" in r.reply and "in other colours" in r.reply and "look for a red car" in r.reply
+    c2 = call({})
+    c2.say("do you have a land cruiser")
+    assert "it's white, not red" in c2.say("is it red").reply
+
+
+def test_i_want_a_red_car_is_a_search_even_after_cars_were_shown(call):
+    c = call({"yes": "confirm_yes"})
+    c.say("do u have camry")
+    c.say("what color is the camry is it red")
+    c.say("yes")                                                        # two red cars are now on screen
+    r = c.say("i want a red car")
+    assert r.debug.intent == "search_cars" and r.debug.via.startswith("rules")
+
+
+def test_car_questions_with_no_car_chosen_ask_which_car_not_policy(call):
+    c = call({"is it white": "ask_policy", "how many kilometres has it done": "ask_policy"})
+    c.say("do you have a bentley")                                       # nothing matches, so no car in focus
+    for q in ("is it white", "how many kilometres has it done"):
+        assert "Which car" in c.say(q).reply and c.s.pending is None

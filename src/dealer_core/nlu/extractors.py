@@ -177,6 +177,9 @@ ATTRIBUTES = [
 ]
 
 
+CAR_FACTS = {"km", "color", "year", "fuel", "transmission", "spec", "service", "accident", "branch"}      # facts about a car (not price/availability)
+
+
 def attributes_asked(text: str) -> list[str]:
     t = " ".join(tokens_of(text))
     return [k for k, rx in ATTRIBUTES if re.search(rx, t)]
