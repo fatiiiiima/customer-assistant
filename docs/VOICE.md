@@ -15,7 +15,7 @@ microphone -> [half-duplex gate] -> Silero VAD -> Whisper (OpenVINO, CPU) -> Dea
 | VAD | Silero (bundled in Pipecat), `stop_secs` 0.3 | local, fast; Smart Turn v3 (also bundled) is NOT wired in yet |
 | STT | OpenVINO Whisper tiny int8 on the **CPU**, car-term prompt | Phase 0b winner; never on the iGPU (it would fight the language model) |
 | Brain | `DialogueEngine.handle_stream` | same engine as the text chat |
-| TTS | Piper `joe` (CC0) fp32 via sherpa-onnx, CPU | Phase 0b winner; espeak-ng phoneme data is GPL-3: internal prototype only |
+| TTS | Piper **libritts_r, speaker 1** (owner choice; `tts.voice` / `tts.speaker` in config) fp32 via sherpa-onnx, CPU | Phase 0b: fastest first audio (40-80 ms here). **CC BY 4.0: attribution required** (LibriTTS-R). espeak-ng phoneme data is GPL-3: internal prototype only |
 | Microphone / speaker | Pipecat `LocalAudioTransport` (PyAudio) | |
 
 ## Run it

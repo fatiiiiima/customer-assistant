@@ -24,7 +24,7 @@ def voice_dir(models: Path, voice: str) -> Path:
 
 
 class PiperSherpa:
-    def __init__(self, models: Path, voice: str = "joe", threads: int = 4) -> None:
+    def __init__(self, models: Path, voice: str = "joe", threads: int = 4, speaker: int = 0) -> None:
         import sherpa_onnx
 
         d = voice_dir(models, voice)
@@ -33,14 +33,17 @@ class PiperSherpa:
                                                        data_dir=str(d / "espeak-ng-data")), num_threads=threads, provider="cpu"))
         self.tts = sherpa_onnx.OfflineTts(cfg)
         self.sample_rate: int = self.tts.sample_rate
-        self.name = f"piper:{voice}"
+        self.speaker = speaker
+        if speaker >= self.tts.num_speakers:
+            raise ValueError(f"voice {voice} has {self.tts.num_speakers} speaker(s); speaker {speaker} does not exist")
+        self.name = f"piper:{voice}#{speaker}"
 
     def warm_up(self) -> None:
-        self.tts.generate("Warm up.", sid=0, speed=1.0)
+        self.tts.generate("Warm up.", sid=self.speaker, speed=1.0)
 
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:
         """The whole utterance as float32 samples."""
-        return np.asarray(self.tts.generate(text, sid=0, speed=speed).samples, dtype=np.float32)
+        return np.asarray(self.tts.generate(text, sid=self.speaker, speed=speed).samples, dtype=np.float32)
 
     def stream(self, text: str, speed: float = 1.0) -> Iterator[np.ndarray]:
         """Chunks of float32 samples as the model produces them (first chunk after about one sentence of work)."""
@@ -52,7 +55,7 @@ class PiperSherpa:
 
         def run():
             try:
-                self.tts.generate(text, sid=0, speed=speed, callback=cb)
+                self.tts.generate(text, sid=self.speaker, speed=speed, callback=cb)
             finally:
                 q.put(None)
 

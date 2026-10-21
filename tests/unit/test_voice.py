@@ -39,3 +39,10 @@ def test_the_gate_drops_microphone_audio_while_the_agent_speaks_and_a_moment_aft
     assert g.drops(mic)                                             # and for a moment after, while the room still rings
     now[0] += 0.6
     assert not g.drops(mic)                                         # then the caller is heard again
+
+
+def test_the_default_voice_is_libritts_r_speaker_1():
+    from dealer_core.config import load_config
+
+    cfg = load_config(environ={})
+    assert cfg.tts.voice == "libritts_r" and cfg.tts.speaker == 1
