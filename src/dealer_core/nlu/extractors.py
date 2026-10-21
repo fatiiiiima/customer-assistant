@@ -121,6 +121,15 @@ def points_at_a_car(text: str) -> bool:
     return bool(_POINTS.search(" ".join(tokens_of(text))))
 
 
+_REQUEST_WORDS = {"do", "you", "have", "got", "show", "me", "i", "want", "need", "looking", "for", "any", "is", "there", "what", "how"}
+
+
+def is_bare_vehicle(text: str) -> bool:
+    """"nissan" / "toyota please" / "the patrol": a few words with no request wording, i.e. an answer to the conversation so far."""
+    toks = tokens_of(text)
+    return 0 < len(toks) <= 4 and not (set(toks) & _REQUEST_WORDS)
+
+
 def wants_listing(text: str) -> bool:
     """'just show me' after a narrowing question: stop asking and read out the first matches."""
     return bool(_SHOW_ME.search(" ".join(tokens_of(text))))

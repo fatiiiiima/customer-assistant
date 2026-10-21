@@ -292,3 +292,21 @@ def test_car_questions_with_no_car_chosen_ask_which_car_not_policy(call):
     c.say("do you have a bentley")                                       # nothing matches, so no car in focus
     for q in ("is it white", "how many kilometres has it done"):
         assert "Which car" in c.say(q).reply and c.s.pending is None
+
+
+def test_a_bare_make_after_a_search_refines_it_instead_of_starting_over(call):
+    c = call({"a red car": "search_cars"})
+    c.say("a red car")
+    r = c.say("nissan")
+    assert "Altima" in r.reply and "Mustang" not in r.reply and "Patrol" not in r.reply and c.s.filters.get("color") == "red"
+    r = c.say("camry")                                              # a Camry in red does not exist: the colour is kept and said
+    assert "in red" in r.reply and "white" in r.reply
+
+
+def test_a_bare_make_that_does_not_fit_the_old_filters_switches_topic(call):
+    c = call({})
+    c.say("an suv under 150 thousand")
+    r = c.say("camry")                                              # no SUV is a Camry: this is a new topic, not "no SUV Camrys"
+    assert "Camry" in r.reply and "SUV" not in r.reply and c.s.filters == {"make": "toyota", "model": "camry"}
+    r = c.say("do you have a land cruiser")                         # a full request starts fresh as before
+    assert "Land Cruiser" in r.reply

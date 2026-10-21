@@ -304,7 +304,19 @@ class DialogueEngine:
         if (new.get("color") or new.get("body_type")) and not new.get("make") and not new.get("model") and s.narrow_asks == 0                 and not refers_to_car and not force:
             for k in ("make", "model", "body_type"):
                 s.filters.pop(k, None)
-        if new.get("model") or (new.get("make") and s.narrow_asks == 0):
+        bare = ex.is_bare_vehicle(text) and bool(s.filters) and not force
+        if bare and (new.get("make") or new.get("model")) and not new.get("color") and not new.get("body_type"):
+            # Just a make or model, said after a search ("nissan" after "a red car"): it refines what was asked, it does not start over.
+            base = dict(s.filters)
+            if new.get("make") and not new.get("model"):
+                base.pop("model", None)                     # the old model belonged to the old make
+            merged = {**base, **new}
+            if self.svc.inventory.count(self._filters(merged, s.excluded)) or merged.get("color"):
+                s.filters = merged
+            else:                                           # the two do not fit together (an SUV and a Camry): the caller switched topic
+                s.filters = dict(new)
+                s.excluded.clear()
+        elif new.get("model") or (new.get("make") and s.narrow_asks == 0):
             s.filters = dict(new)
             s.excluded.clear()
         else:
@@ -339,6 +351,11 @@ class DialogueEngine:
             else:
                 reply = reply.replace("I have", "No, I have", 1)
         return reply
+
+    @staticmethod
+    def _filters(d: dict, excluded: set[str]) -> SearchFilters:
+        return SearchFilters(max_price=d.get("max_price"), make=d.get("make"), model=d.get("model"), body_type=d.get("body_type"),
+                             color=d.get("color"), year_min=d.get("year_min"), max_km=d.get("max_km"), exclude_stock_ids=tuple(sorted(excluded)))
 
     def _other_filters(self, s: Session, color: str) -> dict:
         """What to search if the caller says yes to "shall I look for a red car instead?": the colour and the budget, year, mileage."""
