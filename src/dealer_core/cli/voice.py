@@ -28,6 +28,15 @@ def list_devices() -> None:
               + ("   <- default output" if i == default_out else ""))
 
 
+def _device_names(inp: int | None, out: int | None) -> tuple[str, str]:
+    import pyaudio
+
+    p = pyaudio.PyAudio()
+    i = inp if inp is not None else p.get_default_input_device_info()["index"]
+    o = out if out is not None else p.get_default_output_device_info()["index"]
+    return f"{i}: {p.get_device_info_by_index(i)['name']}", f"{o}: {p.get_device_info_by_index(o)['name']}"
+
+
 async def run(a: argparse.Namespace) -> None:
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
     from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
@@ -57,13 +66,20 @@ async def run(a: argparse.Namespace) -> None:
         if a.debug:
             print(line, flush=True)
 
+    from ..voice.status import StatusLine
+
+    probes = {"vad": StatusLine({"vad", "bot"}), "stt": StatusLine({"stt"})}
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=a.stop_secs or cfg.voice.stop_secs,
-                                     half_duplex=not a.headset, on_turn=on_turn)
+                                     half_duplex=not a.headset, on_turn=on_turn, probes=probes)
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
     runner = WorkerRunner(handle_sigint=True)
     await runner.add_workers(worker)
-    print("\nReady: the agent will greet you, then speak when it has finished. Ctrl+C to hang up.\n", flush=True)
+    names = _device_names(a.input_device, a.output_device)
+    print(f"\nMicrophone: {names[0]}\nSpeaker   : {names[1]}"
+          f"\n\nReady. You should hear the greeting now ('[agent speaking]' below). Then speak when it says '[your turn]'. Ctrl+C to hang up."
+          f"\nIf you see no '[agent speaking]' within 3 s the speaker is the problem; if '[hearing you]' never appears when you talk the microphone is.\n",
+          flush=True)
     t0 = time.time()
     await runner.run()
     print(f"\nCall ended after {time.time() - t0:.0f} s, {len(brain.turn_log)} turns.")

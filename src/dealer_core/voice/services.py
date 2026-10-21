@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 
 from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
+from pipecat.services.settings import STTSettings, TTSSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
@@ -19,7 +20,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
     """Transcribes each VAD-segmented utterance with OpenVINO Whisper (CPU). Segments arrive as raw 16-bit 16 kHz mono PCM."""
 
     def __init__(self, *, engine: WhisperOpenVino, **kwargs) -> None:
-        super().__init__(sample_rate=SAMPLE_RATE, **kwargs)
+        super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
 
@@ -44,7 +45,7 @@ class SherpaPiperTTSService(TTSService):
     """Streams Piper speech as 16-bit PCM; the first chunk is ready after about one sentence of synthesis work."""
 
     def __init__(self, *, engine: PiperSherpa, **kwargs) -> None:
-        super().__init__(sample_rate=engine.sample_rate, **kwargs)
+        super().__init__(sample_rate=engine.sample_rate, settings=TTSSettings(model=None, voice=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
 
     def can_generate_metrics(self) -> bool:
