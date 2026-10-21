@@ -24,14 +24,15 @@ from .phrasebook import FORBIDDEN
 
 MAX_SENTENCES = 3
 MAX_WORDS = 55
-DRAFT_TOKENS = 96
+DRAFT_TOKENS = 80
+MAX_CORE_WORDS = 28        # longer replies (lists of several cars) are spoken from the template: slow to rewrite, little to gain
 DRAFT_TIMEOUT_S = 8.0
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CAPITAL = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-Z][A-Za-z0-9]+\b")
 _CHARS = re.compile("^[A-Za-z0-9 ,'" + chr(0x2019) + ".!?%-]+$")
 _NEG = re.compile(_NEGATION.pattern + "|" + r"\bno\b|\bnone\b|\bwithout\b", re.I)
-_QUOTED = re.compile(r"'([^']{4,})'")
+_QUOTED = re.compile(r"(?:^|\s)'([^']{4,}?)'(?=[\s.,!?]|$)")          # 'just show me', not the apostrophes in it's ... you'd
 
 
 def numbers(text: str) -> set[str]:
@@ -43,7 +44,7 @@ def capitals(text: str) -> set[str]:
     out = set()
     for sentence in re.split(r"(?<=[.!?])\s+", text):
         for w in re.findall(r"[A-Za-z0-9']+", sentence)[1:]:
-            if w[:1].isupper() and w != "I":
+            if w[:1].isupper() and w != "I" and not w.startswith("I'"):         # I, I've, I'm, I'd are not names
                 out.add(w.lower())
     return out
 
@@ -75,6 +76,9 @@ def verify_draft(draft: str, user_text: str, core: str) -> list[str]:
     new_caps = {w for w in capitals(draft) if w not in known_caps and w.rstrip("s") not in stems}
     if new_caps:
         problems.append(f"new name(s) {sorted(new_caps)[:3]}")
+    options = {w for w in ("first", "second", "third") if re.search(r"\b" + w + r"\b", core.lower())}
+    if options - set(re.findall(r"[a-z]+", draft.lower())):
+        problems.append("the options offered (first/second/third) were dropped")
     if core.rstrip().endswith("?") and not draft.rstrip().endswith("?"):
         problems.append("the next-step question was dropped")
     for q in _QUOTED.findall(core):
@@ -92,11 +96,34 @@ def verify_draft(draft: str, user_text: str, core: str) -> list[str]:
 
 
 SYSTEM = """You are the voice of a friendly car dealership phone agent in the UAE. Below are what the CALLER just said and the FACTS the
-agent must convey (REPLY). Rewrite REPLY as a natural, warm spoken answer to the caller, in at most 3 short sentences.
-Rules: keep every number, price, car name and fact exactly as in REPLY; add no new facts, names, numbers or availability; make no promises
-or offers; if REPLY asks the caller a question, end with that same question; if REPLY says something is not available or not possible,
-keep that meaning. React to the caller's own words so it sounds like a conversation, not a form. Plain spoken English, no lists, no emojis.
-Output only the reply."""
+agent must convey (REPLY). Say the same thing in your own warm, natural spoken words, in at most 2 short sentences (3 if the REPLY
+has several parts). ALWAYS change the wording: never copy REPLY word for word.
+Rules: keep every number, price, car name and fact exactly as in REPLY; add no new facts, names, numbers or availability; make no
+promises or offers; if REPLY asks the caller a question, end with that same question; if REPLY says something is not available or
+not possible, keep that meaning. React to the caller's own words. Plain spoken English, no lists, no emojis, no dashes.
+Examples:
+CALLER: show me a nissan
+REPLY: I have a 2020 Nissan Patrol with 87,500 kilometres at 138,500 dirhams. Would you like to hear more, or book a test drive?
+SAY: Sure, I've got a 2020 Nissan Patrol with 87,500 kilometres, priced at 138,500 dirhams. Want to hear more, or shall we set up a test drive?
+CALLER: do you have a ferrari
+REPLY: I don't have any Ferrari cars at the moment. Would you like to change the budget or the type of car?
+SAY: Ah, no Ferraris in stock at the moment. Would you like to try a different budget or type of car?
+CALLER: is it a manual
+REPLY: No, it's automatic, not manual. Anything else you'd like to know?
+SAY: Not quite, it's an automatic rather than a manual. Is there anything else you'd like to know?
+CALLER: what is the capital of france
+REPLY: Sorry, I can only help with our used cars. Is there anything else you'd like to know about this one?
+SAY: Ha, that one is outside my area, I only handle our used cars. Is there anything else you'd like to know about this car?
+Output only the SAY line."""
+
+
+def clean_draft(raw: str) -> str:
+    """Safe normalisation of typography only (never words): dashes become commas, curly quotes become plain ones, a leading 'SAY:' goes."""
+    t = raw.strip().splitlines()[0].strip() if raw.strip() else ""
+    t = re.sub(r"^(?:SAY|REPLY)\s*:\s*", "", t, flags=re.I)
+    t = re.sub(r"\s*[–—]\s*", ", ", t)
+    t = t.replace("’", "'").replace("‘", "'").replace("“", "").replace("”", "").replace('"', "")
+    return " ".join(t.split())
 
 
 class DraftWriter:
@@ -105,11 +132,13 @@ class DraftWriter:
 
     def write(self, user_text: str, core: str) -> LeadInOutcome:
         t0 = time.perf_counter()
+        if len(core.split()) > MAX_CORE_WORDS:
+            return LeadInOutcome(None, 0.0, f"reply longer than {MAX_CORE_WORDS} words is spoken from the template")
         try:
             raw = self.backend.lead_in(SYSTEM, f"CALLER: {user_text}\nREPLY: {core}", DRAFT_TOKENS)
         except Exception as e:
             return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, f"backend: {type(e).__name__}")
         ms = (time.perf_counter() - t0) * 1000
-        draft = " ".join(raw.strip().split()).strip('"').strip()
+        draft = clean_draft(raw)
         bad = verify_draft(draft, user_text, core)
         return LeadInOutcome(None if bad else draft, ms, "; ".join(bad))

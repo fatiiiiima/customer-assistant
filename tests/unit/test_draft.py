@@ -74,3 +74,23 @@ def test_engine_draft_replaces_only_eligible_turns():
     n = len(fb.seen)
     r = c.say("how much is it")                                       # a price turn: never drafted, exact template
     assert len(fb.seen) == n and not r.debug.draft and "subject to confirmation" in r.reply
+
+
+def test_dropping_the_options_offered_is_caught_and_long_replies_are_not_drafted():
+    core = "Which one do you mean: the first, the second or the third?"
+    assert any("options" in p for p in verify_draft("Could you clarify which one you mean?", "is it red", core))
+    assert verify_draft("Which do you mean, the first, the second or the third?", "is it red", core) == []
+    long_core = "I have a 2019 Nissan Altima at 52,500 dirhams, a 2020 Honda Accord at 69,000 dirhams and a 2021 Toyota Camry at 78,500 dirhams. Which one would you like to hear more about?"
+    fb = FakeBackend("anything")
+    out = DraftWriter(fb, {"search_cars"}).write("a sedan", long_core)
+    assert out.text is None and fb.seen == [] and "template" in out.why_not          # the model is not even called
+
+
+def test_apostrophes_are_not_mistaken_for_quoted_phrases():
+    core = "Yes, it's automatic. Anything else you'd like to know?"
+    assert verify_draft("Yes, the car's automatic. Anything else you'd like to know?", "is it automatic", core) == []
+
+
+def test_i_contractions_are_not_names():
+    core = "I have 8 SUVs. Would you pick a make or a mileage limit?"
+    assert verify_draft("Sure, I've got 8 SUVs. Would you pick a make or a mileage limit?", "an suv", core) == []

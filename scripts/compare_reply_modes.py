@@ -50,13 +50,14 @@ def pct(xs, p):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", default="openvino_gpu")
+    ap.add_argument("--modes", default="template,lead-in,draft")
     a = ap.parse_args()
     cfg = load_config()
     chain = BackendChain.from_config(cfg, primary=a.backend)
     print("loading model...", flush=True)
     chain.start()
     modes = {"template": dict(lead_in=False, draft=False), "lead-in": dict(lead_in=True, draft=False), "draft": dict(lead_in=False, draft=True)}
-    results = {m: run(cfg, chain, **f) for m, f in modes.items()}
+    results = {m: run(cfg, chain, **f) for m, f in modes.items() if m in a.modes.split(",")}
     print("\n" + "=" * 100 + "\nTURN TIME (ms) for turns the mode can change (search / car question / off-topic)")
     print(f"{'mode':10s} {'turns':>5s} {'p50':>7s} {'p95':>7s} {'max':>7s} {'model text used':>16s}")
     for m, rows in results.items():
@@ -67,12 +68,15 @@ def main() -> int:
     print("\nTURN TIME (ms), ALL turns: " + ", ".join(f"{m} p50 {st.median([r['ms'] for r in rows]):.0f} / p95 {pct([r['ms'] for r in rows], 95):.0f}"
                                                    for m, rows in results.items()))
     drops = {}
-    for r in results["draft"]:
+    for r in results.get("draft", []):
         if r["why"] and r["intent"] in ELIGIBLE:
             for part in r["why"].split("; "):
                 key = part.split("(")[0].split("[")[0].strip()
                 drops[key] = drops.get(key, 0) + 1
     print("draft rejections by reason:", drops or "none")
+    for r in results.get("draft", []):
+        if r["why"] and r["intent"] in ELIGIBLE:
+            print(f"   rejected [{r['user']}]: {r['why']}")
     print("\n" + "=" * 100 + "\nREPLIES SIDE BY SIDE (eligible turns)")
     for i, base in enumerate(results["template"]):
         if base["intent"] not in ELIGIBLE:
