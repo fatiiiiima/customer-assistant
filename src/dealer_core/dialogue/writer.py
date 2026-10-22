@@ -536,7 +536,13 @@ class ReplyWriter:
         if spoken:
             # facts the model's reply does not cover are said as they are, BEFORE the closing question
             first_word = reply.split()[0].lower().strip("!.,") if reply else ""
-            for sentence in [s for s in voice_rules.sentences(w.core) if not s.rstrip().endswith("?") and not is_generic_closer(s) and not covers(reply, s)]:
+            # The model gave a real answer (a sentence of 6+ words)? Then a fact it left out is simply left out: padding a natural answer with the
+            # standard sentence ("The Camry is 74,500. I have a Camry with 52,000 km at 74,500.") is what made replies sound like a form. Only a reply
+            # that is just an opener, or a high-risk step whose details must all be said (booking read-back), gets the missing facts appended.
+            answered = any(len(x.split()) >= 6 for x in spoken)
+            missing = [] if (answered and w.risk != "high") else [
+                s for s in voice_rules.sentences(w.core) if not s.rstrip().endswith("?") and not is_generic_closer(s) and not covers(reply, s)]
+            for sentence in missing:
                 self.last_stream["appended"] = True
                 if first_word in ("yes", "yeah", "no") or re.search(r"\b(?:yes|yeah)\b", reply.split("!")[0].lower()):
                     sentence = re.sub(r"^(?:Yes|No),?\s+", "", sentence)             # "Ah, yes!" + "Yes, it's GCC spec." must not say yes twice
