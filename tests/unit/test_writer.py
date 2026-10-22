@@ -360,7 +360,7 @@ def test_when_the_system_is_waiting_on_a_specific_answer_the_closing_question_mu
 
 
 def test_the_models_question_is_held_so_missing_facts_come_before_it():
-    said, _ = stream("We've got two Toyota SUVs. Which one would you like to hear more about?")
+    said, _ = stream("Here you go! We've got two Toyota SUVs. Which one would you like to hear more about?")
     assert said[-1].endswith("hear more about?") and said.index(next(s for s in said if "105,000" in s)) < len(said) - 1
     assert sum(s.endswith("?") for s in said) == 1                                    # the question is asked once
 
