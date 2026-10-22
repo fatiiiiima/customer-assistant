@@ -34,7 +34,7 @@ def hotword_groups(path: Path) -> dict[str, list[str]]:
     return groups
 
 
-def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]]) -> str:
+def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], vocab: dict[str, list[str]] | None = None) -> str:
     q = last_question(last_agent).lower()
     if state is State.CONTACT:
         return CONTACT + ", " + ", ".join(groups.get("common names", [])[:10])
@@ -42,5 +42,7 @@ def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]]) -> s
         return CONFIRM
     if state is State.SLOT or _ASKS_WHEN.search(q):
         return DAY_TIME
-    cars = groups.get("makes", [])[:25] + groups.get("models", [])[:25]            # no place names: Whisper then hears "Abu Dhabi" in "hello"
+    stock = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
+    seen: set[str] = set()
+    cars = [x for x in stock + groups.get("makes", [])[:25] + groups.get("models", [])[:25] if not (x.lower() in seen or seen.add(x.lower()))][:60]   # what we actually sell comes first            # no place names: Whisper then hears "Abu Dhabi" in "hello"
     return ", ".join(cars + ["test drive", "tomorrow", "today"])

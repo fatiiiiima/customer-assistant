@@ -27,7 +27,7 @@ from ..dialogue.session import Session
 from ..dialogue.states import State
 from ..dialogue.writer import ReplyWriter, WriterInput, fact_sheet
 from ..models import BodyType, CarStatus, CarView, SearchFilters
-from ..nlu import extractors as ex
+from ..nlu import expected, extractors as ex
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
 from ..tools.escalation import EscalationReason
 from ..tools.phones import normalize_phone, speak_phone
@@ -115,6 +115,8 @@ class AgentEngine:
         if tool not in TOOLS:
             tool = "none"
         args = self._args_for(s, tool, decision.get("car_id"), text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
+        if tool == "search_cars" and not args and s.shown and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
+            tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
         dbg.intent, dbg.via = tool, "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
@@ -242,7 +244,8 @@ class AgentEngine:
             context = ["Cars the customer has been shown in this call (these ARE in stock):", *fact_sheet(cars[:4], self._branch_name).splitlines()]
         if s.filters:
             context.append(f"What they have asked for so far: {s.filters}.")
-        return {"core": question, "facts": ["No lookup was needed. Answer from the conversation and these facts only; never say the dealership has no cars unless a search said so.", *context],
+        return {"core": question, "facts": ["No lookup was needed. Answer from the conversation and these facts only; never say the dealership has no cars unless a search said so.",
+                          "If the customer's words do not make sense here (speech recognition can mishear), say you did not catch that and ask them to say it again.", *context],
                 "awaiting": False}
 
     def _t_search_cars(self, s, args, text, dbg) -> dict:

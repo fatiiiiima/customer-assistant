@@ -66,7 +66,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=stop_secs)))
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
-    stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups)
+    stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
     stages: list[FrameProcessor] = [source] + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
