@@ -405,6 +405,7 @@ class ReplyWriter:
     def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE, judge: bool = False,
                  retries: int = RETRIES, max_tokens: int = WRITE_TOKENS, deadline_s: float | None = None, max_words: int = 0) -> None:
         self.backend, self.high_risk, self.temperature, self.judge = backend, high_risk, temperature, judge
+        self.model_only = False                    # test mode: never add the system's own facts or question to the model's words
         self.retries, self.max_tokens = retries, max_tokens
         self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
         self.opener = False                                                # voice: open with a 5-word reaction so speech can start within a second
@@ -559,7 +560,7 @@ class ReplyWriter:
             # standard sentence ("The Camry is 74,500. I have a Camry with 52,000 km at 74,500.") is what made replies sound like a form. Only a reply
             # that is just an opener, or a high-risk step whose details must all be said (booking read-back), gets the missing facts appended.
             answered = any(len(x.split()) >= 6 for x in spoken)
-            missing = [] if (answered and w.risk != "high") else [
+            missing = [] if (self.model_only or (answered and w.risk != "high")) else [
                 s for s in voice_rules.sentences(w.core) if not s.rstrip().endswith("?") and not is_generic_closer(s) and not covers(reply, s)]
             for sentence in missing:
                 self.last_stream["appended"] = True
@@ -573,7 +574,7 @@ class ReplyWriter:
             on_topic = not (w.awaiting and keys) or bool(keys & {x.rstrip("s") for x in re.findall(r"[a-z]+", asked.lower())})
             if asked and on_topic:
                 yield asked
-            elif question:
+            elif question and not self.model_only:
                 self.last_stream["appended"] = True
                 yield question                                                   # the system is waiting on this: ask it ourselves
             elif asked:

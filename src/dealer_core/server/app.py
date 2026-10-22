@@ -113,14 +113,18 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
 
     def on_heard(text: str) -> None:
         turn["n"] += 1
+        turn["said"] = False
         emit({"type": "line", "who": "you", "turn": turn["n"], "text": text})
 
     def on_say(text: str) -> None:
+        turn["said"] = True
         emit({"type": "line", "who": "agent", "turn": turn["n"], "text": text})
 
     brain_ref: dict = {}
 
     def on_turn(result) -> None:
+        if not turn.get("said", True):                           # model_only test mode: show that the model gave nothing usable, instead of a silent gap
+            emit({"type": "line", "who": "agent", "turn": turn["n"], "text": "(the model gave no usable reply)"})
         s = brain_ref["brain"].session
         ids = tuple(c.stock_id for c in s.shown) if not s.car else (s.car,)
         if ids and ids != seen["shown"]:

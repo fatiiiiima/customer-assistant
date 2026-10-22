@@ -76,6 +76,7 @@ class DialogueEngine:
                  lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None,
                  reply_writer: ReplyWriter | None = None) -> None:
         self.svc, self.nlu, self.writer, self.drafter, self.reply_writer = svc, nlu, lead_writer, drafter, reply_writer
+        self.model_only = False                      # test mode (voice.model_only): nothing but the model's own sentences is spoken
         self.stream_high_risk = False                # voice: price / booking / hand-off replies are spoken from the exact standard wording
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
 
@@ -147,9 +148,11 @@ class DialogueEngine:
             for sentence in self._conversational_stream(s, u.intent.value, text, dbg, core):
                 spoken.append(sentence)
                 yield sentence
-        if not spoken:                                                   # nothing usable from the model: the standard wording
+        if not spoken and not self.model_only:                           # nothing usable from the model: the standard wording
             spoken = [core]
             yield core
+        elif not spoken:
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: the model gave no usable reply, so nothing was said"
         yield self._finish(s, dbg, " ".join(spoken), t0, text)
 
     def _conversational_stream(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str):
