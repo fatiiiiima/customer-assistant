@@ -33,6 +33,7 @@ class AppCfg(_Strict):
     model_dir: str = "models"
     currency: str = "AED"
     distance_unit: str = "km"
+    agent_name: str | None = None      # the advisor's name, said in the greeting (the website: Wazir)
 
 
 class LatencyLogCfg(_Strict):
