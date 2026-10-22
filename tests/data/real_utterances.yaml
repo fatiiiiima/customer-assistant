@@ -19,6 +19,6 @@
 - {name: joke is not an answer, state: interest, last_agent: "What kind of car are you looking for?", text: "Tell me a joke", intent_not: search_cars, via: any}
 - {name: price of this one, state: answering, car: AG-122, last_agent: "I see you're looking at the 2021 BMW M3. What would you like to know about it?", text: "How much is this one?", intent: ask_car_info, via: any}
 - {name: second one, state: answering, last_agent: "I have a 2020 Corolla, a 2020 Camry and a 2021 RAV4. Which one would you like to hear more about?", text: "Tell me about the second one", intent: ask_car_info, via: rules}
-- {name: tomorrow alone, state: slot, last_agent: "I can do today at 11:00 AM or tomorrow at 9:00 AM. Which works better for you?", text: "Tomorrow", intent: give_slot, via: rules}
-- {name: tomorrow afternoon, state: slot, last_agent: "I can do today at 11:00 AM or tomorrow at 9:00 AM. Which works better for you?", text: "Tomorrow afternoon", intent: give_slot, via: rules}
-- {name: saturday at four, state: slot, last_agent: "Which day would suit you better?", text: "Saturday at four thirty", intent: give_slot, via: rules}
+- {name: tomorrow alone, state: slot, last_agent: "I can do today at 11:00 AM or tomorrow at 9:00 AM. Which works better for you?", text: "Tomorrow", intent: give_slot, via: any}
+- {name: tomorrow afternoon, state: slot, last_agent: "I can do today at 11:00 AM or tomorrow at 9:00 AM. Which works better for you?", text: "Tomorrow afternoon", intent: give_slot, via: any}
+- {name: saturday at four, state: slot, last_agent: "Which day would suit you better?", text: "Saturday at four thirty", intent: give_slot, via: any}
