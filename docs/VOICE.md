@@ -93,3 +93,11 @@ Measured with the synthetic caller, on battery, 6 turns each (`scripts/voice_off
 1375 ms (fixed 0.35 s silence) -> 1195 ms. With a 0.7 s pause inside the sentence, fixed silence cut 2 of 3 sentences in half ("Hello, I'm looking for" was
 answered as a greeting); Smart Turn kept 2 of 3 whole (it ended "Can I book a test drive?" before "for tomorrow afternoon", a complete question). Not yet
 tried with a real voice and microphone.
+
+## Keeping misunderstandings from coming back
+
+* Short replies are read against the question the agent just asked (`nlu/expected.py`): "any budget", "doesn't matter", "100,000", "a white one" after a budget/make/colour/mileage question
+  are decided by code, before the model is asked.
+* A few unclear words are answered by asking the last question again ("Sorry, I didn't quite catch that. ..."), not by offering a colleague.
+* `tests/data/real_utterances.yaml` holds the lines that went wrong in real calls, with the question that came before. Add every new miss there.
+  `tests/unit/test_real_utterances.py` checks the code-decided ones; `scripts/replay_utterances.py --times 3` runs them all against the real model, three times each.

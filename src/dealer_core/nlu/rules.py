@@ -14,7 +14,7 @@ import yaml
 
 from ..dialogue.focus import FIND_CUE, about_the_car_in_focus  # noqa: F401
 from ..dialogue.states import STATE_CHANGING, STATE_SPEC, Intent, State
-from . import extractors as ex
+from . import expected, extractors as ex
 from .datetime_parse import parse_when
 from .numbers import number_spans
 
@@ -85,14 +85,14 @@ class RuleEngine:
     def __init__(self, vocabulary: Callable[[], dict[str, list[str]]], enabled: set[Intent]) -> None:
         self.vocabulary, self.enabled = vocabulary, enabled
 
-    def classify(self, state: State, car: str | None, text: str) -> RuleHit | None:
-        """A confident, gate-open, state-valid answer, or None to defer to the LLM."""
-        hit = self._first_match(state, car, text)
+    def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> RuleHit | None:
+        """A confident, gate-open, state-valid answer, or None to defer to the LLM. `last_agent` is the agent's last turn: a short reply is read as the answer to its question."""
+        hit = self._first_match(state, car, text, last_agent)
         if hit is None or hit.intent not in self.enabled:
             return None
         return hit
 
-    def _first_match(self, state: State, car: str | None, text: str) -> RuleHit | None:
+    def _first_match(self, state: State, car: str | None, text: str, last_agent: str = "") -> RuleHit | None:
         if state not in STATE_SPEC:
             return None
         allowed = set(STATE_SPEC[state][0])
@@ -104,6 +104,11 @@ class RuleEngine:
         def ok(intent: Intent, rule: str) -> RuleHit | None:
             return RuleHit(intent, rule) if intent in allowed else None
 
+        kind = expected.question_kind(last_agent) if last_agent else None
+        if kind in expected.NARROWING and not car and state in (State.GREETING, State.INTEREST, State.ANSWERING):
+            answered = expected.answers_narrowing(kind, text, self.vocabulary())      # the agent asked "your budget?": "any" / "100,000" / "a white one" answer it
+            if answered:
+                return ok(Intent.SEARCH_CARS, answered)
         if car and state in (State.ANSWERING, State.NEGOTIATING) and ASKING_PRICE.search(re.sub(r"^(?:(?:ok|okay|and|so|then|well|alright)\s+)+", "", norm)):
             return ok(Intent.ASK_CAR_INFO, "asking-price")
         if state in (State.ANSWERING, State.NEGOTIATING) and WANTS_ANOTHER.search(norm):      # "I want another car instead" (not a reschedule)

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from ..models import CarStatus, CarView, SearchFilters
-from ..nlu import extractors as ex
+from ..nlu import expected, extractors as ex
 from ..nlu.backend import BackendError
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
 from ..nlu.pipeline import NluPipeline, Understanding
@@ -411,6 +411,9 @@ class DialogueEngine:
         topic = next((t for t, rx in TOPICS.items() if re.search(rx, " ".join(ex.tokens_of(text)))), None)
         if topic is None and (ex.claims_in_question(text) or set(ex.attributes_asked(text)) & ex.CAR_FACTS):
             return self._ask_which(s)                   # "is it white?" with no car chosen: a car question, not a policy question
+        question = expected.last_question(s.last_agent())
+        if topic is None and question and len(ex.tokens_of(text)) <= 4:       # a few words that match nothing: we did not understand, so ask again (not "call a colleague")
+            return f"Sorry, I didn't quite catch that. {question}"
         label = T.TOPIC_LABEL.get(topic or "")
         s.pending = Pending("handoff_offer")
         what = f"our confirmed {label} details" if label else "confirmed details on that"

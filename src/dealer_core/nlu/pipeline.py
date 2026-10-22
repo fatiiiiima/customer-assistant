@@ -43,7 +43,7 @@ class NluPipeline:
         t0 = time.perf_counter()
         if _ARABIC.search(text):               # English only for now: the dialogue engine says so and offers a human
             return Understanding(Intent.OUT_OF_SCOPE, "language", language="ar", ms=(time.perf_counter() - t0) * 1000)
-        hit = self.rules.classify(state, car, text)
+        hit = self.rules.classify(state, car, text, last_agent)
         if hit is not None:
             return Understanding(hit.intent, "rules", rule=hit.rule, ms=(time.perf_counter() - t0) * 1000)
         if self.classifier is None:

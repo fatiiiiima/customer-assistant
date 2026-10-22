@@ -1,0 +1,21 @@
+# Lines from real test calls (and the shapes around them), each with the state and the agent's last words, and what the agent must understand.
+#   via: rules  -> decided by code, deterministic: checked in the unit tests (tests/unit/test_real_utterances.py)
+#   via: any    -> may need the model: checked by scripts/replay_utterances.py against the real model
+# Add every line that went wrong in a live call here, with the question that came before it.
+- {name: any budget, state: interest, last_agent: "I have 4 Toyota cars. Could you tell me your budget?", text: "Any budget?", intent: search_cars, via: rules}
+- {name: no budget, state: interest, last_agent: "I have 4 Toyota cars. Could you tell me your budget?", text: "No budget", intent: search_cars, via: rules}
+- {name: does not matter, state: interest, last_agent: "Could you tell me your budget?", text: "It doesn't matter", intent: search_cars, via: rules}
+- {name: whatever, state: interest, last_agent: "How much are you looking to spend?", text: "Whatever", intent: search_cars, via: rules}
+- {name: anything, state: interest, last_agent: "Do you want a specific make or a maximum mileage?", text: "Anything is fine", intent: search_cars, via: rules}
+- {name: no preference, state: interest, last_agent: "Do you have a colour in mind?", text: "No preference", intent: search_cars, via: rules}
+- {name: bare amount, state: interest, last_agent: "I have 4 Toyota cars. How much are you looking for?", text: "100,000", intent: search_cars, via: rules}
+- {name: under amount, state: interest, last_agent: "Could you tell me your budget?", text: "Under 100,000 dirhams", intent: search_cars, via: rules}
+- {name: spoken amount, state: interest, last_agent: "Could you tell me your budget?", text: "Around a hundred thousand", intent: search_cars, via: rules}
+- {name: my budget is, state: interest, last_agent: "Could you tell me your budget?", text: "My budget is 120,000", intent: search_cars, via: rules}
+- {name: make answer, state: interest, last_agent: "Do you want a specific make or a maximum mileage?", text: "Toyota", intent: search_cars, via: rules}
+- {name: body answer at opening, state: greeting, last_agent: "Hi, welcome to the AGMC dealership! I'm Wazir, and I'm here to help you find your perfect car. What are you looking for today?", text: "An SUV", intent: search_cars, via: rules}
+- {name: colour answer, state: interest, last_agent: "Do you have a colour in mind?", text: "A white one", intent: search_cars, via: rules}
+- {name: mileage answer, state: interest, last_agent: "Do you want a specific make or a maximum mileage?", text: "Under 50,000 kilometres", intent: search_cars, via: rules}
+- {name: joke is not an answer, state: interest, last_agent: "What kind of car are you looking for?", text: "Tell me a joke", intent_not: search_cars, via: any}
+- {name: price of this one, state: answering, car: AG-122, last_agent: "I see you're looking at the 2021 BMW M3. What would you like to know about it?", text: "How much is this one?", intent: ask_car_info, via: any}
+- {name: second one, state: answering, last_agent: "I have a 2020 Corolla, a 2020 Camry and a 2021 RAV4. Which one would you like to hear more about?", text: "Tell me about the second one", intent: ask_car_info, via: rules}
