@@ -6,6 +6,7 @@ app:
   model_dir: models
   currency: AED
   distance_unit: km
+  agent_name: Wazir             # said in the greeting everywhere (voice demo and website)
 
 # ---- Observability -------------------------------------------------------
 latency_log:

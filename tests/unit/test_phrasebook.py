@@ -93,8 +93,11 @@ def test_engine_uses_variants_only_when_enabled():
     from scenarios.conftest import Call
 
     off = Call({})
+    assert "I'm Wazir" in off.app.engine.opening(off.app.engine.new_session())                  # the named greeting is fixed wording
+    off.app.service.cfg.app.agent_name = None
     assert {off.app.engine.opening(off.app.engine.new_session()) for _ in range(5)} == {sit("opening").base}
     on = Call({}, variants=True)
+    on.app.service.cfg.app.agent_name = None
     lines = set()
     for seed in range(40):
         on.app.engine.variant_seed = seed

@@ -12,8 +12,6 @@ branches:
       fri: ["09:00", "20:00"]
       sat: ["09:00", "20:00"]
       sun: ["09:00", "20:00"]
-app:
-  agent_name: Wazir
 test_drive:
   slot_minutes: 60
 negotiation:
