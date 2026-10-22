@@ -54,6 +54,7 @@ CLAIMS = re.compile(r"\b(?:\w+\s)?condition\b|pristine|immaculate|spotless|flawl
                     r"great (?:car|deal|value|price)|good (?:deal|value|price)|bargain|steal", re.I)
 
 # "You're booked", "all set", "confirmed": only the system may say the booking is done (a model said it two steps early, before the phone number).
+_REACTION = re.compile(r"^(?:ok(?:ay)?|got it|sure(?: thing)?|great(?: choice)?|good (?:choice|question|call|catch)|perfect|nice(?: one)?|alright|absolutely|of course|certainly|wonderful|excellent|no problem)[!.,]*$", re.I)
 _DONE = re.compile(r"\b(?:booked|confirmed|all set|reserved|locked in|scheduled)\b", re.I)
 
 INTENT_WORDS = {
@@ -316,7 +317,7 @@ Write the next thing the assistant says, the way a friendly person would on a ca
 customer just said, FACTS from the dealership's system (the only facts you may use), and the STANDARD WORDING the system would use.
 The STANDARD WORDING is for reference only: say the same things in your OWN natural words, never copy it.
 
-How to sound: use contractions, talk like a person ("Sure!", "Good choice", "Not quite"), react to what the customer actually said,
+How to sound: use contractions, talk like a person, answer what the customer actually said, and never open with a reaction word ("Got it", "Sure", "Great", "Good choice", "Good question", "Perfect", "Nice"): start with the answer itself,
 refer to things by what they are in the conversation ("the red one", "that Nissan"), keep it to 1 or 2 short sentences (3 only when listing cars). Say only what the customer needs right now: never read out a car's whole spec. Do not repeat details
 the customer already heard (car name, price, kilometres) unless they ask again, do not ask a question they already answered, and do not end
 every reply with the same closing line.
@@ -337,7 +338,7 @@ SAY: I've got two red ones: a 2019 Nissan Altima at 52,500 dirhams and a 2018 Fo
 CONVERSATION: AGENT: ...a 2019 Nissan Altima... Would you like to hear more, or book a test drive? / CUSTOMER: yes
 FACTS: Altima is red, GCC spec, automatic, full service history, at our Dubai Showroom. System is waiting for: whether they want to book a test drive.
 STANDARD WORDING: It's red, GCC spec, with an automatic gearbox and a full service history, at our Dubai Showroom. Would you like to book a test drive?
-SAY: Great! It's the red one, GCC spec with an automatic gearbox and a full service history, and you can see it at our Dubai Showroom. Shall we get you in for a test drive?
+SAY: It's the red one, GCC spec with an automatic gearbox and a full service history, and you can see it at our Dubai Showroom. Shall we get you in for a test drive?
 CONVERSATION: AGENT: I have a 2018 Ford Mustang at 120,000 dirhams. / CUSTOMER: i cant afford that i can do 100,000
 FACTS: Pricing decision: counter 119,200 dirhams (round 1 of 3), subject to confirmation.
 STANDARD WORDING: The best I can do right now is 119,200 dirhams, subject to confirmation. Can you work with that?
@@ -491,6 +492,8 @@ class ReplyWriter:
             nonlocal stopped
             sentence = clean_draft(sentence)
             if not sentence:
+                return None
+            if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
             bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text)
             if bad:

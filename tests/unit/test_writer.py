@@ -289,14 +289,14 @@ def stream(reply, core=SEARCH_CORE, facts=SEARCH_FACTS, caller="toyota please", 
 
 
 def test_a_good_reply_is_spoken_sentence_by_sentence():
-    said, info = stream("Got it! I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams. Which one catches your eye?")
-    assert said == ["Got it!", "I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams.",
+    said, info = stream("Here you go! I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams. Which one catches your eye?")
+    assert said == ["Here you go!", "I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams.",
                     "Which one catches your eye?"] and not info["appended"] and info["first_ms"] >= 0
 
 
 def test_a_cut_off_sentence_is_never_spoken_and_the_missing_facts_and_question_are_added():
-    said, info = stream("Got it! Two Toyotas: the 2018 Prado at 105,000 and the 2021 Land Cruiser at")
-    assert said[0] == "Got it!" and not any(s.endswith(" at") for s in said)
+    said, info = stream("Here you go! Two Toyotas: the 2018 Prado at 105,000 and the 2021 Land Cruiser at")
+    assert said[0] == "Here you go!" and not any(s.endswith(" at") for s in said)
     assert any("105,000" in s and "148,000" in s for s in said) and said[-1].endswith("Which one would you like to hear more about?") and info["appended"]
 
 
@@ -307,8 +307,8 @@ def test_a_reaction_without_the_answer_gets_the_answer_added():
 
 
 def test_the_first_unsafe_sentence_stops_the_stream_and_what_was_safe_stands():
-    said, info = stream("Got it! We have a 2019 Lexus at 99,000 dirhams. Which one catches your eye?")
-    assert said[0] == "Got it!" and not any("Lexus" in s or "99,000" in s for s in said)
+    said, info = stream("Here you go! We have a 2019 Lexus at 99,000 dirhams. Which one catches your eye?")
+    assert said[0] == "Here you go!" and not any("Lexus" in s or "99,000" in s for s in said)
     assert "new" in info["stopped"] and said[-1].endswith("Which one would you like to hear more about?")
 
 
@@ -325,12 +325,12 @@ def test_price_and_booking_turns_are_not_streamed_when_high_risk_is_off():
 def test_a_backend_failure_in_the_middle_keeps_what_was_already_said():
     class Breaks(StreamBackend):
         def lead_in_stream(self, *a, **k):
-            yield "Got it! "
+            yield "Here you go! "
             raise TimeoutError("stopped")
 
     w = ReplyWriter(Breaks("x"))
     said = list(w.stream(WriterInput("toyota please", SEARCH_CORE, "low", [], SEARCH_FACTS)))
-    assert said[0] == "Got it!" and "backend" in w.last_stream["stopped"] and said[-1].endswith("Which one would you like to hear more about?")
+    assert said[0] == "Here you go!" and "backend" in w.last_stream["stopped"] and said[-1].endswith("Which one would you like to hear more about?")
 
 
 def test_engine_handle_stream_yields_sentences_then_the_turn_result():
@@ -360,7 +360,7 @@ def test_when_the_system_is_waiting_on_a_specific_answer_the_closing_question_mu
 
 
 def test_the_models_question_is_held_so_missing_facts_come_before_it():
-    said, _ = stream("Ah, nice! We've got two Toyota SUVs. Which one would you like to hear more about?")
+    said, _ = stream("We've got two Toyota SUVs. Which one would you like to hear more about?")
     assert said[-1].endswith("hear more about?") and said.index(next(s for s in said if "105,000" in s)) < len(said) - 1
     assert sum(s.endswith("?") for s in said) == 1                                    # the question is asked once
 

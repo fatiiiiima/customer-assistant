@@ -172,7 +172,7 @@ class VoiceCfg(_Strict):
     reply_deadline_ms: int = 4500                # model-written reply must be ready by then, else the standard wording is spoken
     reply_max_words: int = 30
     reply_max_tokens: int = 110
-    opener: bool = True                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
