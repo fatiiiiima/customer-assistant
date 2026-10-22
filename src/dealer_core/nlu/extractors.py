@@ -87,7 +87,7 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
         long_models = [(m, mk) for m, mk in flat if len(m) >= 6]
         for g in grams:
             if len(g) >= 6 and long_models:
-                r = process.extractOne(g, [m for m, _ in long_models], scorer=fuzz.ratio, score_cutoff=88)
+                r = process.extractOne(g, [m for m, _ in long_models if m[0] == g[0]], scorer=fuzz.ratio, score_cutoff=85)
                 if r:
                     hits.append((r[0], dict(long_models)[r[0]]))
                     break

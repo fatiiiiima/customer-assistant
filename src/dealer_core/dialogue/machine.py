@@ -156,6 +156,8 @@ class DialogueEngine:
         dbg.risk = risk_of(intent, dbg.state_before, s.state.value, dbg.decision, dbg.tools, bool(s.handoff))
         if intent == "out_of_scope" and "colleague" not in core.lower():
             dbg.risk = "chat"
+        if intent == "greet":                                            # the brand greeting is fixed text; paraphrasing it only duplicates it
+            return
         if dbg.risk == "high" and not self.stream_high_risk:             # price, booking, hand-off: the exact standard wording, spoken at once
             dbg.note = (dbg.note + "; " if dbg.note else "") + "exact wording used for a price/booking/hand-off turn"
             return
@@ -331,7 +333,7 @@ class DialogueEngine:
         if intent is Intent.GREET:
             if s.state is State.GREETING:
                 s.state = State.INTEREST
-                return self._say(s, "opening")
+                return self.svc.cfg.app.agent_name and self.opening(s) or self._say(s, "opening")
             return self._say(s, "hello_again")
         # ---- state-specific
         if intent is Intent.SEARCH_CARS:

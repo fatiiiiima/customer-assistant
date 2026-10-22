@@ -42,5 +42,5 @@ def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]]) -> s
         return CONFIRM
     if state is State.SLOT or _ASKS_WHEN.search(q):
         return DAY_TIME
-    cars = groups.get("makes", [])[:25] + groups.get("models", [])[:25] + groups.get("places", [])[:5]
+    cars = groups.get("makes", [])[:25] + groups.get("models", [])[:25]            # no place names: Whisper then hears "Abu Dhabi" in "hello"
     return ", ".join(cars + ["test drive", "tomorrow", "today"])
