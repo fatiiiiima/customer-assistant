@@ -366,6 +366,17 @@ class WriterInput:
     awaiting: bool = True          # the system is waiting for a specific answer (pending yes/no or a booking step)
 
 
+def drop_started_question(draft: str, question: str) -> str:
+    """The model ran out of room in the middle of the question the system is about to ask ("... Which one"): drop that stub, so the question is not said twice."""
+    sents = voice_rules.sentences(draft)
+    if sents:
+        stub = re.sub(r"[^\w ]", "", sents[-1]).strip().lower()
+        if stub and question.lower().startswith(stub) and len(stub.split()) < len(question.split()):
+            sents = sents[:-1]
+    out = " ".join(sents) if sents else ""
+    return out.rstrip(".! ") + "." if out else ""
+
+
 class ReplyWriter:
     """Calls the model for the reply and verifies it. `high_risk=False` keeps price/booking/hand-off replies as the standard wording."""
 
@@ -420,7 +431,7 @@ class ReplyWriter:
             draft = clean_draft(raw)
             bad = verify_reply(draft, w.caller, w.core, w.facts, history_text, w.risk, last_agent, w.awaiting)
             if bad and question and all("question" in p for p in bad) and not draft.rstrip().endswith("?"):
-                fixed = (draft.rstrip(".! ") + ". " + question).strip()          # the model wrote the body; the system asks its own question
+                fixed = (drop_started_question(draft, question) + " " + question).strip()          # the model wrote the body; the system asks its own question
                 if not verify_reply(fixed, w.caller, w.core, w.facts, history_text, w.risk, last_agent, w.awaiting):
                     draft, bad = fixed, []
             if not bad and self.judge and self.unsupported(w, draft):

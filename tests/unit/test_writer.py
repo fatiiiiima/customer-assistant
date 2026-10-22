@@ -363,3 +363,11 @@ def test_the_models_question_is_held_so_missing_facts_come_before_it():
     said, _ = stream("Ah, nice! We've got two Toyota SUVs. Which one would you like to hear more about?")
     assert said[-1].endswith("hear more about?") and said.index(next(s for s in said if "105,000" in s)) < len(said) - 1
     assert sum(s.endswith("?") for s in said) == 1                                    # the question is asked once
+
+
+def test_a_cut_off_start_of_the_system_question_is_not_said_twice():
+    from dealer_core.dialogue.writer import drop_started_question
+
+    q = "Which one would you like to hear more about?"
+    assert drop_started_question("I've got a Corolla and a Camry. Which one", q) == "I've got a Corolla and a Camry."
+    assert drop_started_question("I've got a Corolla. Anything else", q) == "I've got a Corolla. Anything else."

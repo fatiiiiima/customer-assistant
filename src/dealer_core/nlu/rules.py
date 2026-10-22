@@ -134,6 +134,8 @@ class RuleEngine:
         if car and money and state in (State.ANSWERING, State.NEGOTIATING) and OFFER_WORDS.search(norm) and not any(t in ex.BODY for t in toks):
             return ok(Intent.MAKE_OFFER, "amount-for-this-car")
         has_km = any((toks[j] if j < len(toks) else "") in ex.KM_TOKENS for _, _, j in spans)
+        if state in (State.INTEREST, State.GREETING) and not car and len(toks) <= 6 and ex.wants_listing(text):
+            return ok(Intent.SEARCH_CARS, "no-preference")          # "any budget" / "doesn't matter": the answer to a narrowing question, so show what matches
         if money and state in (State.INTEREST, State.GREETING) and not car:         # "a hundred thousand" / "under 100,000 dirhams" alone: the answer to "what's your budget?"
             counted = {k for _, i, j in spans for k in range(i, j)}
             if all(k in counted or t in BUDGET_FILLER for k, t in enumerate(toks)) and not has_km:
