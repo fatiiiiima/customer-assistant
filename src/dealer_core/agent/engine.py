@@ -123,13 +123,20 @@ class AgentEngine:
             facts = "\n".join(result["facts"])
             w = WriterInput(caller=text, core=result["core"], risk=result["risk"], history=list(s.history), facts=facts, awaiting=result["awaiting"])
             dbg.risk = result["risk"]
-            for sentence in self.reply_writer.stream(w):
-                spoken.append(sentence)
-                yield sentence
-            info = self.reply_writer.last_stream
-            dbg.lead_ms = info.get("first_ms", 0.0)
-            if info.get("stopped"):
-                dbg.note = (dbg.note + "; " if dbg.note else "") + "stream: " + info["stopped"]
+            temperature = self.reply_writer.temperature
+            for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
+                if attempt:
+                    self.reply_writer.temperature = 0.2
+                for sentence in self.reply_writer.stream(w):
+                    spoken.append(sentence)
+                    yield sentence
+                info = self.reply_writer.last_stream
+                dbg.lead_ms = info.get("first_ms", 0.0)
+                if info.get("stopped"):
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
+                if spoken:
+                    break
+            self.reply_writer.temperature = temperature
             if spoken:
                 dbg.draft = " ".join(spoken)
                 dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), result["core"].lower()).ratio(), 2)

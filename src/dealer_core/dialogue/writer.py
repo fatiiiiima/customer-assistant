@@ -399,7 +399,7 @@ def split_point(text: str) -> tuple[int, int] | None:
     return (sentence.start() + 1, sentence.end()) if sentence else None
 
 
-_ARRANGE_OK = re.compile(r"(?:we|i) can (?:arrange|get you in|set (?:that|it) up|book (?:that|it|you|a test drive))|let me have your|i can take your", re.I)
+_ARRANGE_OK = re.compile(r"(?:we|i) can (?:arrange|get you in|set (?:that|it) up|book (?:that|it|you|a test drive))|let me have your|i can take your|we'll (?:see|get|have|sort|note|be (?:looking|checking|seeing))|i'll (?:get|see|sort|note|take)|let me (?:get|note|help|set)", re.I)
 
 
 def promise_in(text: str):
