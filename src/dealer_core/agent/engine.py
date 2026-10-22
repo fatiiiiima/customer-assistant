@@ -48,6 +48,7 @@ cancel_draft     the customer says no or wants to change the booking details.
 handoff          the customer asks for a person, or is upset.
 end_call         the customer says goodbye or is finished.
 none             greeting, thanks, small talk, anything that needs no lookup.
+                 A question or doubt about what is in stock ("do you have more?", "you don't have anymore?", "you said four") is search_cars, not none.
 
 The customer's words come from speech recognition and can be misspelled. The stock id must come from CODE HINT, CAR IN FOCUS or LAST SHOWN ("it", "this one",
 "the second one" mean a car from there). Prices are fixed: nothing to negotiate.
@@ -235,7 +236,14 @@ class AgentEngine:
 
     def _t_none(self, s, args, text, dbg) -> dict:
         question = "What are you looking for today?" if not s.car and not s.shown else "Is there anything else I can help with?"
-        return {"core": question, "facts": ["No lookup was needed."], "awaiting": False}
+        context = []
+        cars = ([self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []) + list(s.shown)
+        if cars:
+            context = ["Cars the customer has been shown in this call (these ARE in stock):", *fact_sheet(cars[:4], self._branch_name).splitlines()]
+        if s.filters:
+            context.append(f"What they have asked for so far: {s.filters}.")
+        return {"core": question, "facts": ["No lookup was needed. Answer from the conversation and these facts only; never say the dealership has no cars unless a search said so.", *context],
+                "awaiting": False}
 
     def _t_search_cars(self, s, args, text, dbg) -> dict:
         vocab = self.svc.inventory.vocabulary()
@@ -268,6 +276,8 @@ class AgentEngine:
             filters = SearchFilters(make=f.get("make"), model=f.get("model"), color=f.get("color"), max_price=f.get("max_price"))
         unchanged = f == s.filters                                   # nothing new said: "any budget" / "doesn't matter" / "show me"
         s.filters = f
+        if ex.wants_others(text) and s.shown:                          # "any others?" / "you don't have anymore?": not the ones already read out
+            filters = filters.model_copy(update={"exclude_stock_ids": tuple(c.stock_id for c in s.shown)})
         res = self.svc.search_cars(filters)
         dbg.tools.append(f"search_cars({f}) -> {res.total} match(es)")
         s.state = State.ANSWERING if res.cars else State.INTEREST
