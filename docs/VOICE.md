@@ -101,3 +101,10 @@ tried with a real voice and microphone.
 * A few unclear words are answered by asking the last question again ("Sorry, I didn't quite catch that. ..."), not by offering a colleague.
 * `tests/data/real_utterances.yaml` holds the lines that went wrong in real calls, with the question that came before. Add every new miss there.
   `tests/unit/test_real_utterances.py` checks the code-decided ones; `scripts/replay_utterances.py --times 3` runs them all against the real model, three times each.
+
+## The model drafts every reply (voice)
+
+`voice.high_risk_drafts` (default true): price, booking and hand-off turns are worded by the model too, like everything else. Code still decides every fact
+(the pricing engine, the slots, the booking) and checks every sentence before it is spoken: no new number, name or claim, and no "booked / confirmed / all set"
+unless the system said so. Fallbacks to the standard wording: a sentence that fails a check, a missed deadline, a missing detail (the standard sentence is
+appended, e.g. the read-back with the phone number). Cost measured on the synthetic caller: booking turns reach the first sound in about 2.0 s (was 1.3-1.5 s).

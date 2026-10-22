@@ -1,66 +1,6 @@
-[32m2026-10-22 08:58:07.534[0m | [1mINFO    [0m | [36mpipecat[0m:[36m<module>[0m:[36m54[0m - [1m\u14da\u160f\u15e2 Pipecat 1.13.0 (Python 3.12.15 (main, Oct 14 2026, 01:08:45) [MSC v.1944 64 bit (AMD64)]) \u14da\u160f\u15e2[0m
+[32m2026-10-22 09:50:49.654[0m | [1mINFO    [0m | [36mpipecat[0m:[36m<module>[0m:[36m54[0m - [1m\u14da\u160f\u15e2 Pipecat 1.13.0 (Python 3.12.15 (main, Oct 14 2026, 01:08:45) [MSC v.1944 64 bit (AMD64)]) \u14da\u160f\u15e2[0m
 Loading the language model (first start takes a few seconds)...
 NLU backend active: openvino_gpu (openvino Qwen3-4B-Instruct-2507-int4-ov-nocal@GPU (state prompt))  [6.9 s]
 
 Loading speech models...
 Voice server ready on ws://127.0.0.1:8766/voice  (up to 2 calls; pages allowed: http://localhost:8080, http://127.0.0.1:8080)
-[32m2026-10-22 08:58:54.323[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.vad.silero[0m:[36m__init__[0m:[36m169[0m - [34m[1mLoading Silero VAD model...[0m
-[32m2026-10-22 08:58:54.417[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.vad.silero[0m:[36m__init__[0m:[36m194[0m - [34m[1mLoaded Silero VAD[0m
-[32m2026-10-22 08:58:54.433[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.turn.smart_turn.local_smart_turn_v3[0m:[36m__init__[0m:[36m68[0m - [34m[1mLoading Local Smart Turn v3.x model from C:\dev\voice-agent\.venv\Lib\site-packages\pipecat\audio\turn\smart_turn\data\smart-turn-v3.2-cpu.onnx...[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.turn.smart_turn.local_smart_turn_v3[0m:[36m__init__[0m:[36m78[0m - [34m[1mLoaded Local Smart Turn v3.x[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking Pipeline#0::Source -> FastAPIWebsocketInputTransport#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking FastAPIWebsocketInputTransport#0 -> VADProcessor#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking VADProcessor#0 -> SmartEndpointer#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking SmartEndpointer#0 -> StatusLine#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking StatusLine#0 -> OpenVinoWhisperSTTService#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking OpenVinoWhisperSTTService#0 -> StatusLine#1[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking StatusLine#1 -> DealerBrain#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking DealerBrain#0 -> StatusLine#2[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking StatusLine#2 -> SherpaPiperTTSService#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking SherpaPiperTTSService#0 -> FastAPIWebsocketOutputTransport#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking FastAPIWebsocketOutputTransport#0 -> Pipeline#0::Sink[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking PipelineWorker#0::Source -> RTVIProcessor#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking RTVIProcessor#0 -> Pipeline#0[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.frame_processor[0m:[36mlink[0m:[36m696[0m - [34m[1mLinking Pipeline#0 -> PipelineWorker#0::Sink[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.runner[0m:[36madd_workers[0m:[36m230[0m - [34m[1mWorkerRunner 'runner-24fc9c13': added worker 'PipelineWorker#0'[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.runner[0m:[36mrun[0m:[36m273[0m - [34m[1mWorkerRunner 'runner-24fc9c13': started running[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.runner[0m:[36m_start_worker[0m:[36m459[0m - [34m[1mWorkerRunner 'runner-24fc9c13': starting worker 'PipelineWorker#0'[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.vad.vad_analyzer[0m:[36mset_params[0m:[36m157[0m - [34m[1mSetting VAD params to: confidence=0.7 start_secs=0.2 stop_secs=0.2 min_volume=0.6[0m
-[32m2026-10-22 08:58:54.493[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36m_wait_for_pipeline_start[0m:[36m1309[0m - [34m[1mPipelineWorker#0: Starting. Waiting for StartFrame#0 to reach the end of the pipeline...[0m
-[32m2026-10-22 08:58:54.501[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36m_synthesize_text[0m:[36m1686[0m - [34m[1mSherpaPiperTTSService#0: Generating TTS [Hi, welcome to the AGMC dealership. What kind of car are you looking for?][0m
-[32m2026-10-22 08:58:54.501[0m | [34m[1mDEBUG   [0m | [36mpipecat.registry.registry[0m:[36mregister[0m:[36m132[0m - [34m[1mWorker 'PipelineWorker#0' ready (local)[0m
-[32m2026-10-22 08:58:54.501[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.runner[0m:[36m_send_registry[0m:[36m511[0m - [34m[1mWorkerRunner 'runner-24fc9c13': broadcasting registry: ['PipelineWorker#0'][0m
-[32m2026-10-22 08:58:54.501[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.base_worker[0m:[36m_maybe_activate[0m:[36m1284[0m - [34m[1mWorker 'PipelineWorker#0': activated[0m
-[32m2026-10-22 08:58:54.501[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36m_wait_for_pipeline_start[0m:[36m1326[0m - [34m[1mPipelineWorker#0: StartFrame#0 reached the end of the pipeline, pipeline is now ready.[0m
-[32m2026-10-22 08:58:54.533[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36mappend_to_audio_context[0m:[36m964[0m - [34m[1mSherpaPiperTTSService#0 recreating audio context 921b6c89-9288-4025-84d4-0bc7835a9516[0m
-[32m2026-10-22 08:58:54.533[0m | [34m[1mDEBUG   [0m | [36mpipecat.transports.base_output[0m:[36m_bot_started_speaking[0m:[36m751[0m - [34m[1mBot started speaking[0m
-[32m2026-10-22 08:59:02.033[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.audio.vad_processor[0m:[36mon_speech_started[0m:[36m73[0m - [34m[1mVADProcessor#0: User started speaking[0m
-[32m2026-10-22 08:59:03.214[0m | [34m[1mDEBUG   [0m | [36mpipecat.transports.base_output[0m:[36m_bot_stopped_speaking[0m:[36m856[0m - [34m[1mBot stopped speaking[0m
-[32m2026-10-22 08:59:05.616[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.audio.vad_processor[0m:[36mon_speech_stopped[0m:[36m81[0m - [34m[1mVADProcessor#0: User stopped speaking[0m
-[32m2026-10-22 08:59:05.717[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.turn.smart_turn.base_smart_turn[0m:[36manalyze_end_of_turn[0m:[36m167[0m - [34m[1mEnd of Turn result: EndOfTurnState.INCOMPLETE[0m
-[32m2026-10-22 08:59:05.717[0m | [34m[1mDEBUG   [0m | [36mdealer_core.voice.endpoint[0m:[36mprocess_frame[0m:[36m52[0m - [34m[1msmart turn: still going, holding the end of turn[0m
-[32m2026-10-22 08:59:07.216[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.turn.smart_turn.base_smart_turn[0m:[36mappend_audio[0m:[36m134[0m - [34m[1mEnd of Turn complete due to stop_secs. Silence in ms: 1000.0[0m
-[32m2026-10-22 08:59:07.557[0m | [34m[1mDEBUG   [0m | [36mdealer_core.voice.services[0m:[36mrun_stt[0m:[36m64[0m - [34m[1mSTT 340 ms, 6 words, 4.7 s of audio, level 0.074[0m
-[32m2026-10-22 08:59:08.623[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36m_synthesize_text[0m:[36m1686[0m - [34m[1mSherpaPiperTTSService#0: Generating TTS [Got it!][0m
-[32m2026-10-22 08:59:08.673[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36mappend_to_audio_context[0m:[36m964[0m - [34m[1mSherpaPiperTTSService#0 recreating audio context 4d3b2e0f-5f78-4c95-97fe-c27df8f739d5[0m
-[32m2026-10-22 08:59:08.673[0m | [34m[1mDEBUG   [0m | [36mpipecat.transports.base_output[0m:[36m_bot_started_speaking[0m:[36m751[0m - [34m[1mBot started speaking[0m
-[32m2026-10-22 08:59:09.842[0m | [34m[1mDEBUG   [0m | [36mdealer_core.voice.brain[0m:[36m_answer[0m:[36m75[0m - [34m[1mbrain first sentence 1063 ms, intent search_cars, via rules[0m
-[32m2026-10-22 08:59:09.842[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36m_synthesize_text[0m:[36m1686[0m - [34m[1mSherpaPiperTTSService#0: Generating TTS [I have a 2021 Toyota RAV4 at 98,500 dirhams and a 2018 Toyota Land Cruiser at 189,000 dirhams.][0m
-[32m2026-10-22 08:59:10.154[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36mappend_to_audio_context[0m:[36m964[0m - [34m[1mSherpaPiperTTSService#0 recreating audio context 40a69132-814a-4083-9d17-5850a830fe10[0m
-[32m2026-10-22 08:59:10.421[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36m_synthesize_text[0m:[36m1686[0m - [34m[1mSherpaPiperTTSService#0: Generating TTS [Which one would you like to hear more about?][0m
-[32m2026-10-22 08:59:10.560[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36mappend_to_audio_context[0m:[36m964[0m - [34m[1mSherpaPiperTTSService#0 recreating audio context 7643b1d2-e5bc-483b-95d9-9d03a9a1a87b[0m
-[32m2026-10-22 08:59:25.328[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.audio.vad_processor[0m:[36mon_speech_started[0m:[36m73[0m - [34m[1mVADProcessor#0: User started speaking[0m
-[32m2026-10-22 08:59:26.865[0m | [34m[1mDEBUG   [0m | [36mpipecat.transports.base_output[0m:[36m_bot_stopped_speaking[0m:[36m856[0m - [34m[1mBot stopped speaking[0m
-[32m2026-10-22 08:59:27.671[0m | [34m[1mDEBUG   [0m | [36mpipecat.processors.audio.vad_processor[0m:[36mon_speech_stopped[0m:[36m81[0m - [34m[1mVADProcessor#0: User stopped speaking[0m
-[32m2026-10-22 08:59:27.783[0m | [34m[1mDEBUG   [0m | [36mpipecat.audio.turn.smart_turn.base_smart_turn[0m:[36manalyze_end_of_turn[0m:[36m167[0m - [34m[1mEnd of Turn result: EndOfTurnState.COMPLETE[0m
-[32m2026-10-22 08:59:28.027[0m | [34m[1mDEBUG   [0m | [36mdealer_core.voice.services[0m:[36mrun_stt[0m:[36m64[0m - [34m[1mSTT 244 ms, 6 words, 3.0 s of audio, level 0.072[0m
-[32m2026-10-22 08:59:28.527[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36m_synthesize_text[0m:[36m1686[0m - [34m[1mSherpaPiperTTSService#0: Generating TTS [Sure!][0m
-[32m2026-10-22 08:59:28.585[0m | [34m[1mDEBUG   [0m | [36mpipecat.services.tts_service[0m:[36mappend_to_audio_context[0m:[36m964[0m - [34m[1mSherpaPiperTTSService#0 recreating audio context dd9c4ff6-d4bd-4e14-853e-06ec6ea44160[0m
-[32m2026-10-22 08:59:28.586[0m | [34m[1mDEBUG   [0m | [36mpipecat.transports.base_output[0m:[36m_bot_started_speaking[0m:[36m751[0m - [34m[1mBot started speaking[0m
-[32m2026-10-22 08:59:30.162[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36m_cancel[0m:[36m1170[0m - [34m[1mCancelling pipeline worker PipelineWorker#0[0m
-[32m2026-10-22 08:59:30.162[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36m_wait_for_pipeline_end[0m:[36m1346[0m - [34m[1mPipelineWorker#0: Closing. Waiting for CancelFrame#0(reason: None) to reach the end of the pipeline...[0m
-[32m2026-10-22 08:59:30.164[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36mwait_for_cancel[0m:[36m1337[0m - [34m[1mPipelineWorker#0: CancelFrame#0(reason: None) reached the end of the pipeline.[0m
-[32m2026-10-22 08:59:30.164[0m | [34m[1mDEBUG   [0m | [36mpipecat.utils.base_object[0m:[36mcleanup[0m:[36m179[0m - [34m[1mPipelineWorker#0: waiting on event handlers to finish ['on_pipeline_finished']...[0m
-[32m2026-10-22 08:59:30.164[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36mrun[0m:[36m909[0m - [34m[1mPipeline worker PipelineWorker#0 is finishing...[0m
-[32m2026-10-22 08:59:30.164[0m | [34m[1mDEBUG   [0m | [36mpipecat.pipeline.worker[0m:[36mrun[0m:[36m914[0m - [34m[1mPipeline worker PipelineWorker#0 has finished[0m
-[32m2026-10-22 08:59:30.166[0m | [34m[1mDEBUG   [0m | [36mpipecat.workers.runner[0m:[36mrun[0m:[36m316[0m - [34m[1mWorkerRunner 'runner-24fc9c13': finished running[0m

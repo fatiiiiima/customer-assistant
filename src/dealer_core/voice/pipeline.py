@@ -53,6 +53,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     w.max_tokens = min(w.max_tokens, cfg.voice.reply_max_tokens)
     w.retries = 0
     w.opener = cfg.voice.opener
+    app.engine.stream_high_risk = cfg.voice.high_risk_drafts
 
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,

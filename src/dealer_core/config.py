@@ -173,6 +173,7 @@ class VoiceCfg(_Strict):
     reply_max_words: int = 20
     reply_max_tokens: int = 48
     opener: bool = True                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
     smart_fallback_secs: float = 1.0              # with smart_turn: silence after which the turn ends even if the model says "still going"

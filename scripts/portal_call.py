@@ -91,6 +91,7 @@ async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str,
                         break
         except websockets.ConnectionClosed:
             out["status"] = out["status"] if out["status"] != "ok" else "closed"
+        await asyncio.sleep(4)                                # events for the last turn (the booking) arrive after its audio
         await ws.close()
         task.cancel()
     return out

@@ -53,6 +53,9 @@ CLAIMS = re.compile(r"\b(?:\w+\s)?condition\b|pristine|immaculate|spotless|flawl
                     r"top[- ]notch|great shape|good shape|excellent shape|runs well|drives (?:great|well|beautifully)|smooth ride|fuel[- ]efficient|"
                     r"great (?:car|deal|value|price)|good (?:deal|value|price)|bargain|steal", re.I)
 
+# "You're booked", "all set", "confirmed": only the system may say the booking is done (a model said it two steps early, before the phone number).
+_DONE = re.compile(r"\b(?:booked|confirmed|all set|reserved|locked in|scheduled)\b", re.I)
+
 INTENT_WORDS = {
     "search_cars": "they are looking for cars (a search)", "ask_car_info": "they asked about a car", "make_offer": "they made a price offer",
     "ask_lowest_price": "they asked for the best price", "book_test_drive": "they want to book a test drive", "give_slot": "they gave a day or time",
@@ -217,6 +220,8 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
         problems.append(f"dropped or reordered item(s) of a list: {', '.join(missing_items[:3])}")
     if FORBIDDEN.search(draft) and not FORBIDDEN.search(core) and not FORBIDDEN.search(facts):
         problems.append(f"new commercial/commitment word '{FORBIDDEN.search(draft).group(0)}'")
+    if _DONE.search(draft) and not _DONE.search(core + " " + facts):
+        problems.append("says the visit is booked or confirmed, which the system has not said")
     if _PROMISE.search(draft) and not _PROMISE.search(core):
         problems.append("new first-person promise or ability")
     first_core = (voice_rules.sentences(core) or [core])[0]
@@ -286,6 +291,8 @@ def verify_sentence(sentence: str, user_text: str, core: str, facts: str, histor
             break
     if FORBIDDEN.search(sentence) and not FORBIDDEN.search(core) and not FORBIDDEN.search(facts):
         problems.append(f"new commercial/commitment word '{FORBIDDEN.search(sentence).group(0)}'")
+    if _DONE.search(sentence) and not _DONE.search(core + " " + facts):
+        problems.append("says the visit is booked or confirmed, which the system has not said")
     if _PROMISE.search(sentence) and not _PROMISE.search(core):
         problems.append("new first-person promise or ability")
     polite = re.sub(r"\bno (?:problem|worries)\b|\bnot a problem\b|\bno need\b", "", sentence, flags=re.I)
@@ -461,12 +468,19 @@ class ReplyWriter:
         closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
         last_core = (voice_rules.sentences(w.core) or [""])[-1]
         question = last_core if w.core.rstrip().endswith("?") and not is_generic_closer(last_core) else ""
+        high = w.risk == "high"
+        words = (self.max_words * 2 if high else self.max_words) if self.max_words else 0      # a read-back needs more room than a quick answer
+        max_tokens = self.max_tokens * 2 if high else self.max_tokens
+        deadline = self.deadline_s * 1.6 if (high and self.deadline_s) else self.deadline_s
         user = (f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
                 f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
                    "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
                 + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
-                + (f"\n\nThis is spoken on the phone: keep it under {self.max_words} words." if self.max_words else "")
+                + ("\n\nThis step carries exact details from the system. Say the details that the STANDARD WORDING gives (day, time, car, name, phone number, price), "
+                   "exactly, as one or two complete, natural sentences a person would say on the phone (not a list of details). Say NOTHING the STANDARD WORDING does not say: in particular do not say the visit is booked or "
+                   "confirmed unless it says so, and do not bring in a price that this step does not mention." if high else "")
+                + (f"\n\nThis is spoken on the phone: keep it under {words} words." if words else "")
                 + ("\n\nBegin with a very short natural reaction of at most 5 words as its own sentence (for example \"Sure thing!\" or \"Ah, good question.\"), "
                    "then give the answer." if self.opener else ""))
         history_text = " ".join(t for _, t in w.history)
@@ -501,7 +515,7 @@ class ReplyWriter:
             return now
 
         try:
-            for piece in self.backend.lead_in_stream(SYSTEM, user, self.max_tokens, self.temperature, self.deadline_s):
+            for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, self.temperature, deadline):
                 buf += piece
                 while not stopped and (m := boundary.search(buf)):
                     sentence, buf = buf[:m.start() + 1], buf[m.end():]

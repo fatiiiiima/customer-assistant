@@ -371,3 +371,12 @@ def test_a_cut_off_start_of_the_system_question_is_not_said_twice():
     q = "Which one would you like to hear more about?"
     assert drop_started_question("I've got a Corolla and a Camry. Which one", q) == "I've got a Corolla and a Camry."
     assert drop_started_question("I've got a Corolla. Anything else", q) == "I've got a Corolla. Anything else."
+
+
+def test_a_model_may_not_say_the_visit_is_booked_before_the_system_does():
+    from dealer_core.dialogue.writer import verify_sentence
+
+    core = "Thanks, Sara. And your mobile number?"
+    assert verify_sentence("Sara, you're booked for the BMW tomorrow.", "My name is Sara", core, "", "")
+    done = "You're booked for tomorrow at 4:00 PM."
+    assert not verify_sentence("You're booked for tomorrow at 4:00 PM.", "yes", done, "", "")
