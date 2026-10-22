@@ -287,7 +287,10 @@ class AgentEngine:
         if not res.cars:
             return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?",
                     "facts": [f"Search for {wanted}: no cars in stock match."], "awaiting": True}
-        sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
+        if len(res.cars) > 1 or res.needs_narrowing:                   # a list is names and prices only: no kilometres etc. for the model to mangle mid-sentence
+            sheet = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams" for c in res.cars]
+        else:
+            sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
         if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
             s.narrow_asks += 1
             return {"core": f"I have {res.total} cars like that. Could you tell me your budget or a make?",
