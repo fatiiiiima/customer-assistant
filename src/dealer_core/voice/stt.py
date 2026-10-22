@@ -36,13 +36,15 @@ class WhisperOpenVino:
     def warm_up(self) -> None:
         self.transcribe_float(np.zeros(SAMPLE_RATE, dtype=np.float32))              # compiles / loads the first time
 
-    def transcribe_float(self, audio: np.ndarray) -> str:
+    def transcribe_float(self, audio: np.ndarray, prompt: str | None = None) -> str:
         with self._lock:                                                          # one pipeline shared by every call: it is not re-entrant
+            if prompt is not None and hasattr(self.cfg, "initial_prompt"):
+                self.cfg.initial_prompt = prompt                                  # what to expect right now (see voice/prompts.py)
             res = self.pipe.generate(audio.astype(np.float32).tolist(), self.cfg)
         return str(res.texts[0] if hasattr(res, "texts") else res).strip()
 
-    def transcribe(self, pcm16: bytes) -> tuple[str, float]:
+    def transcribe(self, pcm16: bytes, prompt: str | None = None) -> tuple[str, float]:
         """16 kHz mono signed 16-bit PCM -> (text, milliseconds)."""
         t0 = time.perf_counter()
-        text = self.transcribe_float(np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0)
+        text = self.transcribe_float(np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0, prompt)
         return text, (time.perf_counter() - t0) * 1000

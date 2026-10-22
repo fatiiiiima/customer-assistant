@@ -37,6 +37,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
 
     def __init__(self, *, engine: WhisperOpenVino, min_rms: float = MIN_RMS, **kwargs) -> None:
         self.min_rms = min_rms
+        self.prompt_for = None                   # set by the pipeline: () -> the recognizer hint for what the agent just asked
         super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
@@ -54,7 +55,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
             logger.debug(f"STT skipped: segment too quiet to be speech (level {rms:.4f})")
             return
         await self.start_processing_metrics()
-        text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio)
+        text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
         if text and is_phantom(text):
             logger.debug(f"STT dropped a repeated-word hallucination ({len(text.split())} words)")
