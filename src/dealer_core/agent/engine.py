@@ -259,6 +259,7 @@ class AgentEngine:
         except ValueError:
             f.pop("body_type", None)
             filters = SearchFilters(make=f.get("make"), model=f.get("model"), color=f.get("color"), max_price=f.get("max_price"))
+        unchanged = f == s.filters                                   # nothing new said: "any budget" / "doesn't matter" / "show me"
         s.filters = f
         res = self.svc.search_cars(filters)
         dbg.tools.append(f"search_cars({f}) -> {res.total} match(es)")
@@ -270,14 +271,19 @@ class AgentEngine:
             return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?",
                     "facts": [f"Search for {wanted}: no cars in stock match."], "awaiting": True}
         sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
-        if res.needs_narrowing:
+        if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
+            s.narrow_asks += 1
             return {"core": f"I have {res.total} cars like that. Could you tell me your budget or a make?",
                     "facts": [f"Search for {wanted}: exactly {res.total} cars match (say the number {res.total}, never 'a few' or 'several'), too many to read out. Examples:", *sheet,
                               "Ask one narrowing question (budget, make, body type or colour) instead of listing them all."], "awaiting": True}
+        more = res.total - len(res.cars)
+        if not res.needs_narrowing:
+            s.narrow_asks = 0
         items = [f"a {T.car_name(c)} at {T.money(c.price)}" for c in res.cars]
         listed = items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
         ask = "Would you like to hear more, or book a test drive?" if len(items) == 1 else "Which one would you like to hear more about?"
-        return {"core": f"I have {listed}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet], "awaiting": True}
+        return {"core": f"I have {listed}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
+                                                              *([f"There are {more} more not listed: say how many in total ({res.total}) and read out only these {len(res.cars)}."] if more > 0 else [])], "awaiting": True}
 
     def _t_get_car(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
