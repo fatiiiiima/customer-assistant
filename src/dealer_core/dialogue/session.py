@@ -48,6 +48,7 @@ class Session:
     last_focus: str = ""                                     # how the last search utterance was interpreted (see focus.py)
     handoff: Handoff | None = None
     misheard: int = 0
+    read_back: bool = False                                  # agent engine: the booking details were read back and the customer's yes/no is awaited
 
     def remember(self, who: str, text: str) -> None:
         """Keep the conversation so far (this call only; never written to a log). The reply writer and the intent call read it."""

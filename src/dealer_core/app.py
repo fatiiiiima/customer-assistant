@@ -49,10 +49,14 @@ def demo_clock(cfg: Config) -> Callable[[], datetime]:
     return lambda: monday.astimezone(timezone.utc)
 
 
+def engine_obj_writer(e):
+    return getattr(e, "reply_writer", None)
+
+
 def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = None, classifier: IntentClassifier | None = None,
               clock: Callable[[], datetime] | None = None, chain: BackendChain | None = None,
               lead_in: bool | None = None, lead_backend=None, draft: bool | None = None,
-              reply_mode: str | None = None, portal_data: Path | None = None) -> App:
+              reply_mode: str | None = None, portal_data: Path | None = None, engine: str | None = None) -> App:
     """inventory: 'demo' (16 hand-written fake cars) or 'seed' (60 random fake cars).
     backend: a name from config llm.backends (default: llm.text_backend). Pass `classifier` to inject a fake (tests),
     or `chain` to reuse one started BackendChain across many calls."""
@@ -83,9 +87,21 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
     writer = LeadInWriter(writer_backend, set(cfg.dialogue.lead_in_intents)) if use_lead and writer_backend is not None else None
     use_draft = draft if draft is not None else (mode == "hybrid" and cfg.dialogue.draft)
     drafter = DraftWriter(writer_backend, set(cfg.dialogue.lead_in_intents)) if use_draft and writer_backend is not None else None
-    engine = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed, writer, drafter,
+    dialogue = DialogueEngine(svc, NluPipeline(classifier, rules), phrasebook, cfg.dialogue.variant_seed, writer, drafter,
                             ReplyWriter(writer_backend, cfg.dialogue.high_risk_drafts, judge=cfg.dialogue.judge,
                                                                                   retries=cfg.dialogue.retries, max_tokens=cfg.dialogue.max_reply_tokens,
                                                                                   deadline_s=(cfg.dialogue.reply_deadline_ms / 1000.0) or None,
                                                                                   max_words=cfg.dialogue.reply_max_words) if mode == "conversational" and writer_backend is not None else None)
-    return App(engine, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))
+    if (engine or cfg.dialogue.engine) == "agent":
+        from .agent.engine import AgentEngine
+
+        if engine_obj_writer(dialogue) is None:
+            raise ValueError("the agent engine needs a model-written reply (reply_mode conversational and an LLM backend)")
+        decide = None
+        if cfg.dialogue.decision_backend and chain is not None:
+            from .nlu.chain import BackendChain as _Chain
+
+            decide = _Chain.from_config(cfg, primary=cfg.dialogue.decision_backend)
+            decide.start()                                                       # loads the small model
+        dialogue = AgentEngine(svc, decide or writer_backend, engine_obj_writer(dialogue))
+    return App(dialogue, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

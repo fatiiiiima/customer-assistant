@@ -14,6 +14,7 @@ def main() -> int:
     ap.add_argument("--origin", action="append", help="a page origin allowed to connect (repeatable); default http://localhost:8080")
     ap.add_argument("--backend", default="openvino_gpu", help="llm backend from config; the voice path uses openvino_gpu (the iGPU)")
     ap.add_argument("--mute-while-speaking", action="store_true", help="ignore the microphone while the agent talks (if the agent hears itself on laptop speakers; it can clip a fast reply, so it is off by default and the browser cancels echo)")
+    ap.add_argument("--agent", action="store_true", help="tool-calling agent engine: the model picks the next action, code runs it (experimental; default is the state machine)")
     ap.add_argument("--fixed-silence", action="store_true", help="end turns after a fixed silence instead of Smart Turn")
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--stt-model", help="OpenVINO Whisper folder under models/ov (default voice.stt_model)")
@@ -29,7 +30,7 @@ def main() -> int:
 
     data_js = a.site / "data.js"
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
-    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode)
+    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
     print("Loading speech models...", flush=True)

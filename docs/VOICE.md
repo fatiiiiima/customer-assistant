@@ -114,3 +114,13 @@ appended, e.g. the read-back with the phone number). Cost measured on the synthe
 `--backend openvino_gpu_8b` (OpenVINO/Qwen3-8B-int4-ov, Apache-2.0, 4.9 GB) works (thinking switched off, empty think block stripped) but is not the default:
 on the iGPU, on battery, the first spoken sentence took 1.6-7.4 s (median ~3.7 s) against the 4B's 1.0-4.2 s on the same six-turn conversation; its replies were
 mostly the same as the 4B's. Speech starts on the first clause (6+ words up to a comma), not the first full sentence.
+
+## The agent engine (experimental): `serve_portal.cmd --agent`
+
+`dialogue.engine: agent` (or `--agent` on the server / voice CLI). Each turn the model NAMES the next tool (search_cars, get_car, check_slots, prepare_booking,
+confirm_booking, cancel_draft, handoff, end_call, none) and, for car tools, the stock id: about 5 tokens, 0.4-0.5 s. CODE then reads the arguments (filters, name,
+phone, day and time) out of the caller's words with the same extractors the state machine uses, runs the tool against the real inventory/slots/bookings, and the model
+speaks the result through the same reply writer and sentence checks. A booking needs a read-back and a yes (`confirm_booking`); code re-checks the car and the slot at that
+moment. Asking the model for a full JSON object per turn was tried first: 1.6-3.8 s per decision (decoding is ~18 tokens/s), so the model only names the tool. A 1.7B
+model as the decision-maker was tried and picked the wrong tool most turns.
+Measured on the synthetic six-turn chat (battery, engine only): decision 0.4-0.6 s, first spoken sound 1.7-3.0 s (state machine: 1.0-2.5 s).

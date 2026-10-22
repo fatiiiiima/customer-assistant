@@ -53,7 +53,7 @@ no problem
 """.split())
 
 _NEGATION = re.compile(r"(?:\bnot\b|\bnever\b|\bcannot\b|\bnothing\b|\bnone\b|n't|n’t|\bunable\b)", re.I)
-_PROMISE = re.compile(r"\b(?:i can|i will|i'll|i shall|we can|we will|we'll|let me|i'm going to|i promise|i'll make|i could|we could)\b", re.I)
+_PROMISE = re.compile(r"\b(?:i can|i will(?! need)|i'll(?! need)|i shall|we can|we will|we'll|let me|i'm going to|i promise|i'll make|i could|we could)\b", re.I)
 _WORD = re.compile(r"[a-z]+(?:['’][a-z]+)?")
 _CHARS = re.compile("^[A-Za-z ,'" + chr(0x2019) + ".!-]+$")        # plain letters and basic punctuation only (no dashes, symbols)
 _DIGITS_CURRENCY = re.compile(r"\d|dirham|aed|usd|dollar|%")

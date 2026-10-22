@@ -127,7 +127,7 @@ def verify_chat(draft: str, user_text: str, core: str, facts: str, history: str)
         problems.append("too long for small talk")
     if numbers(draft) - (numbers(facts) | numbers(history) | numbers(user_text)):
         problems.append("new number(s) in small talk")
-    if FORBIDDEN.search(draft) or (_PROMISE.search(draft) and not _PROMISE.search(core)):
+    if FORBIDDEN.search(draft) or (promise_in(draft) and not promise_in(core)):
         problems.append("commitment or commercial wording")
     if _DEALERSHIP_CLAIM.search(draft):
         problems.append("a claim about the dealership")
@@ -223,7 +223,7 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
         problems.append(f"new commercial/commitment word '{FORBIDDEN.search(draft).group(0)}'")
     if _DONE.search(draft) and not _DONE.search(core + " " + facts):
         problems.append("says the visit is booked or confirmed, which the system has not said")
-    if _PROMISE.search(draft) and not _PROMISE.search(core):
+    if promise_in(draft) and not promise_in(core):
         problems.append("new first-person promise or ability")
     first_core = (voice_rules.sentences(core) or [core])[0]
     polite = re.sub(r"\bno (?:problem|worries)\b|\bnot a problem\b|\bno need\b", "", draft, flags=re.I)
@@ -294,7 +294,7 @@ def verify_sentence(sentence: str, user_text: str, core: str, facts: str, histor
         problems.append(f"new commercial/commitment word '{FORBIDDEN.search(sentence).group(0)}'")
     if _DONE.search(sentence) and not _DONE.search(core + " " + facts):
         problems.append("says the visit is booked or confirmed, which the system has not said")
-    if _PROMISE.search(sentence) and not _PROMISE.search(core):
+    if promise_in(sentence) and not promise_in(core):
         problems.append("new first-person promise or ability")
     polite = re.sub(r"\bno (?:problem|worries)\b|\bnot a problem\b|\bno need\b", "", sentence, flags=re.I)
     if not _NEG.search(core) and not _NEG.search(facts) and _NEG.search(polite):
@@ -397,6 +397,14 @@ def split_point(text: str) -> tuple[int, int] | None:
     if clause and (not sentence or clause.start() < sentence.start()):
         return clause.start() + 1, clause.end()
     return (sentence.start() + 1, sentence.end()) if sentence else None
+
+
+_ARRANGE_OK = re.compile(r"(?:we|i) can (?:arrange|get you in|set (?:that|it) up|book (?:that|it|you|a test drive))|let me have your|i can take your", re.I)
+
+
+def promise_in(text: str):
+    """A first-person promise or ability in `text`, ignoring the ordinary ways of offering a test drive (\"we can arrange that\")."""
+    return _PROMISE.search(_ARRANGE_OK.sub("", text))
 
 
 class ReplyWriter:
