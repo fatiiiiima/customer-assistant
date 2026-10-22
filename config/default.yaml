@@ -41,6 +41,12 @@ llm:
       model: Qwen3-4B-Instruct-2507-int4-ov-nocal   # our data-free int4 conversion of the 2507 checkpoint (T0: matches Ollama Q4_K_M)
       prompt_mode: auto                          # -> per-state prompt on GPU
       timeout_s: 6.0                             # warm calls take ~0.7 s; this only fires if the iGPU stalls
+    openvino_gpu_8b:                              # bigger model for more natural replies (about half the speed of the 4B)
+      runtime: openvino
+      device: GPU
+      model: Qwen3-8B-int4-ov
+      prompt_mode: auto
+      timeout_s: 12.0
     openvino_gpu_small:
       runtime: openvino
       device: GPU

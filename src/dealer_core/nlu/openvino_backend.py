@@ -60,9 +60,13 @@ class OpenVinoBackend(NluBackend):
 
     # -- internals ---------------------------------------------------------------------------
     def _prompt(self, system: str, user: str) -> str:
-        return self._tok.apply_chat_template(
-            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        hybrid = not self.llm.think and "Instruct-2507" not in self.path.name
+        prompt = self._tok.apply_chat_template(
+            [{"role": "system", "content": system}, {"role": "user", "content": user + (" /no_think" if hybrid else "")}],
             add_generation_prompt=True, extra_context={"enable_thinking": self.llm.think})
+        if not self.llm.think and "Instruct-2507" not in self.path.name and not prompt.rstrip().endswith("</think>"):
+            prompt += "<think>\n\n</think>\n\n"           # hybrid Qwen3 models (8B): the converted template ignores enable_thinking, so close the thinking block ourselves
+        return prompt
 
     def _gen_config(self, kind: str, state: State):
         key = (kind, state.value)
@@ -134,7 +138,7 @@ class OpenVinoBackend(NluBackend):
             raise BackendTimeout(f"{self.name} lead-in exceeded {limit}s") from e
         if timed_out.is_set():
             raise BackendTimeout(f"{self.name} lead-in stopped at its {limit:.1f}s deadline")
-        return text
+        return re.sub(r"^\s*<think>.*?</think>\s*", "", text, flags=re.S)       # hybrid models: drop the (empty) thinking block
 
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
                        deadline_s: float | None = None) -> Iterator[str]:
@@ -167,6 +171,7 @@ class OpenVinoBackend(NluBackend):
                 pieces.put(None)
 
         self._pool.submit(work)
+        head, think_done = "", False
         try:
             while True:
                 try:
@@ -177,6 +182,16 @@ class OpenVinoBackend(NluBackend):
                     return
                 if isinstance(item, Exception):
                     raise BackendError(f"{type(item).__name__}: {item}") from item
+                if not think_done:                                           # hybrid models start with an (empty) <think></think> block: not speech
+                    head += item
+                    if "</think>" in head:
+                        think_done, item = True, head.split("</think>", 1)[1].lstrip()
+                    elif len(head) > 12 and not head.lstrip().startswith("<think"):
+                        think_done, item = True, head
+                    else:
+                        continue
+                    if not item:
+                        continue
                 yield item
         finally:
             stop.set()

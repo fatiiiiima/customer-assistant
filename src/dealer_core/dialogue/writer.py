@@ -385,6 +385,20 @@ def drop_started_question(draft: str, question: str) -> str:
     return out.rstrip(".! ") + "." if out else ""
 
 
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_CLAUSE_END = re.compile(r",\s+")
+
+
+def split_point(text: str) -> tuple[int, int] | None:
+    """Where the next speakable piece of the model's text ends: a sentence end, or a comma after a clause of 6+ words (so speech can start on the
+    first clause instead of waiting for the whole sentence). Returns (end of piece, start of the rest)."""
+    sentence = _SENTENCE_END.search(text)
+    clause = next((m for m in _CLAUSE_END.finditer(text) if len(text[:m.start()].split()) >= 6), None)
+    if clause and (not sentence or clause.start() < sentence.start()):
+        return clause.start() + 1, clause.end()
+    return (sentence.start() + 1, sentence.end()) if sentence else None
+
+
 class ReplyWriter:
     """Calls the model for the reply and verifies it. `high_risk=False` keeps price/booking/hand-off replies as the standard wording."""
 
@@ -485,14 +499,16 @@ class ReplyWriter:
                 + ("\n\nBegin with a very short natural reaction of at most 5 words as its own sentence (for example \"Sure thing!\" or \"Ah, good question.\"), "
                    "then give the answer." if self.opener else ""))
         history_text = " ".join(t for _, t in w.history)
-        boundary = re.compile(r"(?<=[.!?])\s+")
         buf, spoken, held, stopped = "", [], [], ""
 
         def check(sentence: str) -> str | None:
             nonlocal stopped
+            raw_first = sentence.lstrip()[:1]
             sentence = clean_draft(sentence)
             if not sentence:
                 return None
+            if spoken and spoken[-1].endswith(",") and raw_first.islower() and sentence[:1].isupper():
+                sentence = sentence[:1].lower() + sentence[1:]                    # the rest of a sentence started on its first clause keeps its lower case
             if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
             bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text)
@@ -520,8 +536,8 @@ class ReplyWriter:
         try:
             for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, self.temperature, deadline):
                 buf += piece
-                while not stopped and (m := boundary.search(buf)):
-                    sentence, buf = buf[:m.start() + 1], buf[m.end():]
+                while not stopped and (cut := split_point(buf)):
+                    sentence, buf = buf[:cut[0]], buf[cut[1]:]
                     ok = check(sentence)
                     if ok:
                         for x in accept(ok):

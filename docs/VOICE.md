@@ -108,3 +108,9 @@ tried with a real voice and microphone.
 (the pricing engine, the slots, the booking) and checks every sentence before it is spoken: no new number, name or claim, and no "booked / confirmed / all set"
 unless the system said so. Fallbacks to the standard wording: a sentence that fails a check, a missed deadline, a missing detail (the standard sentence is
 appended, e.g. the read-back with the phone number). Cost measured on the synthetic caller: booking turns reach the first sound in about 2.0 s (was 1.3-1.5 s).
+
+## Bigger model (Qwen3-8B), measured
+
+`--backend openvino_gpu_8b` (OpenVINO/Qwen3-8B-int4-ov, Apache-2.0, 4.9 GB) works (thinking switched off, empty think block stripped) but is not the default:
+on the iGPU, on battery, the first spoken sentence took 1.6-7.4 s (median ~3.7 s) against the 4B's 1.0-4.2 s on the same six-turn conversation; its replies were
+mostly the same as the 4B's. Speech starts on the first clause (6+ words up to a comma), not the first full sentence.
