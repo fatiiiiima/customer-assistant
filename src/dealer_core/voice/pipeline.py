@@ -55,7 +55,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
-                   smart_turn: bool = False, smart_fallback_secs: float = 1.0):
+                   smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -63,7 +63,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
-    stages: list[FrameProcessor] = [source] + ([HalfDuplexGate()] if half_duplex else []) + [vad]
+    stages: list[FrameProcessor] = [source] + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 

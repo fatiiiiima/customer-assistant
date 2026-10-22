@@ -78,7 +78,7 @@ async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str,
         try:
             for _ in range(250):                             # listen to the opening line: 5 s of silence, or until it has finished
                 await pace(silence)
-                if out["audio_s"] > 0.5 and time.monotonic() - last_audio[0] > 0.8:
+                if out["audio_s"] > 0.5 and time.monotonic() - last_audio[0] > 1.2:
                     break
             for clip in clips:
                 heard_before = len(out["timing"])

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import time
 
+from loguru import logger
+
 from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -20,7 +22,9 @@ class HalfDuplexGate(FrameProcessor):
         """Update from the frame and say whether it must be dropped (microphone audio while the agent speaks or its echo fades)."""
         if isinstance(frame, BotStartedSpeakingFrame):
             self._speaking = True
+            logger.debug('gate: agent started speaking, microphone muted')
         elif isinstance(frame, BotStoppedSpeakingFrame):
+            logger.debug('gate: agent stopped speaking')
             self._speaking, self._until = False, self._clock() + self._tail          # the room is still ringing for a moment
         elif isinstance(frame, InputAudioRawFrame):
             return self._speaking or self._clock() < self._until
