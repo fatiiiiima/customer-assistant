@@ -18,18 +18,42 @@ from .stt import SAMPLE_RATE, WhisperOpenVino
 from .tts import PiperSherpa
 
 
-MIN_RMS = 0.012                      # below this (about -38 dBFS) a segment is room noise, not speech; Whisper invents words from it
+MIN_RMS = 0.005                      # loudest 0.3 s below this (about -46 dBFS) is room noise, not speech; Whisper invents words from it.
+                                     # Measured on the real recordings: Whisper still hears them at 5-10% volume, so the gate must not be stricter.
 
 
-def segment_rms(pcm16: bytes) -> float:
+def segment_rms(pcm16: bytes, window: int = 4800) -> float:
+    """Level of the loudest 0.3 s: the segment also holds the 1 s of quiet before the speech, which would drag a whole-segment average down."""
     x = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-    return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+    if len(x) <= window:
+        return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+    return float(np.sqrt(np.convolve(x * x, np.ones(window) / window, "valid").max()))
 
 
 def is_phantom(text: str) -> bool:
     """Whisper's typical inventions on noise: one word repeated ("Fiat, Fiat, Fiat") or a lone fragment made only of punctuation."""
     words = re.findall(r"[\w']+", text.lower())
     return not words or (len(words) >= 3 and len(set(words)) == 1)
+
+
+def collapse_repeats(text: str) -> str:
+    """Whisper sometimes loops on a phrase ("my name is, my name is, my name is, ..."): keep one copy of a phrase repeated 3+ times in a row."""
+    tokens = text.split()
+    key = [re.sub(r"[^\w']", "", t.lower()) for t in tokens]
+    i, out = 0, []
+    while i < len(tokens):
+        for n in range(2, 5):                                     # phrases only: "five five five" in a phone number is real
+            reps = 1
+            while key[i:i + n] == key[i + reps * n:i + (reps + 1) * n] and len(key[i:i + n]) == n:
+                reps += 1
+            if reps >= 3:
+                out += tokens[i:i + n]
+                i += reps * n
+                break
+        else:
+            out.append(tokens[i])
+            i += 1
+    return " ".join(out).strip(" ,")
 
 
 class OpenVinoWhisperSTTService(SegmentedSTTService):
@@ -57,6 +81,8 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         await self.start_processing_metrics()
         text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
+        if text:
+            text = collapse_repeats(text)
         if text and is_phantom(text):
             logger.debug(f"STT dropped a repeated-word hallucination ({len(text.split())} words)")
             text = ""

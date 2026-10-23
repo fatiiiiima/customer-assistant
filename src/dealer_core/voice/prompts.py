@@ -14,7 +14,7 @@ from ..nlu.expected import last_question
 
 DAY_TIME = ("tomorrow, today, this afternoon, tonight, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday, morning, afternoon, evening, "
             "at ten, at four thirty, test drive")
-CONTACT = "my name is, my number is, zero five zero, double five, two"
+CONTACT = "050, 055, 056, 052, double five"        # no "my name is": Whisper continues a primed phrase and loops on it ("my name is, my name is, ...")
 CONFIRM = "yes, no, that's right, that's correct, change the time, a different day"
 _ASKS_WHEN = re.compile(r"(?:\bwhat day|which day|what time|which time|when|works better|suits you|day suits|day and time)\b")
 
@@ -36,8 +36,8 @@ def hotword_groups(path: Path) -> dict[str, list[str]]:
 
 def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], vocab: dict[str, list[str]] | None = None) -> str:
     q = last_question(last_agent).lower()
-    if state is State.CONTACT:
-        return CONTACT + ", " + ", ".join(groups.get("common names", [])[:10])
+    if state is State.CONTACT:                    # digits when a number is asked for; no hint for a name (a list of names made Whisper write a list of names)
+        return CONTACT if re.search(r"number|mobile|phone|digits", q) else ""
     if state is State.CONFIRM and not _ASKS_WHEN.search(q):
         return CONFIRM
     if state is State.SLOT or _ASKS_WHEN.search(q):
@@ -45,4 +45,4 @@ def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], voca
     stock = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
     seen: set[str] = set()
     cars = [x for x in stock + groups.get("makes", [])[:25] + groups.get("models", [])[:25] if not (x.lower() in seen or seen.add(x.lower()))][:60]   # what we actually sell comes first            # no place names: Whisper then hears "Abu Dhabi" in "hello"
-    return ", ".join(cars + ["test drive", "tomorrow", "today"])
+    return ", ".join(cars + ["white, black, grey, silver, red, blue", "the second one", "test drive", "tomorrow", "today"])

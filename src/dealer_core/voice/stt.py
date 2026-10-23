@@ -28,8 +28,9 @@ class WhisperOpenVino:
         self.pipe = ov.WhisperPipeline(str(model_dir), device, CACHE_DIR=str(cache_dir))
         self._lock = threading.Lock()
         self.cfg = self.pipe.get_generation_config()
-        self.cfg.language = f"<|{language}|>"
-        self.cfg.task = "transcribe"
+        if not model_dir.name.split("-int")[0].endswith(".en"):        # English-only models refuse a language or task token
+            self.cfg.language = f"<|{language}|>"
+            self.cfg.task = "transcribe"
         if hotwords and hasattr(self.cfg, "initial_prompt"):
             self.cfg.initial_prompt = ", ".join(hotwords[:60])
 
