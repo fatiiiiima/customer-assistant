@@ -215,3 +215,26 @@ def test_questions_about_the_car_just_discussed_are_answered_by_code_and_short()
     assert "fixed" in haggle.lower() and haggle.lower().count("dirhams") == 1
     assert e._fast_decide(s, "how much is the toyota camry") is None          # another car named: the model decides
     assert e._fast_decide(s, "does it have a warranty") is None               # the code's line does not answer that
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_the_owners_transcript_of_23_october():
+    """Replayed from a real call: thanks after a booking, a new make mid-call, a fragment, the caller's own earlier slot, and a list of 3 of 4."""
+    e, _ = engine(["search_cars", "search_cars", "get_car", "prepare_booking", "get_car", "prepare_booking"])
+    s = e.new_session()
+    e.handle(s, "Toyota")
+    assert "Of the 4" in e.handle(s, "anything works").reply and "one more" in s.history[-1][1]
+    e.handle(s, "Corolla.")
+    e.handle(s, "yes, I want a test drive")
+    e.handle(s, "tomorrow at nine a.m.")
+    e.handle(s, "Fatima 0 5 0 7 9 3 2 5 4 6")
+    e.handle(s, "yes")
+    assert s.booking is not None
+    assert e.handle(s, "Thank you.").debug.intent == "none" and "welcome" in s.history[-1][1].lower()
+    assert e._fast_decide(s, "do you have a BMW as well?")["tool"] == "search_cars"
+    assert e._fast_decide(s, "now I'm looking for any BMW model")["tool"] == "search_cars"
+    assert "say it again" in e.handle(s, "the").reply
+    e.handle(s, "2021 BMW 320I")
+    e.handle(s, "yes I want to book a test drive")
+    assert "already have a test drive" in e.handle(s, "tomorrow at nine a.m.").reply
+    assert e._fast_decide(s, "tomorrow, 11 am.")["tool"] == "prepare_booking"

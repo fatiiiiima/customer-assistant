@@ -18,7 +18,9 @@ from .numbers import normalise, number_spans
 from .datetime_parse import When, parse_when  # noqa: F401  (re-exported)
 from ..tools.phones import normalize_phone
 
-MAKE_ALIASES = {"b w": "bmw", "b and w": "bmw", "bnw": "bmw", "b m w": "bmw", "bm w": "bmw", "mercedes benz": "mercedes", "benz": "mercedes", "merc": "mercedes", "chevy": "chevrolet", "landrover": "land rover"}
+# First words of model names that are also ordinary words: "any BMW model" is not the Tesla Model 3, "the sport one" is not a "Sport" trim
+_GENERIC_HEADS = {"model", "series", "class", "sport", "line", "type", "new", "grand", "super", "range"}
+MAKE_ALIASES = {"range rover": "land rover", "b w": "bmw", "b and w": "bmw", "bnw": "bmw", "b m w": "bmw", "bm w": "bmw", "mercedes benz": "mercedes", "benz": "mercedes", "merc": "mercedes", "chevy": "chevrolet", "landrover": "land rover"}
 BODY = {"suv": "suv", "suvs": "suv", "crossover": "suv", "4x4": "suv", "sedan": "sedan", "sedans": "sedan", "saloon": "sedan",
         "hatchback": "hatchback", "hatch": "hatchback", "coupe": "coupe", "pickup": "pickup", "pickups": "pickup",
         "truck": "pickup", "trucks": "pickup", "van": "van", "vans": "van", "minivan": "van", "minivans": "van"}
@@ -88,7 +90,7 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
         for m, mk in flat:
             heads.setdefault(m.split()[0], []).append((m, mk))
         for head, owners in heads.items():
-            if len(owners) == 1 and " " in owners[0][0] and len(head) >= 3 and f" {head} " in text and head not in vocab:
+            if len(owners) == 1 and " " in owners[0][0] and len(head) >= 3 and f" {head} " in text and head not in vocab and head not in _GENERIC_HEADS:
                 hits.append(owners[0])
     if not hits:
         long_models = [(m, mk) for m, mk in flat if len(m) >= 6]

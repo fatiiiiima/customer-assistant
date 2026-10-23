@@ -42,6 +42,9 @@ _VALUE = re.compile(r"\b(?:good price|fair price|good deal|worth it|worth the|to
 _ATTRIBUTE = {"km": re.compile(r"\b(?:kilomet\w*|km|mileage|miles|done|driven)\b"), "colour": re.compile(r"\b(?:colou?r)\b"),
               "price": re.compile(r"\b(?:price|cost|how much)\b"), "year": re.compile(r"\b(?:year|how old|model year)\b")}
 _ABOUT_THIS_CAR = re.compile(r"\b(?:kilomet\w*|km|mileage|miles|colou?r|price|cost|how much|year|how old)\b")   # only what the code's line answers; engine, warranty, ... go to the model
+_THANKS = re.compile(r"(?:(?:ok|okay|great|perfect|alright|lovely|cool|awesome) )?(?:thank you|thanks|thank you so much|thanks a lot|cheers)(?: (?:so much|very much|a lot))?")
+_LOOKING = re.compile(r"\b(?:looking for|look for|do you have|have you got|any|show me|what about|how about|interested in|i want|i'd like|i would like)\b")
+_FILLER = {"the", "a", "an", "and", "so", "uh", "um", "umm", "hmm", "er", "erm", "ah", "oh", "to", "of", "in", "is", "it", "but", "or", "well"}
 _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|visit|appointment|today|tomorrow|morning|afternoon|evening|tonight)\b")
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
 
@@ -142,6 +145,15 @@ class AgentEngine:
             dbg.note = "session already ended"
             yield "Goodbye."
             yield TurnResult("Goodbye.", dbg, True)
+            return
+        words = ex.tokens_of(text)
+        if not words or all(w in _FILLER for w in words):                    # "the", "um": a fragment the recognizer picked up, not a request
+            line = "Sorry, I didn't catch that. Could you say it again?"
+            dbg.intent, dbg.via, dbg.note = "none", "rules", "fragment: asked to repeat"
+            s.remember("customer", text)
+            s.remember("agent", line)
+            yield line
+            yield TurnResult(line, dbg, False)
             return
         decision = self._fast_decide(s, text) or self._decide(s, text)
         tool = decision.get("tool", "none")
@@ -315,12 +327,19 @@ class AgentEngine:
         picked = ex.selection(text, s.shown)
         if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
             return {"tool": "get_car", "car_id": picked, "via": "rules"}
-        if not s.car or s.ended:
-            return None
         words = ex.tokens_of(text)
         joined = " ".join(words)
+        if _THANKS.fullmatch(joined):
+            return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
+        found = ex.find_vehicle(words, self.svc.inventory.vocabulary())
+        current = self.svc.get_car(s.car) if s.car else None
+        if (found.get("make") and _LOOKING.search(joined) and not found.get("model") and not _BOOKING_CUE.search(joined)
+                and (current is None or current.make.lower() != found["make"])):
+            return {"tool": "search_cars", "via": "rules"}                       # "now I'm looking for any BMW": a new search, not the car before
+        if not s.car or s.ended:
+            return None
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined))
-                and not _BOOKING_CUE.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make")):
+                and not _BOOKING_CUE.search(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
         if s.state is State.CONFIRM and s.read_back and _PLAIN_YES.fullmatch(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
@@ -393,6 +412,8 @@ class AgentEngine:
 
     def _t_none(self, s, args, text, dbg) -> dict:
         question = "What are you looking for today?" if not s.car and not s.shown else "Is there anything else I can help with?"
+        if _THANKS.fullmatch(" ".join(ex.tokens_of(text))):
+            return {"core": f"You're welcome! {question}", "facts": ["The customer said thank you. Say you're welcome and ask if there is anything else."], "awaiting": False}
         context = []
         cars = ([self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []) + list(s.shown)
         if cars:
@@ -460,8 +481,11 @@ class AgentEngine:
         items = [f"a {T.car_name(c)} at {T.money(c.price)}" for c in res.cars]
         listed = items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
         ask = "Would you like to hear more, or book a test drive?" if len(items) == 1 else "Which one would you like to hear more about?"
-        return {"core": f"I have {listed}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
+        if more > 0:                                                       # say the total, so "I have 4" and three names do not contradict each other
+            others = "one more" if more == 1 else f"{more} more"
+            return {"core": f"Of the {res.total}, I have {listed}, and {others}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
                                                               *([f"There are {more} more not listed: say how many in total ({res.total}) and read out only these {len(res.cars)}."] if more > 0 else [])], "awaiting": True}
+        return {"core": f"I have {listed}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet], "awaiting": True}
 
     def _t_get_car(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
@@ -484,6 +508,10 @@ class AgentEngine:
             if part:
                 return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
         return {"core": f"It's the {T.car_name(car)}, {car.color}, {car.km:,} kilometres, {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
+
+    def _booked_car(self, s: Session) -> str:
+        car = self.svc.get_car(s.booking.stock_id) if s.booking else None
+        return T.car_name(car) if car else "other car"
 
     def _slot_text(self, slots, now) -> str:
         return " or ".join(T.when_short(x, now) for x in slots)
@@ -537,7 +565,11 @@ class AgentEngine:
                 free = self.svc.slots.free_slots(car, w.day) if reason is None else []
                 if reason or chosen not in free:
                     alts = list(self.svc.slots.alternatives(car, chosen))[:2]
-                    s.draft_slot = None
+                    s.draft_slot, s.state = None, State.SLOT                     # waiting for another time: the next answer is a time
+                    if s.booking is not None and s.booking.start == chosen:          # the caller's own test drive from earlier in this call
+                        return {"core": f"You already have a test drive booked then, for the {self._booked_car(s)}. How about {self._slot_text(alts, now)}?",
+                                "risk": "high", "awaiting": True, "facts": ["The customer already booked another test drive at that time in this call.",
+                                                                            f"Nearest free: {self._slot_text(alts, now)}."]}
                     why = {"branch_closed": "We're closed then.", "too_soon": "That's a bit too soon.", "too_far_ahead": "That's too far ahead.",
                            "outside_hours_or_off_grid": "We book on the half hour, during opening hours."}.get(reason or "", "That slot isn't free.")
                     return {"core": f"{why} How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
@@ -584,6 +616,9 @@ class AgentEngine:
     def _t_confirm_booking(self, s, args, text, dbg) -> dict:
         car = self.svc.get_car(s.car) if s.car else None
         if not (s.read_back and car and s.draft_slot and s.draft_name and s.draft_phone):
+            if s.booking is not None:                                    # already booked in this call: say so, not "no booking yet"
+                return {"core": f"You're all set for {T.when_short(s.booking.start, self.svc.clock())}. Is there anything else I can help with?",
+                        "facts": ["The test drive is already booked; nothing new to confirm."], "awaiting": False}
             return {"core": "I don't have a booking to confirm yet. Which car and time would you like?", "facts": ["There is no read-back booking to confirm."], "awaiting": True}
         out = self.svc.book_test_drive(car.stock_id, s.draft_name, s.draft_phone, s.draft_slot)
         dbg.tools.append(f"book_test_drive({car.stock_id}, {s.draft_slot:%a %H:%M}) -> {out.kind.value}")

@@ -77,3 +77,5 @@ def test_partial_model_names_and_misheard_bmw():
     for heard in ("B&W, X5.", "BNW X5", "b and w x5"):                     # Whisper's mishearings of "BMW X5"
         assert ex.search_filters(heard, v) == {"make": "bmw", "model": "x5"}, heard
     assert "model" not in ex.search_filters("a toyota", v)                  # a make alone stays a make
+    assert ex.search_filters("NEDMW Model", v) == {}                         # "model" alone is not the Tesla Model 3
+    assert ex.search_filters("in that price range", v) == {}                 # "range" alone is not a Range Rover
