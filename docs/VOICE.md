@@ -209,3 +209,14 @@ The number rule (0.9 s silence right after the agent asks for a phone number) re
 | 5 (cap is 4) | 28 | 1 refused ("busy", close code 1013) | 1.21 s | 1.59 s | 1.91 s | 7.5 s |
 
 (An earlier pass at 1/2/3/4 callers gave a median of 1.14-1.16 s at every level.) Up to the cap there is no visible slowdown; the fifth caller is refused cleanly and the other four are unaffected. "Whole reply" is mostly the length of the speech itself. Limits of this test: the script is short and the callers start in step; first sound in prefix mode is a sentence written by code, so a model-heavy mix of questions (long answers, comparisons) could load the GPU more. Not yet tested: 6+ callers with a higher cap, a mix of start times, real network/HTTPS, a long soak.
+
+### Load, round 2: staggered starts, four different conversations, up to 8 callers (`--max-calls 8`, `load_test.py --mix --stagger 3`)
+
+| Callers | Turns | Failed | First sound median | p90 | Worst | Over 2 s | Total time |
+|---|---|---|---|---|---|---|---|
+| 1 | 7 | 0 | 1.16 s | 2.07 s | 2.09 s | 29% | 121 s |
+| 4 | 27 | 0 | 1.22 s | 2.35 s | 3.20 s | 15% | 145 s |
+| 6 | 42 | 0 | 1.16 s | 2.11 s | 3.14 s | 12% | 156 s |
+| 8 | 54 | 0 | 1.22 s | 2.47 s | 3.34 s | 17% | 154 s |
+
+The median does not move with the number of callers; the slow tail is from the longer questions (comparisons, "tell me everything"), which are slow with one caller too. The conversations take somewhat longer in total with more callers (121 s -> 154 s). No silent turns, no failures. Limits: clean synthetic voices, short conversations, local network, one machine; real callers pause and talk over each other less predictably.

@@ -24,13 +24,26 @@ import numpy as np  # noqa: E402
 from portal_call import DEFAULT_SCRIPT, caller_audio, one_call_tap  # noqa: E402
 
 
+MIX = [DEFAULT_SCRIPT,
+       ["Hi, I'm looking for a family SUV under one hundred thousand dirhams with low mileage", "What is the difference between the first two you mentioned?", "Which of them has the better service history and is it still under warranty?",
+        "Okay, can I come and see the first one on Saturday morning?", "Ten in the morning is fine", "My name is Omar Hassan", "Zero five five nine eight seven six five four three", "Yes that is right"],
+       ["Do you have any BMW X5", "Tell me everything about it, the colour, mileage, engine and price", "Is the price negotiable?", "What other cars do you have that are similar to it?", "Thank you that is all for now"],
+       ["Good afternoon, I want a Toyota Camry or something similar, not too old", "Show me the cheapest one", "How many kilometres has it done and has it had any accidents?",
+        "Can you book me a test drive tomorrow at five in the afternoon", "My name is Layla Ahmed", "My number is zero five zero three three three two two two one", "Yes please confirm it"]]
+
+
 def pct(xs: list[float], p: float) -> float:
     return float(np.percentile(xs, p)) if xs else float("nan")
 
 
-async def level(url: str, origin: str, clips, n: int) -> dict:
+async def staggered(url, origin, clips, i: int, stagger: float):
+    await asyncio.sleep(i * stagger)
+    return await one_call_tap(url, clips, None, f"c{i + 1}", origin, None)
+
+
+async def level(url: str, origin: str, scripts, n: int, stagger: float) -> dict:
     t0 = time.monotonic()
-    res = await asyncio.gather(*[one_call_tap(url, clips, None, f"c{i + 1}", origin, None) for i in range(n)], return_exceptions=True)
+    res = await asyncio.gather(*[staggered(url, origin, scripts[i % len(scripts)], i, stagger) for i in range(n)], return_exceptions=True)
     failed = [r for r in res if isinstance(r, Exception)]
     ok = [r for r in res if not isinstance(r, Exception)]
     first = [t["silence_s"] for r in ok for t in r["turns"] if t["silence_s"] is not None]
@@ -50,12 +63,14 @@ async def main() -> int:
     ap.add_argument("--origin", default="http://localhost:8080")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 3, 4])
     ap.add_argument("--voice", default="amy")
+    ap.add_argument("--mix", action="store_true", help="four different conversations (longer questions, comparisons, a negotiation question) instead of one")
+    ap.add_argument("--stagger", type=float, default=0.0, help="seconds between caller starts")
     a = ap.parse_args()
     print("synthesising caller lines...", flush=True)
-    clips = caller_audio(DEFAULT_SCRIPT, a.voice)
+    scripts = [caller_audio(s, a.voice) for s in (MIX if a.mix else [DEFAULT_SCRIPT])]
     rows = []
     for n in a.levels:
-        r = await level(a.url, a.origin, clips, n)
+        r = await level(a.url, a.origin, scripts, n, a.stagger)
         rows.append(r)
         print(f"{n} caller(s): {r['turns']} turns, {r['failed_calls']} failed calls, {r['silent_turns']} silent; first sound median {r['first_sound_median']} s, p90 {r['p90']} s, worst {r['worst']} s, "
               f"over 2 s: {r['over_2s']}; whole reply median {r['whole_reply_median']} s, p90 {r['whole_reply_p90']} s; mic closes after {r['mic_close_median']} s; greeting {r['greeting_s']} s of speech; {r['wall_s']} s total {r['errors'] or ''}", flush=True)
