@@ -220,3 +220,15 @@ The number rule (0.9 s silence right after the agent asks for a phone number) re
 | 8 | 54 | 0 | 1.22 s | 2.47 s | 3.34 s | 17% | 154 s |
 
 The median does not move with the number of callers; the slow tail is from the longer questions (comparisons, "tell me everything"), which are slow with one caller too. The conversations take somewhat longer in total with more callers (121 s -> 154 s). No silent turns, no failures. Limits: clean synthetic voices, short conversations, local network, one machine; real callers pause and talk over each other less predictably.
+
+### Load, round 3: where this laptop breaks (cap 32, mixed conversations, starts 2 s apart)
+
+| Callers | Failed | First sound median | p90 | Worst | Over 2 s | CPU mean / max | RAM max |
+|---|---|---|---|---|---|---|---|
+| 8 (round 2) | 0 | 1.22 s | 2.47 s | 3.34 s | 17% | - | - |
+| 12 | 0 | 1.56 s | 2.64 s | 5.41 s | 28% | 26% / 53% | 78% |
+| 16 | 0 | 1.62 s | 2.78 s | 11.94 s | 31% | 30% / 66% | 79% |
+| 24 | 0 | 2.62 s | 7.34 s | 25.83 s | 71% | 41% / 77% | 82% |
+| 32 | 0 (1 silent turn) | 7.69 s | 13.42 s | 30.72 s | 76% | 46% / 85% | 83% |
+
+The knee is between 8 and 12 callers. Up to 8 the median is unchanged; at 12-16 the median is about 1.6 s with an occasional 5-12 s turn; at 24 most turns are over 2 s; at 32 the agent is not usable. No call failed, but the waits make it unusable well before that. CPU is only 26-46% on average, so the machine is not out of processor: the limit is the parts that serve one request at a time and are shared by all calls (the speech recogniser behind a lock, the model on the integrated GPU, the voice synthesis). Suggested cap for this laptop: 8 (comfortable) to 10. More capacity needs more of those parts running in parallel, which means a second machine or a GPU.

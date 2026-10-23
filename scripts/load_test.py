@@ -41,9 +41,21 @@ async def staggered(url, origin, clips, i: int, stagger: float):
     return await one_call_tap(url, clips, None, f"c{i + 1}", origin, None)
 
 
+async def sample_machine(into: list) -> None:
+    import psutil
+
+    psutil.cpu_percent()
+    while True:
+        await asyncio.sleep(2)
+        into.append((psutil.cpu_percent(), psutil.virtual_memory().percent))
+
+
 async def level(url: str, origin: str, scripts, n: int, stagger: float) -> dict:
     t0 = time.monotonic()
+    machine: list = []
+    sampler = asyncio.create_task(sample_machine(machine))
     res = await asyncio.gather(*[staggered(url, origin, scripts[i % len(scripts)], i, stagger) for i in range(n)], return_exceptions=True)
+    sampler.cancel()
     failed = [r for r in res if isinstance(r, Exception)]
     ok = [r for r in res if not isinstance(r, Exception)]
     first = [t["silence_s"] for r in ok for t in r["turns"] if t["silence_s"] is not None]
@@ -54,7 +66,7 @@ async def level(url: str, origin: str, scripts, n: int, stagger: float) -> dict:
     return {"callers": n, "failed_calls": len(failed), "errors": sorted({type(e).__name__ + ": " + str(e)[:80] for e in failed}), "turns": len(first) + silent,
             "silent_turns": silent, "first_sound_median": round(pct(first, 50), 2), "p90": round(pct(first, 90), 2), "worst": round(max(first), 2) if first else None,
             "over_2s": round(sum(x > 2 for x in first) / len(first), 2) if first else None, "mic_close_median": round(st.median(closed), 2) if closed else None,
-            "mic_closed_by_tap": taps, "whole_reply_median": round(pct(whole, 50), 1), "whole_reply_p90": round(pct(whole, 90), 1), "greeting_s": round(st.median([r["greeting_s"] for r in ok]), 1) if ok else None, "wall_s": round(time.monotonic() - t0)}
+            "mic_closed_by_tap": taps, "cpu_mean": round(float(np.mean([c for c, _ in machine])), 0) if machine else None, "cpu_max": max((c for c, _ in machine), default=None), "ram_max": max((m for _, m in machine), default=None), "whole_reply_median": round(pct(whole, 50), 1), "whole_reply_p90": round(pct(whole, 90), 1), "greeting_s": round(st.median([r["greeting_s"] for r in ok]), 1) if ok else None, "wall_s": round(time.monotonic() - t0)}
 
 
 async def main() -> int:
@@ -73,7 +85,7 @@ async def main() -> int:
         r = await level(a.url, a.origin, scripts, n, a.stagger)
         rows.append(r)
         print(f"{n} caller(s): {r['turns']} turns, {r['failed_calls']} failed calls, {r['silent_turns']} silent; first sound median {r['first_sound_median']} s, p90 {r['p90']} s, worst {r['worst']} s, "
-              f"over 2 s: {r['over_2s']}; whole reply median {r['whole_reply_median']} s, p90 {r['whole_reply_p90']} s; mic closes after {r['mic_close_median']} s; greeting {r['greeting_s']} s of speech; {r['wall_s']} s total {r['errors'] or ''}", flush=True)
+              f"over 2 s: {r['over_2s']}; whole reply median {r['whole_reply_median']} s, p90 {r['whole_reply_p90']} s; CPU mean {r['cpu_mean']}% max {r['cpu_max']}%, RAM max {r['ram_max']}%; mic closes after {r['mic_close_median']} s; greeting {r['greeting_s']} s of speech; {r['wall_s']} s total {r['errors'] or ''}", flush=True)
         await asyncio.sleep(3)
     (ROOT / "logs").mkdir(exist_ok=True)
     (ROOT / "logs" / "load_test.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
