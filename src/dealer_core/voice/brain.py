@@ -6,6 +6,7 @@ state machine, model-written reply, safety checks. This processor only moves tex
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 from loguru import logger
@@ -23,6 +24,7 @@ class DealerBrain(FrameProcessor):
         self._on_heard, self._on_say = on_heard, on_say          # transcript hooks: what the caller said / what the agent says (off unless the caller of the pipeline asks)
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
+        self.interrupted = 0                            # turns abandoned because the caller spoke over the agent
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -48,24 +50,36 @@ class DealerBrain(FrameProcessor):
             loop = asyncio.get_running_loop()
             sentences: asyncio.Queue = asyncio.Queue()
 
+            cancelled = threading.Event()
+
             def work() -> None:
                 try:
                     for item in self.engine.handle_stream(self.session, text):
+                        if cancelled.is_set():
+                            break                                 # closing the generator also stops the model
                         loop.call_soon_threadsafe(sentences.put_nowait, item)
                 finally:
                     loop.call_soon_threadsafe(sentences.put_nowait, None)
 
             worker = loop.run_in_executor(None, work)
-            first_ms, result = 0.0, None
-            while (item := await sentences.get()) is not None:
-                if isinstance(item, str):
-                    if not first_ms:
-                        first_ms = (time.perf_counter() - t0) * 1000
-                    if self._on_say:
-                        self._on_say(item)
-                    await self.push_frame(TTSSpeakFrame(item, append_to_context=False))
-                else:
-                    result = item
+            first_ms, result, said = 0.0, None, []
+            try:
+                while (item := await sentences.get()) is not None:
+                    if isinstance(item, str):
+                        if not first_ms:
+                            first_ms = (time.perf_counter() - t0) * 1000
+                        said.append(item)
+                        if self._on_say:
+                            self._on_say(item)
+                        await self.push_frame(TTSSpeakFrame(item, append_to_context=False))
+                    else:
+                        result = item
+            except asyncio.CancelledError:                       # the caller spoke over us (barge-in): drop the rest of this reply
+                cancelled.set()
+                self.session.remember("customer", text)           # the engine saves a turn only when it finishes: keep what really happened
+                self.session.remember("agent", (" ".join(said) + " (interrupted)") if said else "(interrupted)")
+                self.interrupted += 1
+                raise
             await worker
             if result is not None:
                 d = result.debug

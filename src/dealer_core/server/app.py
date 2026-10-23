@@ -37,6 +37,7 @@ class ServerState:
     max_call_secs: float = 900.0
     stop_secs: float = 0.35               # the VAD silence (short when smart_turn is on)
     smart_turn: bool = False
+    barge_in: bool = True
     half_duplex: bool = False             # ignore the microphone while the agent talks (laptop speakers leak into the mic); False for headphones
     smart_fallback_secs: float = 1.0
     active: int = 0
@@ -144,7 +145,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         audio_in_enabled=True, audio_out_enabled=True, audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate,
         serializer=PortalSerializer(), session_timeout=None))
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=state.stop_secs, speak_opening=True,
-                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
+                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     brain_ref["brain"] = brain
     car = hello.get("car")
     if isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it

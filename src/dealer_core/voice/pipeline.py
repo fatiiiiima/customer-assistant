@@ -59,7 +59,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
-                   smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5):
+                   smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -73,6 +73,10 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         from .endpoint import SmartEndpointer
 
         stages.append(SmartEndpointer(STT_RATE, smart_fallback_secs))
+    if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
+        from .bargein import BargeIn
+
+        stages.append(BargeIn())
     for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)

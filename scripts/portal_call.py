@@ -35,7 +35,7 @@ def caller_audio(lines: list[str], voice: str) -> list[np.ndarray]:
     return [(np.clip(soxr.resample(tts.synthesize(t), tts.sample_rate, 16000), -1, 1) * 32767).astype(np.int16) for t in lines]
 
 
-async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str, quiet: bool, origin: str) -> dict:
+async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str, quiet: bool, origin: str, barge: bool = False) -> dict:
     out = {"tag": tag, "lines": [], "timing": [], "cars": [], "booking": None, "audio_s": 0.0, "status": "ok"}
     async with websockets.connect(url, max_size=None, origin=origin) as ws:
         await ws.send(json.dumps({"type": "hello", "car": car}))
@@ -65,6 +65,10 @@ async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str,
                     out["booking"] = e
                     if not quiet:
                         print(f"[{tag}] BOOKING {e}", flush=True)
+                elif e["type"] == "stop":
+                    out["stops"] = out.get("stops", 0) + 1
+                    if not quiet:
+                        print(f"[{tag}] STOP  (the server cut the agent off)", flush=True)
                 elif e["type"] == "busy":
                     out["status"] = "busy"
 
@@ -80,13 +84,17 @@ async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str,
                 await pace(silence)
                 if out["audio_s"] > 0.5 and time.monotonic() - last_audio[0] > 1.2:
                     break
-            for clip in clips:
+            for index, clip in enumerate(clips):
                 heard_before = len(out["timing"])
                 for k in range(0, len(clip), FRAME):
                     part = clip[k:k + FRAME]
                     await pace((part if len(part) == FRAME else np.pad(part, (0, FRAME - len(part)))).tobytes())
                 for _ in range(1500):                        # up to 30 s for the reply to start, then wait for it to finish
                     await pace(silence)
+                    if barge and index < len(clips) - 1 and len(out["timing"]) > heard_before:
+                        for _ in range(60):                  # the agent has started to speak: keep listening for 1.2 s, then talk over it
+                            await pace(silence)
+                        break
                     if len(out["timing"]) > heard_before and time.monotonic() - last_audio[0] > 1.0:
                         break
         except websockets.ConnectionClosed:
@@ -104,13 +112,14 @@ async def main() -> int:
     ap.add_argument("--calls", type=int, default=1)
     ap.add_argument("--car", help="stock id of the car page the caller is on, e.g. AG-122")
     ap.add_argument("--voice", default="amy", help="the synthetic caller's voice (different from the agent's)")
+    ap.add_argument("--barge", action="store_true", help="speak the next line while the agent is still answering the last one")
     ap.add_argument("--say", action="append", help="a line to say (repeatable); default: a booking conversation")
     a = ap.parse_args()
     lines = a.say or DEFAULT_SCRIPT
     print(f"synthesising {len(lines)} caller lines...", flush=True)
     clips = caller_audio(lines, a.voice)
     t0 = time.monotonic()
-    results = await asyncio.gather(*[one_call(a.url, clips, a.car, f"c{i + 1}", a.calls > 1, a.origin) for i in range(a.calls)])
+    results = await asyncio.gather(*[one_call(a.url, clips, a.car, f"c{i + 1}", a.calls > 1, a.origin, a.barge) for i in range(a.calls)])
     print(f"\n{a.calls} call(s) finished in {time.monotonic() - t0:.0f} s")
     for r in results:
         t = r["timing"]

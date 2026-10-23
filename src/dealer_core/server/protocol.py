@@ -9,13 +9,14 @@ server  -> browser  binary: signed 16-bit PCM mono at the rate in "ready" (the v
                             {"type": "cars", "ids": ["AG-101", ...]}                              cars to show as cards
                             {"type": "booking", "car_id", "name", "phone", "date": "YYYY-MM-DD", "time": "HH:MM"}   the page books it in its own store
                             {"type": "timing", "seconds": 1.4}                                      end of caller's speech -> first sound
+                            {"type": "stop"}                                                        the caller spoke over the agent: stop playing what is queued
                             {"type": "busy"} | {"type": "error", "message": "..."}                  then the server closes the socket
 """
 from __future__ import annotations
 
 import json
 
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame, OutputTransportMessageFrame, OutputTransportMessageUrgentFrame
+from pipecat.frames.frames import Frame, InputAudioRawFrame, InterruptionFrame, OutputAudioRawFrame, OutputTransportMessageFrame, OutputTransportMessageUrgentFrame
 from pipecat.serializers.base_serializer import FrameSerializer
 
 IN_RATE = 16000
@@ -25,6 +26,8 @@ class PortalSerializer(FrameSerializer):
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
             return frame.audio
+        if isinstance(frame, InterruptionFrame):
+            return json.dumps({"type": "stop"})                 # barge-in: the page drops the audio it has queued
         if isinstance(frame, (OutputTransportMessageFrame, OutputTransportMessageUrgentFrame)):
             return json.dumps(frame.message)
         return None

@@ -175,6 +175,7 @@ class VoiceCfg(_Strict):
     reply_max_words: int = 30
     reply_max_tokens: int = 110
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
+    barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
     model_only: bool = True                       # TEST MODE: only the model's own words are spoken: no standard-wording fallback, no appended facts or questions (the safety checks still drop unsafe sentences)
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence

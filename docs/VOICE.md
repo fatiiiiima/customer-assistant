@@ -124,3 +124,11 @@ speaks the result through the same reply writer and sentence checks. A booking n
 moment. Asking the model for a full JSON object per turn was tried first: 1.6-3.8 s per decision (decoding is ~18 tokens/s), so the model only names the tool. A 1.7B
 model as the decision-maker was tried and picked the wrong tool most turns.
 Measured on the synthetic six-turn chat (battery, engine only): decision 0.4-0.6 s, first spoken sound 1.7-3.0 s (state machine: 1.0-2.5 s).
+
+## Barge-in (talking over the agent)
+
+On by default for the website server (`voice.barge_in`, `--no-barge-in` to turn off) and for the voice demo with `--headset`. When you start talking while the agent is
+speaking, it stops at once: the voice stops synthesizing, the page is sent `{"type": "stop"}` and drops the audio it had queued, and the reply still being produced is
+abandoned (the model stops). What you said goes through recognition as a normal turn; the history keeps the interrupted reply marked "(interrupted)". It needs echo
+control: a headset, or the browser's echo cancellation. On open laptop speakers the agent would hear itself and interrupt itself, so the demo leaves it off without `--headset`.
+Checked with the synthetic caller (`scripts/portal_call.py --barge`): three interruptions, three clean new turns.

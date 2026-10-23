@@ -99,7 +99,7 @@ async def run(a: argparse.Namespace) -> None:
     def said(text: str) -> None:
         _write_transcript("AGENT", text, a.transcript, transcript)
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=stop_secs, smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs,
-                                     half_duplex=not a.headset, on_turn=on_turn, probes=probes,
+                                     half_duplex=not a.headset, barge_in=a.headset and cfg.voice.barge_in and not a.no_barge_in, on_turn=on_turn, probes=probes,
                                      on_heard=heard if (a.transcript or transcript) else None, on_say=said if (a.transcript or transcript) else None)
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
@@ -126,6 +126,7 @@ def main() -> int:
     ap.add_argument("--backend", help="llm backend from config; default llm.text_backend")
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--template-only", action="store_true", help="fixed wording only (fastest)")
+    ap.add_argument("--no-barge-in", action="store_true", help="the caller cannot talk over the agent")
     ap.add_argument("--agent", action="store_true", help="tool-calling agent engine (experimental): the model picks the next action, code runs it")
     ap.add_argument("--fixed-silence", action="store_true", help="end your turn after a fixed silence instead of Smart Turn (voice.smart_turn)")
     ap.add_argument("--stop-secs", type=float, help="silence that ends your turn; default voice.stop_secs (0.3)")
