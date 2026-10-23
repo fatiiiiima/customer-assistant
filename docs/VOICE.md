@@ -45,7 +45,7 @@ What got it there (each measured): the language model decodes at only ~18 tokens
    system is waiting on is always asked (by the model, or by the system if the model did not);
 4. **price, booking, read-back and hand-off turns are spoken from the exact standard wording** at once (no model-written wording in voice for those);
 5. reply length is capped (~20 words, 48 tokens) and the model is stopped at a 2.2 s deadline.
-Config: `voice:` section (`reply_deadline_ms`, `reply_max_words`, `reply_max_tokens`, `opener`, `stop_secs`); text chat keeps its longer replies.
+Config: `voice:` section (`reply_deadline_ms`, `reply_max_words`, `reply_max_tokens`, `model_only`, `smart_turn`, `barge_in`, ...). The old short model-written "opener" (`voice.opener`) is OFF: replies start with the answer. Text chat keeps its longer replies.
 
 ## Privacy
 The voice console and the turn log carry timings, the detected intent and flags only. What the caller says and what the agent says is not printed or written
