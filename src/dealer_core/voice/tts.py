@@ -63,7 +63,7 @@ def voice_dir(models: Path, voice: str) -> Path:
 
 
 class PiperSherpa:
-    def __init__(self, models: Path, voice: str = "joe", threads: int = 4, speaker: int = 0) -> None:
+    def __init__(self, models: Path, voice: str = "joe", threads: int = 4, speaker: int = 0, copies: int = 1) -> None:
         import sherpa_onnx
 
         d = voice_dir(models, voice)
@@ -71,7 +71,11 @@ class PiperSherpa:
             vits=sherpa_onnx.OfflineTtsVitsModelConfig(model=str(next(d.glob("*.onnx"))), tokens=str(d / "tokens.txt"),
                                                        data_dir=str(d / "espeak-ng-data")), num_threads=threads, provider="cpu"))
         self.tts = sherpa_onnx.OfflineTts(cfg)
-        self._lock = threading.Lock()                # one synthesizer shared by every call; one piece at a time keeps it safe
+        # Synthesizers shared by every call. Each does one piece at a time; a piece takes whichever copy is free.
+        self._free: queue.Queue = queue.Queue()
+        self._free.put(self.tts)
+        for _ in range(max(0, copies - 1)):
+            self._free.put(sherpa_onnx.OfflineTts(cfg))
         self.sample_rate: int = self.tts.sample_rate
         self.speaker = speaker
         if speaker >= self.tts.num_speakers:
@@ -79,11 +83,18 @@ class PiperSherpa:
         self.name = f"piper:{voice}#{speaker}"
 
     def warm_up(self) -> None:
-        self.tts.generate("Warm up.", sid=self.speaker, speed=1.0)
+        engines = [self._free.get() for _ in range(self._free.qsize())]
+        for e in engines:
+            e.generate("Warm up.", sid=self.speaker, speed=1.0)
+            self._free.put(e)
 
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:
         """The whole utterance as float32 samples."""
-        return np.asarray(self.tts.generate(pronounce(text), sid=self.speaker, speed=speed).samples, dtype=np.float32)
+        engine = self._free.get()
+        try:
+            return np.asarray(engine.generate(pronounce(text), sid=self.speaker, speed=speed).samples, dtype=np.float32)
+        finally:
+            self._free.put(engine)
 
     def stream(self, text: str, speed: float = 1.0) -> Iterator[np.ndarray]:
         """Chunks of float32 samples as the model produces them (first chunk after about one sentence of work)."""
@@ -96,8 +107,11 @@ class PiperSherpa:
         def run():
             try:
                 for piece in speech_chunks(text):
-                    with self._lock:
-                        self.tts.generate(pronounce(piece), sid=self.speaker, speed=speed, callback=cb)
+                    engine = self._free.get()
+                    try:
+                        engine.generate(pronounce(piece), sid=self.speaker, speed=speed, callback=cb)
+                    finally:
+                        self._free.put(engine)
             finally:
                 q.put(None)
 

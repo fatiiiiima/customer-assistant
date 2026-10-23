@@ -38,7 +38,7 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     """Load and warm the local STT and TTS engines (about 5 s, once per process)."""
     models = ROOT / cfg.app.model_dir
     stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", "CPU", hotword_terms(ROOT / cfg.stt.hotwords_file))
-    tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0)
+    tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies)
     stt.warm_up()
     tts.warm_up()
     return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})

@@ -34,7 +34,8 @@ class OpenVinoBackend(NluBackend):
         self._tok = None
         self._configs: dict[tuple[str, str], object] = {}
         # One worker: the pipeline is not re-entrant, and it gives us a timeout without killing the process.
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"ov-{name}")
+        # With batching, many requests run together (the batching thread steps them all), so the pool only waits on them.
+        self._pool = ThreadPoolExecutor(max_workers=cfg.max_parallel if cfg.batching else 1, thread_name_prefix=f"ov-{name}")
 
     # -- lifecycle ---------------------------------------------------------------------------
     def _ensure_loaded(self) -> None:
@@ -45,7 +46,12 @@ class OpenVinoBackend(NluBackend):
         if not self.path.exists():
             raise BackendError(f"OpenVINO model folder missing: {self.path}")
         try:
-            self._pipe = ov.LLMPipeline(str(self.path), self.cfg.device or "CPU", CACHE_DIR=str(self.cache_dir))
+            if self.cfg.batching:
+                from .ov_batching import BatchedPipeline
+
+                self._pipe = BatchedPipeline(self.path, self.cfg.device or "CPU", self.cache_dir, kv_cache_gb=self.cfg.kv_cache_gb)
+            else:
+                self._pipe = ov.LLMPipeline(str(self.path), self.cfg.device or "CPU", CACHE_DIR=str(self.cache_dir))
         except Exception as e:  # device missing, compile failure
             raise BackendError(f"cannot load {self.cfg.model} on {self.cfg.device}: {e}") from e
         self._tok = self._pipe.get_tokenizer()

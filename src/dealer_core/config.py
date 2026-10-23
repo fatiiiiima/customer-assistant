@@ -65,6 +65,9 @@ class BackendCfg(_Strict):
     max_intent_tokens: int = 16
     max_json_tokens: int = 96
     max_answer_tokens: int = 60
+    batching: bool = False                       # openvino only: continuous batching + prefix cache, so many callers are served together (nlu/ov_batching.py)
+    kv_cache_gb: float = 2.0                     # openvino batching only: memory for the shared KV cache
+    max_parallel: int = 32                       # openvino batching only: requests in flight at once
     model_env: str | None = None                 # cloud_stub only: env var holding the model name (never hard-coded)
     api_key_env: str | None = None               # cloud_stub only
 
@@ -96,6 +99,7 @@ class TtsCfg(_Strict):
     voice: str | None = "amy_medium"    # Piper voice folder name (see voice/tts.py VOICES). Owner choice. LICENCE UNCONFIRMED: internal prototype only (docs/LICENSES.md)
     speaker: int = 0                    # speaker id inside a multi-speaker voice (libritts_r has many; amy has one)
     cache_dir: str = "models/tts_cache"
+    copies: int = 2                     # synthesizers shared by all calls (8 sentences at once: worst 2.35 s with one copy, 1.35 s with two)
 
 
 class TurnCfg(_Strict):

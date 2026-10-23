@@ -53,6 +53,14 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
     origins = allowed_origins or ["http://localhost:8080", "http://127.0.0.1:8080"]
     api.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET"], allow_headers=["*"])
 
+    @api.on_event("startup")
+    async def _threads() -> None:
+        # Each call keeps a few threads busy while it waits on shared models (the turn, its speech pieces, the recognizer). Python's default
+        # pool (cores + 4 = 20 here) ran out at about 20 callers, so turns queued behind other calls' waits: give every call room.
+        from concurrent.futures import ThreadPoolExecutor
+
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=max(32, state.max_calls * 4), thread_name_prefix="call"))
+
     @api.get("/health")
     async def health() -> dict:
         return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "served": state.served, "refused": state.refused,
