@@ -50,7 +50,11 @@ _QUOTED = re.compile(r"(?:^|\s)'([^']{4,}?)'(?=[\s.,!?]|$)")          # 'just sh
 
 
 def numbers(text: str) -> set[str]:
-    return {n.replace(",", "").rstrip(".") for n in _NUMBER.findall(text)}
+    from ..nlu.numbers import normalise, number_spans
+
+    toks = normalise(text).split()
+    spoken = {v for v, i, j in number_spans(toks) if v != "0" and not (j - i == 1 and toks[i] in ("one", "oh"))}   # "three in the afternoon" = 3 PM; "the red one" is not a number
+    return {n.replace(",", "").rstrip(".") for n in _NUMBER.findall(text)} | spoken
 
 
 def capitals(text: str) -> set[str]:
@@ -58,7 +62,7 @@ def capitals(text: str) -> set[str]:
     out = set()
     for sentence in re.split(r"(?<=[.!?])\s+", text):
         for w in re.findall(r"[A-Za-z0-9']+", sentence)[1:]:
-            if w[:1].isupper() and w != "I" and not w.startswith("I'"):         # I, I've, I'm, I'd are not names
+            if w[:1].isupper() and w != "I" and not w.startswith("I'") and w.lower() not in ("am", "pm"):         # I, I've, I'm, I'd are not names
                 out.add(w.lower())
     return out
 

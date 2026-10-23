@@ -14,6 +14,7 @@ One extra short model call per turn (the decision), so a turn costs a little mor
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import time
@@ -33,6 +34,8 @@ from ..tools.escalation import EscalationReason
 from ..tools.phones import normalize_phone, speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
+
+HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
 
 TOOLS = ("search_cars", "get_car", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "handoff", "end_call", "none")
 
@@ -117,6 +120,11 @@ class AgentEngine:
         args = self._args_for(s, tool, decision.get("car_id"), text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "search_cars" and not args and s.shown and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
+        picked = ex.selection(text, s.shown)
+        if picked and tool in ("none", "check_slots", "search_cars"):
+            tool, args = "get_car", {"car_id": picked}                # "tell me about the second one" is about that car, whatever the model called it
+        elif tool == "none" and s.car and HAGGLE.search(" ".join(ex.tokens_of(text))):
+            tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
@@ -130,6 +138,8 @@ class AgentEngine:
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
                     self.reply_writer.temperature = 0.2
+                    why = self.reply_writer.last_stream.get("stopped", "")
+                    w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
                 for sentence in self.reply_writer.stream(w):
                     spoken.append(sentence)
                     yield sentence
@@ -233,7 +243,10 @@ class AgentEngine:
         out = fn(s, args, text, dbg)
         out.setdefault("risk", "low")
         out.setdefault("awaiting", False)
-        out["facts"] = [f"What the customer wanted: {tool.replace('_', ' ')}.", *out.get("facts", [])]
+        context = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams" for c in ([self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []) + list(s.shown)][:5]
+        out["facts"] = [f"What the customer wanted: {tool.replace('_', ' ')}.", *out.get("facts", []),
+                        "Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'.",
+                        *(["Cars in this call (true facts you may use):", *context] if context else [])]
         return out
 
     def _t_none(self, s, args, text, dbg) -> dict:
@@ -348,7 +361,10 @@ class AgentEngine:
     def _t_prepare_booking(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
         if car is None:
-            return {"core": "Which car would you like to test drive?", "facts": ["No car identified for the booking."], "awaiting": True}
+            w = parse_when(str(args.get("when") or text), self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id))
+            asked = f" The customer asked for {w.day:%A}" + (f" at {w.time:%H:%M}" if w.time else "") + "." if w.day else ""
+            return {"core": "Which car would you like to test drive?", "risk": "high", "awaiting": True,
+                    "facts": ["No car has been chosen for the booking yet." + asked, "Ask which of the cars they mean. Nothing is booked yet: do not say it is booked, confirmed or arranged."]}
         s.car = car.stock_id
         name = str(args.get("name") or "").strip()
         if name and name.lower() not in ("null", "none"):

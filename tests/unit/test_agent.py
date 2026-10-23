@@ -72,3 +72,30 @@ def test_an_unknown_tool_from_the_model_is_treated_as_no_tool():
     e, app = engine(["delete_everything"])
     s = e.new_session()
     assert e.handle(s, "hello").debug.intent == "none"
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_the_second_one_is_that_car_whatever_tool_the_model_named():
+    e, app = engine(["search_cars", "check_slots"])               # the model misroutes "the second one"
+    s = e.new_session()
+    e.handle(s, "toyota")
+    second = s.shown[1].stock_id
+    r = e.handle(s, "tell me about the second one")
+    assert r.debug.intent == "get_car" and s.car == second
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_haggling_gets_the_fixed_price_not_nothing():
+    e, app = engine(["search_cars", "none"])
+    s = e.new_session()
+    e.handle(s, "bmw x5")
+    r = e.handle(s, "what is your best price")
+    assert r.debug.intent == "get_car"
+
+
+def test_spoken_times_and_am_pm_are_not_new_facts():
+    from dealer_core.dialogue.draft import capitals, numbers
+
+    assert "3" in numbers("tomorrow at three in the afternoon") and "3" in numbers("Got it, tomorrow at 3 PM")
+    assert "pm" not in capitals("Got it, tomorrow at 3 PM")
+    assert numbers("the red one") == set()
