@@ -26,7 +26,8 @@ from ..dialogue import voice_rules
 from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import Session
 from ..dialogue.states import State
-from ..dialogue.writer import ReplyWriter, WriterInput, fact_sheet
+from ..dialogue.draft import clean_draft
+from ..dialogue.writer import _DONE, split_point, ReplyWriter, WriterInput, fact_sheet, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -36,6 +37,11 @@ from ..tools.results import BookingKind
 from ..tools.service import DealerService
 
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
+
+CONTINUE_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership. Your reply has already begun (the start is given to you); you only add the closing question,
+in one short natural sentence. Never repeat facts, never mention prices, numbers, discounts, warranties, policies or promises, and never say anything is booked or confirmed."""
+CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
+POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
 TOOLS = ("search_cars", "get_car", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "handoff", "end_call", "none")
 
@@ -56,6 +62,19 @@ none             greeting, thanks, small talk, anything that needs no lookup.
 The customer's words come from speech recognition and can be misspelled. The stock id must come from CODE HINT, CAR IN FOCUS or LAST SHOWN ("it", "this one",
 "the second one" mean a car from there). Prices are fixed: nothing to negotiate.
 """
+
+
+def _clauses(text: str) -> list[str]:
+    """The prefix as speakable pieces (a sentence, or a clause of 6+ words up to a comma), so speech starts on the first one."""
+    out, rest = [], text
+    while rest:
+        cut = split_point(rest)
+        if not cut:
+            out.append(rest.strip())
+            break
+        out.append(rest[:cut[0]].strip())
+        rest = rest[cut[1]:]
+    return [x for x in out if x]
 
 
 def _inventory_lines(svc: DealerService) -> str:
@@ -86,6 +105,8 @@ class AgentEngine:
     def __init__(self, svc: DealerService, backend, reply_writer: ReplyWriter | None, agent_name: str | None = None) -> None:
         self.svc, self.backend, self.reply_writer = svc, backend, reply_writer
         self.model_only = False
+        self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
+        self.prefix_stats: dict = {}
         self.stream_high_risk = True
         self.nlu = None
         self.decide_tokens, self.decide_deadline_s = 16, 5.0
@@ -130,7 +151,13 @@ class AgentEngine:
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
         dbg.state_after = s.state.value
         spoken: list[str] = []
-        if self.reply_writer is not None and not s.ended:
+        prefix, question = self._split_core(result["core"])
+        if self.prefix_mode and self.reply_writer is not None and not s.ended and prefix:
+            dbg.risk = result["risk"]
+            for sentence in self._prefix_reply(s, text, result, prefix, question, dbg):
+                spoken.append(sentence)
+                yield sentence
+        elif self.reply_writer is not None and not s.ended:
             facts = "\n".join(result["facts"])
             w = WriterInput(caller=text, core=result["core"], risk=result["risk"], history=list(s.history), facts=facts, awaiting=result["awaiting"])
             dbg.risk = result["risk"]
@@ -169,6 +196,83 @@ class AgentEngine:
     def handle(self, s: Session, text: str) -> TurnResult:
         out = list(self.handle_stream(s, text))
         return out[-1]
+
+    # ------------------------------------------------------------------------------------------------ prefix mode (experimental)
+    @staticmethod
+    def _split_core(core: str) -> tuple[str, str]:
+        """The reference wording as (the sentences that state facts, the closing question the system is waiting on)."""
+        sents = voice_rules.sentences(core)
+        question = sents[-1] if sents and sents[-1].rstrip().endswith("?") else ""
+        facts = [x for x in (sents[:-1] if question else sents) if not x.rstrip().endswith("?")]
+        return " ".join(facts), question
+
+    def _check_continuation(self, sentence: str, prefix: str, question: str, caller: str, facts: str, history: str) -> list[str]:
+        """The follow-up may only ask the next question: no figures, no policy, no promise, nothing already said, nothing the code did not supply."""
+        problems = list(verify_sentence(sentence, caller, prefix + " " + question, facts, history))
+        if re.search(r"\d", sentence):
+            problems.append("states a figure (prices, times and numbers come from the code)")
+        if CURRENCY.search(sentence):
+            problems.append("talks about money")
+        if POLICY.search(sentence) and not POLICY.search(prefix + " " + question):
+            problems.append("states a policy or commercial term the code did not supply")
+        if promise_in(sentence) and not promise_in(prefix + " " + question):
+            problems.append("makes a promise the code did not supply")
+        if _DONE.search(sentence) and not _DONE.search(prefix):
+            problems.append("says something is booked or confirmed")
+        said = {w for w in re.findall(r"[a-z0-9']+", prefix.lower()) if len(w) > 3}
+        mine = {w for w in re.findall(r"[a-z0-9']+", sentence.lower()) if len(w) > 3}
+        if mine and len(mine & said) / len(mine) >= 0.6:
+            problems.append("repeats what was just said")
+        if len(sentence.split()) > 18:
+            problems.append("too long for a follow-up")
+        if question and not sentence.rstrip().endswith("?"):
+            problems.append("does not ask the question the call is waiting on")
+        return problems
+
+    def _prefix_reply(self, s: Session, text: str, result: dict, prefix: str, question: str, dbg: TurnDebug):
+        """Speak the code-written facts at once; then let the model continue the SAME assistant turn with one short, checked follow-up."""
+        t0 = time.perf_counter()
+        stats = {"prefix_chars": len(prefix), "continuation": "none-needed"}
+        self.prefix_stats = stats
+        for part in _clauses(prefix):
+            yield part
+        if not question:
+            return
+        stats["continuation"] = "rejected"
+        history = " ".join(t for _, t in s.history)
+        facts = "\n".join(result["facts"])
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
+        user = (f"CONVERSATION SO FAR:\n{convo}\n\nCUSTOMER (just now): {text}\n\nYOUR REPLY HAS ALREADY STARTED, you have just said: \"{prefix}\"\n"
+                f"The call now needs this answered: \"{question}\"\nContinue your reply with ONE short sentence (at most 14 words) that asks it in your own words. "
+                "Do not repeat anything you already said, and mention no prices, numbers, policies or promises.")
+        reasons = ""
+        for attempt in range(2):
+            u = user + (f"\nYour previous attempt was rejected because: {reasons}. Write it again without that." if reasons else "")
+            buf = ""
+            try:
+                for piece in self.reply_writer.backend.lead_in_stream(CONTINUE_SYSTEM, u, 36, 0.2 if attempt else self.reply_writer.temperature, 4.0, prefill=prefix + " "):
+                    buf += piece
+                    m = re.search(r"[.!?](?:\s|$)", buf)
+                    if m:
+                        break
+            except Exception as e:
+                reasons = f"backend {type(e).__name__}"
+                continue
+            sentence = clean_draft(buf[:m.end()] if m else buf)
+            sentence = re.sub(r"^(?:ok(?:ay)?|got it|sure|great|perfect|alright)[,!.]?\s+", "", sentence, flags=re.I).strip()
+            if not sentence or not (m or sentence.endswith(("?", ".", "!"))):
+                reasons = "no finished sentence"
+                continue
+            sentence = sentence[:1].upper() + sentence[1:]
+            problems = self._check_continuation(sentence, prefix, question, text, facts, history)
+            if not problems:
+                stats["continuation"] = "accepted" if attempt == 0 else "accepted-on-retry"
+                stats["continuation_ms"] = round((time.perf_counter() - t0) * 1000)
+                yield sentence
+                return
+            reasons = "; ".join(problems)
+        stats["reason"] = reasons
+        dbg.note = (dbg.note + "; " if dbg.note else "") + f"prefix mode: follow-up rejected ({reasons})"
 
     # ------------------------------------------------------------------------------------------------ the decision
     def _context(self, s: Session) -> str:

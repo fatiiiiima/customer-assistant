@@ -58,7 +58,7 @@ async def run(a: argparse.Namespace) -> None:
 
     cfg = load_config()
     app = build_app(cfg, backend=a.backend, clock=demo_clock(cfg) if a.clock == "demo" else None,
-                    reply_mode="template" if a.template_only else a.mode, engine="agent" if a.agent else None)
+                    reply_mode="template" if a.template_only else a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
     print("Loading speech models...", flush=True)
@@ -127,6 +127,7 @@ def main() -> int:
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--template-only", action="store_true", help="fixed wording only (fastest)")
     ap.add_argument("--no-barge-in", action="store_true", help="the caller cannot talk over the agent")
+    ap.add_argument("--prefix", action="store_true", help="with --agent: code speaks the facts at once, the model only continues with a short follow-up (experimental)")
     ap.add_argument("--agent", action="store_true", help="tool-calling agent engine (experimental): the model picks the next action, code runs it")
     ap.add_argument("--fixed-silence", action="store_true", help="end your turn after a fixed silence instead of Smart Turn (voice.smart_turn)")
     ap.add_argument("--stop-secs", type=float, help="silence that ends your turn; default voice.stop_secs (0.3)")

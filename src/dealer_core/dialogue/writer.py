@@ -125,7 +125,7 @@ def verify_chat(draft: str, user_text: str, core: str, facts: str, history: str)
         problems.append("characters other than plain letters, digits and basic punctuation")
     if len(voice_rules.sentences(draft)) > 3 or len(draft.split()) > 40:
         problems.append("too long for small talk")
-    if numbers(draft) - (numbers(facts) | numbers(history) | numbers(user_text)):
+    if numbers(draft, True) - (numbers(facts) | numbers(history) | numbers(user_text)):
         problems.append("new number(s) in small talk")
     if FORBIDDEN.search(draft) or (promise_in(draft) and not promise_in(core)):
         problems.append("commitment or commercial wording")
@@ -162,7 +162,7 @@ def verify_reply(draft: str, user_text: str, core: str, facts: str, history: str
     if len(draft.split()) > MAX_WORDS:
         problems.append(f"{len(draft.split())} words (max {MAX_WORDS})")
     # numbers: none may be invented; a decision's figures may not be lost
-    extra = numbers(draft) - (numbers(core) | numbers(user_text) | numbers(facts) | (numbers(history) if not high else set()))
+    extra = numbers(draft, True) - (numbers(core) | numbers(user_text) | numbers(facts) | (numbers(history) if not high else set()))
     if extra:
         problems.append(f"new number(s) {sorted(extra)[:3]}")
     # a count ("I have 6 SUVs") is a fact: "a few" is not an acceptable replacement for it
@@ -270,7 +270,7 @@ def verify_sentence(sentence: str, user_text: str, core: str, facts: str, histor
         problems.append("characters other than plain letters, digits and basic punctuation")
     if len(sentence.split()) > 32:
         problems.append("a very long sentence")
-    extra = numbers(sentence) - (numbers(core) | numbers(user_text) | numbers(facts) | numbers(history))
+    extra = numbers(sentence, True) - (numbers(core) | numbers(user_text) | numbers(facts) | numbers(history))
     if extra:
         problems.append(f"new number(s) {sorted(extra)[:3]}")
     known = {w.lower() for w in re.findall(r"[A-Za-z0-9']+", core + " " + user_text + " " + facts + " " + history)} | {"agmc"}

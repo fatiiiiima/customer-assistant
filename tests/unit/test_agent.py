@@ -99,3 +99,42 @@ def test_spoken_times_and_am_pm_are_not_new_facts():
     assert "3" in numbers("tomorrow at three in the afternoon") and "3" in numbers("Got it, tomorrow at 3 PM")
     assert "pm" not in capitals("Got it, tomorrow at 3 PM")
     assert numbers("the red one") == set()
+
+
+# ---- prefix mode: the model's follow-up may only ask the next question --------------------------------------------------------------------
+PREFIX = "I have a 2020 Toyota Corolla at 62,500 dirhams and a 2021 Toyota RAV4 at 98,500 dirhams."
+QUESTION = "Which one would you like to hear more about?"
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+@pytest.mark.parametrize("sentence", [
+    "Which one catches your eye?",
+    "Which of the two would you like to know more about?",
+])
+def test_a_plain_follow_up_question_is_accepted(sentence):
+    e, _ = engine([])
+    assert e._check_continuation(sentence, PREFIX, QUESTION, "toyota", "", "") == []
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+@pytest.mark.parametrize("sentence,why", [
+    ("The Corolla is only 62,500 dirhams, which one?", "figure"),
+    ("Prices are fixed, so which one would you like?", "policy"),
+    ("Both come with a warranty, which one do you like?", "policy"),
+    ("I'll hold one for you, which one?", "promise"),
+    ("Shall I get it booked, which one?", "booked"),
+    ("I have a Corolla and a RAV4, which one would you like?", "repeat"),
+    ("That is a great price.", "question"),
+    ("Which one would you like to hear more about, or would you prefer to hear about something else entirely today?", "long"),
+])
+def test_a_follow_up_that_adds_facts_policy_promises_or_repeats_is_rejected(sentence, why):
+    e, _ = engine([])
+    assert e._check_continuation(sentence, PREFIX, QUESTION, "toyota", "", ""), f"{why}: {sentence!r} should have been rejected"
+
+
+def test_the_core_is_split_into_facts_and_the_waiting_question():
+    from dealer_core.agent.engine import AgentEngine
+
+    assert AgentEngine._split_core(PREFIX + " " + QUESTION) == (PREFIX, QUESTION)
+    assert AgentEngine._split_core("You're booked for tomorrow at 4:00 PM.") == ("You're booked for tomorrow at 4:00 PM.", "")
+    assert AgentEngine._split_core("Which day would suit you?") == ("", "Which day would suit you?")

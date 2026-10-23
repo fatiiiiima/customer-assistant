@@ -10,3 +10,4 @@ benchmarks/recordings/*.wav
 !benchmarks/recordings/.gitkeep
 benchmarks/results/synth/
 samples/
+recordings/

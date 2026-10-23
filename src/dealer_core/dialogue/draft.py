@@ -49,11 +49,14 @@ _NEG = re.compile(_NEGATION.pattern + "|" + r"\bno\b|\bnone\b|\bwithout\b", re.I
 _QUOTED = re.compile(r"(?:^|\s)'([^']{4,}?)'(?=[\s.,!?]|$)")          # 'just show me', not the apostrophes in it's ... you'd
 
 
-def numbers(text: str) -> set[str]:
+def numbers(text: str, candidate: bool = False) -> set[str]:
+    """The numbers in `text`: digits, plus spoken ones ("three in the afternoon" = 3, "fifty thousand" = 50000).
+    candidate=True is for a sentence the model WROTE: small spoken counts ("the two", "one of the three") are ordinary speech, so only digits and spoken numbers over 10 count."""
     from ..nlu.numbers import normalise, number_spans
 
     toks = normalise(text).split()
-    spoken = {v for v, i, j in number_spans(toks) if v != "0" and not (j - i == 1 and toks[i] in ("one", "oh"))}   # "three in the afternoon" = 3 PM; "the red one" is not a number
+    spoken = {v for v, i, j in number_spans(toks) if v != "0" and not (j - i == 1 and toks[i] in ("one", "oh"))
+              and not (candidate and v.isdigit() and int(v) <= 10 and j - i == 1)}
     return {n.replace(",", "").rstrip(".") for n in _NUMBER.findall(text)} | spoken
 
 

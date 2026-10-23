@@ -56,7 +56,7 @@ def engine_obj_writer(e):
 def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = None, classifier: IntentClassifier | None = None,
               clock: Callable[[], datetime] | None = None, chain: BackendChain | None = None,
               lead_in: bool | None = None, lead_backend=None, draft: bool | None = None,
-              reply_mode: str | None = None, portal_data: Path | None = None, engine: str | None = None) -> App:
+              reply_mode: str | None = None, portal_data: Path | None = None, engine: str | None = None, agent_prefix: bool | None = None) -> App:
     """inventory: 'demo' (16 hand-written fake cars) or 'seed' (60 random fake cars).
     backend: a name from config llm.backends (default: llm.text_backend). Pass `classifier` to inject a fake (tests),
     or `chain` to reuse one started BackendChain across many calls."""
@@ -104,4 +104,5 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
             decide = _Chain.from_config(cfg, primary=cfg.dialogue.decision_backend)
             decide.start()                                                       # loads the small model
         dialogue = AgentEngine(svc, decide or writer_backend, engine_obj_writer(dialogue))
+        dialogue.prefix_mode = cfg.dialogue.agent_prefix if agent_prefix is None else agent_prefix
     return App(dialogue, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

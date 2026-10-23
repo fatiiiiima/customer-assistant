@@ -141,7 +141,7 @@ class OpenVinoBackend(NluBackend):
         return re.sub(r"^\s*<think>.*?</think>\s*", "", text, flags=re.S)       # hybrid models: drop the (empty) thinking block
 
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
-                       deadline_s: float | None = None) -> Iterator[str]:
+                       deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
         """Pieces of free text as the model produces them. Generation is STOPPED when the consumer stops iterating or the deadline passes
         (the iterator then simply ends: what was already yielded stands)."""
         from ..dialogue.leadin import LEAD_TIMEOUT_S
@@ -152,7 +152,7 @@ class OpenVinoBackend(NluBackend):
         cfg.do_sample, cfg.max_new_tokens = False, max_tokens
         if temperature:
             cfg.do_sample, cfg.temperature, cfg.top_p, cfg.top_k = True, temperature, 0.9, 40
-        prompt = self._prompt(system, user)
+        prompt = self._prompt(system, user) + prefill            # the assistant's turn already begun by code: the model only continues it
         limit = deadline_s or LEAD_TIMEOUT_S * 3
         started = time.perf_counter()
         pieces: queue.Queue = queue.Queue()
