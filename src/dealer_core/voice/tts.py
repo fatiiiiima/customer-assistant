@@ -29,6 +29,9 @@ PRONUNCIATIONS: list[tuple[re.Pattern, str]] = [
 
 def pronounce(text: str) -> str:
     """The text as it should be SPOKEN (the transcript and the logs keep the written form)."""
+    from .speech_text import speech_text
+
+    text = speech_text(text)                                   # amounts, times, phone numbers, dates, car codes (see speech_text.py)
     for pattern, spoken in PRONUNCIATIONS:
         text = pattern.sub(spoken, text)
     return text

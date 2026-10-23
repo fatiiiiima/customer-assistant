@@ -1,0 +1,6 @@
+# How the voice should say things that Piper gets wrong. Edit, then re-run scripts/make_voice_samples.py and LISTEN (docs/voices/).
+# The voice has no phoneme override or lexicon: the only tool is respelling the text.
+numbers_as_words: false          # true: 209,000 is given to the voice as "two hundred and nine thousand"
+respell:                         # regex -> what the voice is given (applied last)
+  '\bdirhams\b': dirhams     # candidates to try: dirhams | durrhams | dirrums | "deer hams" | "dir hams"
+  '\bdirham\b': dirham
