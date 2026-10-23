@@ -91,7 +91,11 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         want = max(stop_secs, vcfg.number_stop_secs) if asks_for_number(brain.session) else stop_secs
         if want != current_stop[0]:
             current_stop[0] = want
-            vad_analyzer.set_params(VADParams(confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=want, min_volume=vcfg.vad_min_volume))
+            params = VADParams(confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=want, min_volume=vcfg.vad_min_volume)
+            if vad_analyzer.sample_rate:
+                vad_analyzer.set_params(params)
+            else:                                                 # not started yet: the analyzer applies these params when the stream starts
+                vad_analyzer._params = params
 
     def after_turn(result) -> None:
         follow_the_question()

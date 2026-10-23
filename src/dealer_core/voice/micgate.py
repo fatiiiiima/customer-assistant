@@ -19,9 +19,9 @@ SILENCE_FRAMES = 60                       # 1.2 s of silence fed in when the vis
 
 
 class MicGate(FrameProcessor):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, start_open: bool = True, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.open = True
+        self.open = start_open
         self._bot_speaking = False
         self.taps_while_speaking = 0
 

@@ -186,3 +186,14 @@ first turn of a call 1.1-1.8 s), and a tap over the reply interrupts it every ti
 Your pauses: median 0.27 s, 3 of 24 over the 0.5 s reference. Through the real pipeline: VAD 0.20 s / fallback 1.0 s (old) cut 5 sentences, VAD 0.20 s / fallback 0.6 s (current) cut 6, with the
 words rule 6, VAD 0.35 s cut 5, VAD 0.60 s cut 0 but waits 953 ms (median) instead of 335 ms. The cuts are phone numbers dictated in groups ("050" | "123" | "4567"), "Is it..." with a 0.22 s pause, and
 "I'm looking for..." with a 0.56 s pause. Whisper heard "Ahmed Khan" as "Edmmer Traun" once and "BMW X5, the grey one" as "BMW X5 Degrelo".
+
+## Recordings, round 2: silence after a phone-number question (24 real recordings)
+
+| Setting | Cut: phone numbers (of 3 clips group) | Cut: other sentences | Wait median / p90 |
+|---|---|---|---|
+| VAD 0.20 s | 3 | 4 | 336 / 751 ms |
+| VAD 0.20 s + longer silence after a number was asked for | 1 | 5 | 337 / 875 ms |
+| VAD 0.35 s | 3 | 2 | 532 / 736 ms |
+| VAD 0.35 s + number rule | 1 | 2 | 594 / 667 ms |
+
+The number rule (0.9 s silence right after the agent asks for a phone number) removes most phone-number cuts at no cost to the other turns. Tap mode now uses 0.35 s: a cut turn there closes the mic mid-sentence, which costs more than ~0.2 s of extra wait. Repeat runs of the same setting differ by about one cut, so the 4 vs 5 "other" difference is noise.

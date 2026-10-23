@@ -147,13 +147,13 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(
         audio_in_enabled=True, audio_out_enabled=True, audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate,
         serializer=PortalSerializer(), session_timeout=None))
-    gate = MicGate() if tap else None
+    gate = MicGate(start_open=False) if tap else None          # tap mode: the greeting is spoken first, the visitor taps to reply
 
     async def turn_over() -> None:                            # tap-to-talk: the server decided your turn is over: close the microphone, tell the page
         gate.close_after_turn()
         await send({"type": "mic", "on": False, "reason": "turn"})
 
-    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs, speak_opening=not tap,
+    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs, speak_opening=True,
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
                                      half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     brain_ref["brain"] = brain
@@ -169,8 +169,6 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         await worker.cancel()
 
     await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree"})
-    if tap:                                                   # no spoken greeting in tap mode (the mic is open at once): the greeting is shown as text
-        await send({"type": "line", "who": "agent", "turn": 0, "text": app.engine.opening(brain.session)})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel()))

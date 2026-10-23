@@ -135,12 +135,20 @@ async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: 
                     else:
                         st_["lines"].append((e["who"], e["text"]))
 
+        t0 = time.monotonic()
         task = asyncio.create_task(reader())
         await asyncio.wait_for(st_["ready"].wait(), 30)
         silence = np.zeros(FRAME, dtype=np.int16).tobytes()
+        out["greeting_s"] = 0.0
+        while True:                                                                 # Wazir greets first; the mic is closed until the first tap
+            await asyncio.sleep(0.2)
+            if st_["last_audio"] and time.monotonic() - st_["last_audio"] > 1.0:
+                break
+            if time.monotonic() - t0 > 40:
+                break
+        out["greeting_s"] = round(out["audio_s"], 1)
         for i, clip in enumerate(clips):
-            if i > 0:
-                await ws.send(json.dumps({"type": "mic", "on": True}))              # tap to reply (or to interrupt)
+            await ws.send(json.dumps({"type": "mic", "on": True}))                  # tap to reply (or to interrupt)
             st_["mic_off"].clear()
             st_["first_audio"] = 0.0
             stops_before, lines_before = st_["stops"], len(st_["lines"])

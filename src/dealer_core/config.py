@@ -188,7 +188,7 @@ class VoiceCfg(_Strict):
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
     vad_confidence: float = 0.7
     number_stop_secs: float = 0.9                 # silence that ends the caller's turn right after the agent asked for a phone number: people dictate digits in groups with pauses ("050" ... "123" ... "4567")
-    tap_stop_secs: float = 0.2                    # the same silence in tap-to-talk mode (measured on real recordings: 0.35 s cut one sentence fewer and waited 0.23 s longer, so it stays 0.2)
+    tap_stop_secs: float = 0.35                   # tap mode: a cut turn closes the mic mid-sentence, so it waits longer (24 real recordings: 0.35 s cut 2 sentences vs 4-5 at 0.2 s, for ~0.2 s more wait)
     silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
