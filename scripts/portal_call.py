@@ -179,7 +179,8 @@ async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: 
             else:
                 while time.monotonic() - st_["last_audio"] < 1.2 or not st_["last_audio"]:
                     await asyncio.sleep(0.05)
-            out["turns"].append({"clip": i, "mic_closed_by": "tap" if manual else "server", "closed_s": round(closed_after, 2),
+            reply_s = (st_["last_audio"] - t_end) if st_["last_audio"] > t_end else None      # end of your speech -> end of the whole reply
+            out["turns"].append({"reply_s": round(reply_s, 2) if reply_s else None, "clip": i, "mic_closed_by": "tap" if manual else "server", "closed_s": round(closed_after, 2),
                                  "silence_s": round(silence_s, 2) if silence_s else None, "interrupted_next": interrupt_after is not None and i < len(clips) - 1})
         out["stops"], out["lines"], out["greeting"] = st_["stops"], st_["lines"], st_["greeting"]
         await ws.close()

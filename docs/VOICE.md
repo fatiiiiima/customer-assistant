@@ -197,3 +197,15 @@ words rule 6, VAD 0.35 s cut 5, VAD 0.60 s cut 0 but waits 953 ms (median) inste
 | VAD 0.35 s + number rule | 1 | 2 | 594 / 667 ms |
 
 The number rule (0.9 s silence right after the agent asks for a phone number) removes most phone-number cuts at no cost to the other turns. Tap mode now uses 0.35 s: a cut turn there closes the mic mid-sentence, which costs more than ~0.2 s of extra wait. Repeat runs of the same setting differ by about one cut, so the 4 vs 5 "other" difference is noise.
+
+## Load: several callers at once through the real WebSocket (tap-to-talk, agent + prefix, AC power)
+
+`scripts/load_test.py`: N identical 7-turn booking conversations start at the same moment against one server (`--max-calls 4`). Clean synthetic caller audio, so recognition is optimistic; the timing is real.
+
+| Callers | Turns | Failed calls | First sound median | p90 | Worst | Whole reply median |
+|---|---|---|---|---|---|---|
+| 1 | 7 | 0 | 1.17 s | 1.50 s | 1.81 s | 7.9 s |
+| 4 | 28 | 0 | 1.20 s | 1.54 s | 2.11 s | 7.7 s |
+| 5 (cap is 4) | 28 | 1 refused ("busy", close code 1013) | 1.21 s | 1.59 s | 1.91 s | 7.5 s |
+
+(An earlier pass at 1/2/3/4 callers gave a median of 1.14-1.16 s at every level.) Up to the cap there is no visible slowdown; the fifth caller is refused cleanly and the other four are unaffected. "Whole reply" is mostly the length of the speech itself. Limits of this test: the script is short and the callers start in step; first sound in prefix mode is a sentence written by code, so a model-heavy mix of questions (long answers, comparisons) could load the GPU more. Not yet tested: 6+ callers with a higher cap, a mix of start times, real network/HTTPS, a long soak.
