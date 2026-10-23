@@ -132,3 +132,20 @@ speaking, it stops at once: the voice stops synthesizing, the page is sent `{"ty
 abandoned (the model stops). What you said goes through recognition as a normal turn; the history keeps the interrupted reply marked "(interrupted)". It needs echo
 control: a headset, or the browser's echo cancellation. On open laptop speakers the agent would hear itself and interrupt itself, so the demo leaves it off without `--headset`.
 Checked with the synthetic caller (`scripts/portal_call.py --barge`): three interruptions, three clean new turns.
+
+## Model comparison (same prompts, this laptop, on battery)
+
+`scripts/capture_prompts.py` records the exact prompts of a scripted 11-turn booking chat; `scripts/compare_models.py` replays them on each model.
+Speed = tokens/s on a short prompt (`scripts/bench_llm_speed.py`); checks = share of the model's sentences the writer's safety checks accept; tool = agreement with
+the current model's tool choice on the 11 decision prompts.
+
+| model | tokens/s | sentences passing checks | tool choice | notes |
+|---|---|---|---|---|
+| Qwen3-4B-Instruct-2507 int4 (current) | 19 | 79% | reference | repeats car details |
+| Phi-4-mini-instruct int4 (MIT) `openvino_gpu_phi` | 22 | 90% | 9/11 | shortest, most compliant booking wording; weaker on lists |
+| Qwen3-8B int4 | 9 | 90% | 11/11 | best wording, half the speed |
+| Gemma-3-4B (Ollama; the OpenVINO build is gated on Hugging Face) | 12 | 81% | 10/11 | wordiest |
+| Qwen3.5-4B (OpenVINO) | - | - | - | does not run on the installed OpenVINO GenAI (input port error) |
+
+Speculative decoding (Qwen3-0.6B drafting for the 4B): +30-50% tokens/s but +0.15 s to the first token, so almost nothing for 10-25 token clauses: not enabled.
+Prefix caching already works: back-to-back replies reach their first token in 0.34-0.55 s (the long system prompt is not re-read).

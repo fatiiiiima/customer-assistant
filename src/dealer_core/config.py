@@ -161,7 +161,7 @@ class DialogueCfg(_Strict):
     reply_deadline_ms: int = 0                   # stop the model-written reply after this long and speak the standard wording (0 = no limit; voice sets one)
     reply_max_words: int = 0                     # ask the model for at most this many words (0 = no limit; voice sets one)
     max_reply_tokens: int = 70                   # cap on the model-written reply (the main driver of reply time)
-    decision_backend: str | None = None   # agent engine: the (smaller, faster) model that picks the tool each turn; None = the reply model
+    decision_backend: str | None = "openvino_gpu"   # agent engine: the (smaller, faster) model that picks the tool each turn; None = the reply model
     engine: str = "state_machine"                # "state_machine" (code decides, model words) | "agent" (the model picks tools, code runs them; experimental)
     high_risk_drafts: bool = True                # conversational mode: let the model word price/booking/hand-off replies too (exact figures verified)
     lead_in: bool = False                        # hybrid replies: a verified model-written sentence before low-risk templated answers

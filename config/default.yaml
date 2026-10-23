@@ -47,6 +47,12 @@ llm:
       model: Qwen3-8B-int4-ov
       prompt_mode: auto
       timeout_s: 12.0
+    openvino_gpu_phi:                             # Phi-4-mini-instruct (MIT): the reply writer with the best latency / safety-check pass rate in our comparison
+      runtime: openvino
+      device: GPU
+      model: Phi-4-mini-instruct-int4-ov
+      prompt_mode: auto
+      timeout_s: 12.0
     openvino_gpu_small:
       runtime: openvino
       device: GPU
