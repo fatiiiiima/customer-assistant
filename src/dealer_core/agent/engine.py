@@ -331,6 +331,8 @@ class AgentEngine:
         joined = " ".join(words)
         if _THANKS.fullmatch(joined):
             return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
+        if s.shown and not s.car and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and expected.nothing_in_particular(text):
+            return {"tool": "search_cars", "via": "rules"}                       # "any range or style" after a narrowing question: read the list out
         found = ex.find_vehicle(words, self.svc.inventory.vocabulary())
         current = self.svc.get_car(s.car) if s.car else None
         if (found.get("make") and _LOOKING.search(joined) and not found.get("model") and not _BOOKING_CUE.search(joined)

@@ -238,3 +238,12 @@ def test_the_owners_transcript_of_23_october():
     e.handle(s, "yes I want to book a test drive")
     assert "already have a test drive" in e.handle(s, "tomorrow at nine a.m.").reply
     assert e._fast_decide(s, "tomorrow, 11 am.")["tool"] == "prepare_booking"
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_any_range_or_style_lists_the_cars_without_the_model():
+    e, _ = engine(["search_cars"])
+    s = e.new_session()
+    e.handle(s, "Toyota")
+    r = e.handle(s, "any range or style")
+    assert r.debug.intent == "search_cars" and "Of the 4" in r.reply and e.backend.decisions == []
