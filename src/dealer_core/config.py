@@ -96,7 +96,7 @@ class LlmCfg(_Strict):
 
 class TtsCfg(_Strict):
     backend: Literal["piper", "kokoro"] = "piper"
-    voice: str | None = "amy_medium"    # Piper voice folder name (see voice/tts.py VOICES). Owner choice. LICENCE UNCONFIRMED: internal prototype only (docs/LICENSES.md)
+    voice: str | None = "joe"           # Piper voice folder name (see voice/tts.py VOICES). Owner choice: Joe (CC0)
     speaker: int = 0                    # speaker id inside a multi-speaker voice (libritts_r has many; amy has one)
     cache_dir: str = "models/tts_cache"
     copies: int = 2                     # synthesizers shared by all calls (8 sentences at once: worst 2.35 s with one copy, 1.35 s with two)

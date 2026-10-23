@@ -112,7 +112,7 @@ def main() -> int:
     from dealer_core.voice.tts import PiperSherpa
 
     cfg = load_config()
-    caller = PiperSherpa(ROOT / cfg.app.model_dir, "joe")
+    caller = PiperSherpa(ROOT / cfg.app.model_dir, "amy")                # a different voice from the agent's (Joe)
     utter: list[dict] = []
     for gap in NOMINAL_PAUSES:
         for line, clip in zip(LINES, synth_clips(caller, gap, LINES)):

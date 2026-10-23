@@ -70,7 +70,7 @@ def main() -> int:
     start(app, quiet=True)
     apply_voice_profile(app, cfg)
     parts = load_engines(cfg)
-    caller = PiperSherpa(ROOT / "models", "joe")
+    caller = PiperSherpa(ROOT / "models", "amy")                       # a different voice from the agent's (Joe)
     label = a.engine + ("+prefix" if a.prefix else "") + ("" if ac else "_ON_BATTERY_DISCARDED")
     stop = a.vad_silence or cfg.voice.smart_stop_secs
     rows = []

@@ -18,7 +18,7 @@ microphone -> [half-duplex gate] -> Silero VAD -> Whisper (OpenVINO, CPU) -> Dea
 | VAD | Silero (bundled in Pipecat), `stop_secs` 0.3 | local, fast; Smart Turn v3 (also bundled) is NOT wired in yet |
 | STT | OpenVINO Whisper **base** int8 on the **CPU** (`voice.stt_model`; tiny is ~0.1 s faster but mishears more), car-term prompt | Phase 0b winner; never on the iGPU (it would fight the language model) |
 | Brain | `DialogueEngine.handle_stream` | same engine as the text chat |
-| TTS | Piper **amy_medium** (owner choice: Amy; `tts.voice` / `tts.speaker`), fp32, 22 kHz, via sherpa-onnx, CPU. First audio 30-150 ms, ~0.04 real-time factor. (`amy` = the older low-quality int8 build, ~3x slower) | **Licence unconfirmed ("See URL", Mimic3) and the medium build is finetuned from lessac (research-only): internal prototype ONLY, do not ship.** Safe fallbacks: libritts_r speaker 1 (CC BY 4.0), joe (CC0). espeak-ng data is GPL-3: internal prototype only |
+| TTS | Piper **joe** (owner choice since 23 Oct 2026: Joe, US male, CC0; was amy_medium; `tts.voice` / `tts.speaker`), fp32, 22 kHz, via sherpa-onnx, CPU. First audio 30-150 ms, ~0.04 real-time factor. (`amy` = the older low-quality int8 build, ~3x slower) | **Licence unconfirmed ("See URL", Mimic3) and the medium build is finetuned from lessac (research-only): internal prototype ONLY, do not ship.** Safe fallbacks: libritts_r speaker 1 (CC BY 4.0), joe (CC0). espeak-ng data is GPL-3: internal prototype only |
 | Microphone / speaker | Pipecat `LocalAudioTransport` (PyAudio) | |
 
 ## Run it
