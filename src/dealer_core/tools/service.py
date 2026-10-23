@@ -36,6 +36,9 @@ class DealerService:
         self.channels, self.escalations, self.clock = channels, escalations, clock
         self.slots = SlotService(cfg, bookings, clock)
         self.negotiation = NegotiationEngine(cfg.negotiation)
+        from ..site.details import SiteInfo
+
+        self.site = SiteInfo()          # spec sheets and showroom details (filled from the website's data.js in the portal profile)
 
     # ---- search / read -----------------------------------------------------------------------------------------
     def search_cars(self, filters: SearchFilters, limit: int = VOICE_MAX_CARS) -> SearchResult:

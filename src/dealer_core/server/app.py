@@ -106,6 +106,24 @@ async def _hello(ws: WebSocket) -> dict:
     return {}
 
 
+def site_bookings(hello: dict, app, tz) -> list:
+    """The test drives the page says this visitor already has (car, date, time, and its reference, name and phone when sent)."""
+    from datetime import datetime
+
+    from ..dialogue.session import KnownBooking
+
+    out = []
+    for b in hello.get("bookings") or []:
+        try:
+            start = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if app.service.get_car(str(b.get("car_id"))) is None:
+            continue
+        out.append(KnownBooking(str(b["car_id"]), start, str(b.get("name") or ""), str(b.get("phone") or ""), ref=str(b.get("ref") or "")))
+    return out
+
+
 async def run_call(state: ServerState, ws: WebSocket) -> None:
     hello = await _hello(ws)
     app, parts = state.app, state.parts
@@ -142,6 +160,10 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         if ids and ids != seen["shown"]:
             seen["shown"] = ids
             emit({"type": "cars", "ids": list(ids)})
+        for kb in s.cancelled[seen.setdefault("cancelled", 0):]:              # cancelled or moved in this call: the page removes it from its list
+            start = kb.start.astimezone(tz)
+            emit({"type": "cancelled", "ref": kb.ref, "car_id": kb.stock_id, "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
+        seen["cancelled"] = len(s.cancelled)
         b = s.booking
         if b is not None and b.booking_id != seen["booking"]:
             seen["booking"] = b.booking_id
@@ -165,6 +187,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
                                      half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     brain_ref["brain"] = brain
+    brain.session.known_bookings = site_bookings(hello, app, tz)         # "what have I booked?", "cancel my test drive": the ones already on the site
     car = hello.get("car")
     if isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
         brain.session.car = car

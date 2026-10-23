@@ -74,6 +74,10 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
     bookings = SqliteBookingRepo(db)
     whatsapp, sink = MockChannel(), MockEscalationSink()
     svc = DealerService(cfg, inv, bookings, {"whatsapp": whatsapp}, sink, clock=clock or utc_now)
+    if inventory == "portal":
+        from .site.details import parse_site
+
+        svc.site = parse_site(portal_data.read_text(encoding="utf-8"))
     if classifier is None:                      # a ready-made chain can be shared across calls (loading a model is slow)
         chain = chain or BackendChain.from_config(cfg, primary=backend or cfg.llm.text_backend)
         classifier = chain

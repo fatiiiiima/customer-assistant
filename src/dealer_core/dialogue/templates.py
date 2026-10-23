@@ -26,6 +26,16 @@ def car_name(c: CarView) -> str:
     return f"{c.year} {c.make} {c.model}"
 
 
+def short_name(c: CarView) -> str:
+    """"Camry", "RAV4", "BMW X5": the model, with the make when the model alone is only letters and digits."""
+    return f"{c.make} {c.model}" if len(c.model) <= 3 or any(ch.isdigit() for ch in c.model[:2]) else c.model
+
+
+def when_clock(hour: int) -> str:
+    h = hour % 12 or 12
+    return f"{h} {'AM' if hour < 12 else 'PM'}"
+
+
 def when_short(dt: datetime, now: datetime) -> str:
     """'Thursday at 4:00 PM' within a week, otherwise 'Saturday, 16 March at 4:00 PM'."""
     h = dt.hour % 12 or 12

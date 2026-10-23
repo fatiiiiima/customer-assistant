@@ -214,7 +214,8 @@ def test_questions_about_the_car_just_discussed_are_answered_by_code_and_short()
     haggle = e.handle(s, "can you do it for less").reply
     assert "fixed" in haggle.lower() and haggle.lower().count("dirhams") == 1
     assert e._fast_decide(s, "how much is the toyota camry") is None          # another car named: the model decides
-    assert e._fast_decide(s, "does it have a warranty") is None               # the code's line does not answer that
+    assert e._fast_decide(s, "does it have a warranty")["tool"] == "get_car"  # answered from the spec sheet
+    assert e._fast_decide(s, "is it any good for off roading in the desert") is None   # nothing the data answers: the model
 
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
@@ -247,3 +248,43 @@ def test_any_range_or_style_lists_the_cars_without_the_model():
     e.handle(s, "Toyota")
     r = e.handle(s, "any range or style")
     assert r.debug.intent == "search_cars" and "Of the 4" in r.reply and e.backend.decisions == []
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_details_showroom_compare_and_repeat_are_answered_by_code():
+    e, _ = engine(["search_cars"])
+    s = e.new_session()
+    assert "9 AM to 8 PM" in e.handle(s, "what time do you open").reply
+    assert "Sharjah" in e.handle(s, "do you have a branch in sharjah").reply
+    e.handle(s, "Toyota")
+    r = e.handle(s, "compare the Camry and the RAV4")
+    assert r.debug.intent == "compare_cars" and "24,000 dirhams cheaper" in r.reply and "all-wheel drive" in r.reply
+    e.handle(s, "the RAV4")
+    assert "12 months or 20,000 kilometres" in e.handle(s, "does it have a warranty").reply
+    assert "580 litres" in e.handle(s, "how big is the boot").reply
+    assert "don't see a sunroof" in e.handle(s, "does it have a sunroof").reply
+    last = s.last_agent()
+    assert e.handle(s, "sorry can you repeat that").reply.startswith(last.split(".")[0])
+    assert e.backend.decisions == []
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_existing_bookings_can_be_listed_cancelled_after_a_yes_and_moved():
+    from datetime import timedelta
+    from dealer_core.dialogue.session import KnownBooking
+
+    e, _ = engine([])
+    s = e.new_session()
+    tomorrow = NOW + timedelta(days=1)
+    s.known_bookings = [KnownBooking("AG-124", tomorrow.replace(hour=9, minute=0), "Fatima", "0507932546", ref="TD-A"),
+                        KnownBooking("AG-119", tomorrow.replace(hour=11, minute=0), "Fatima", "0507932546", ref="TD-B")]
+    assert "2 test drives" in e.handle(s, "what have I booked").reply
+    assert "Which one" in e.handle(s, "cancel my test drive").reply
+    assert "Shall I cancel" in e.handle(s, "the BMW").reply and len(s.known_bookings) == 2      # nothing cancelled before the yes
+    assert "kept it" in e.handle(s, "no").reply and len(s.known_bookings) == 2
+    e.handle(s, "cancel the corolla one")
+    assert "cancelled" in e.handle(s, "yes").reply and [k.ref for k in s.cancelled] == ["TD-A"]
+    assert "move your test drive" in e.handle(s, "can I move my test drive to Sunday at 10 am").reply
+    assert "now Sunday at 10:00 AM" in e.handle(s, "yes").reply
+    assert [k.ref for k in s.cancelled] == ["TD-A", "TD-B"] and s.known_bookings[0].start.hour == 10 and s.booking is not None
+    assert e.backend.decisions == []
