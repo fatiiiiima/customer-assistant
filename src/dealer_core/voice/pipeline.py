@@ -5,6 +5,7 @@ All local. The language model runs on the iGPU, Whisper on the CPU, Piper on the
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,18 +60,50 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
 
 
+_NUMBER_ASK = re.compile(r"\b(?:phone|mobile|number|digits)\b", re.I)
+
+
+def asks_for_number(session) -> bool:
+    """Did the agent's last turn ask for the caller's phone number?"""
+    from ..dialogue.states import State
+    from ..nlu.expected import last_question
+
+    q = last_question(session.last_agent())
+    return bool(q and _NUMBER_ASK.search(q)) or (session.state is State.CONTACT and bool(_NUMBER_ASK.search(session.last_agent())))
+
+
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
                    smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False,
-                   smart_short_answer_secs: float | None = None, smart_peek: bool | None = None, mic_gate=None, on_user_stop=None):
+                   smart_short_answer_secs: float | None = None, smart_peek: bool | None = None, mic_gate=None, on_user_stop=None,
+                   seed_agent_line: str | None = None, seed_state=None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
     vcfg = app.service.cfg.voice
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(
-        confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=stop_secs, min_volume=vcfg.vad_min_volume)))
+    vad_analyzer = SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(
+        confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=stop_secs, min_volume=vcfg.vad_min_volume))
+    vad = VADProcessor(vad_analyzer=vad_analyzer)
+    current_stop = [stop_secs]
+
+    def follow_the_question() -> None:
+        """Right after the agent asked for a phone number the silence that ends the turn is longer (digits are dictated in groups with pauses)."""
+        want = max(stop_secs, vcfg.number_stop_secs) if asks_for_number(brain.session) else stop_secs
+        if want != current_stop[0]:
+            current_stop[0] = want
+            vad_analyzer.set_params(VADParams(confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=want, min_volume=vcfg.vad_min_volume))
+
+    def after_turn(result) -> None:
+        follow_the_question()
+        if on_turn:
+            on_turn(result)
+
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
-    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
+    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say)
+    if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
+        brain.session.remember("agent", seed_agent_line)
+        brain.session.state = seed_state if seed_state is not None else brain.session.state
+    follow_the_question()
     stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
     stages: list[FrameProcessor] = [source] + ([mic_gate] if mic_gate is not None else []) + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]

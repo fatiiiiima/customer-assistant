@@ -123,3 +123,19 @@ def test_when_smart_turn_hesitates_a_complete_answer_ends_the_turn():
 def test_when_smart_turn_hesitates_an_unfinished_sentence_is_still_held():
     ep, seen = run_peek("Can I book", lambda t: False)
     assert seen == ["VADUserStartedSpeakingFrame"] and ep.peeked == 1
+
+
+def test_the_silence_that_ends_a_turn_is_longer_right_after_a_phone_number_was_asked_for():
+    from dealer_core.dialogue.session import Session
+    from dealer_core.dialogue.states import State
+    from dealer_core.voice.pipeline import asks_for_number
+
+    s = Session()
+    s.remember("agent", "Which day and time would suit you?")
+    assert not asks_for_number(s)
+    s.remember("agent", "Thanks, Sara. And your mobile number?")
+    assert asks_for_number(s)
+    s2 = Session()
+    s2.state = State.CONTACT
+    s2.remember("agent", "Can I have your name and mobile number?")
+    assert asks_for_number(s2)

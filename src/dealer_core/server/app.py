@@ -153,7 +153,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         gate.close_after_turn()
         await send({"type": "mic", "on": False, "reason": "turn"})
 
-    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=state.stop_secs, speak_opening=not tap,
+    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs, speak_opening=not tap,
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
                                      half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     brain_ref["brain"] = brain

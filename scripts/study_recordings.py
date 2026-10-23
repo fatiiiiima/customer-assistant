@@ -19,8 +19,8 @@ import soxr
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-SETTINGS = [("VAD 0.20 s, fallback 1.0 s (old)", 0.2, 1.0, False), ("VAD 0.20 s, fallback 0.6 s (current)", 0.2, 0.6, False),
-            ("VAD 0.20 s, fallback 0.6 s + words rule", 0.2, 0.6, True), ("VAD 0.35 s, fallback 0.6 s", 0.35, 0.6, False), ("VAD 0.60 s, fallback 0.6 s", 0.6, 0.6, False)]
+SETTINGS = [("VAD 0.20 s, fallback 0.6 s (current)", 0.2, 0.6, False, False), ("VAD 0.20 s + longer silence after a number was asked for", 0.2, 0.6, False, True),
+            ("VAD 0.35 s, fallback 0.6 s", 0.35, 0.6, False, False), ("VAD 0.35 s + longer silence after a number was asked for", 0.35, 0.6, False, True)]
 
 
 def read_wav(p: Path) -> np.ndarray:
@@ -63,16 +63,24 @@ def main() -> int:
     app = build_app(cfg, inventory="portal", portal_data=Path(r"C:\dev\bmw-portal\site\data.js"), classifier=Dummy(), reply_mode="template")
     parts = load_engines(cfg)
     out = {"pauses": dict(zip(names, pauses)), "settings": []}
-    for label, stop, fallback, peek in SETTINGS:
+    from dealer_core.dialogue.states import State
+
+    phone = [i for i, n in enumerate(names) if meta[n]["sentence"].startswith("My number")]
+    other = [i for i in range(len(names)) if i not in phone]
+    for label, stop, fallback, peek, number_rule in SETTINGS:
         t0 = time.time()
-        res = asyncio.run(run_offline(app, parts, clips, stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback, smart_short_answer_secs=0.0, smart_peek=peek,
-                                      speak_opening=True, timeout_s=3000))
-        heard = [t for who, t in res.events if who == "YOU"]
-        waits = [t.endpointing_ms for t in res.turns if t.endpointing_ms]
-        row = {"setting": label, "recordings": len(clips), "turns": len(heard), "cut": max(0, len(heard) - len(clips)),
-               "wait_median_ms": float(np.median(waits)) if waits else None, "wait_p90_ms": float(np.percentile(waits, 90)) if waits else None, "heard": heard}
+        turns, waits, cuts = 0, [], {}
+        for group, seed in ((other, None), (phone, "Thanks. And your mobile number?" if number_rule else None)):
+            res = asyncio.run(run_offline(app, parts, [clips[i] for i in group], stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback, smart_short_answer_secs=0.0,
+                                          smart_peek=peek, speak_opening=seed is None, timeout_s=3000, seed_agent_line=seed, seed_state=State.CONTACT if seed else None))
+            heard = [t for who, t in res.events if who == "YOU"]
+            turns += len(heard)
+            cuts["phone numbers" if group is phone else "other sentences"] = max(0, len(heard) - len(group))
+            waits += [t.endpointing_ms for t in res.turns if t.endpointing_ms]
+        row = {"setting": label, "recordings": len(clips), "turns": turns, "cut": sum(cuts.values()), "cut_by_group": cuts,
+               "wait_median_ms": float(np.median(waits)), "wait_p90_ms": float(np.percentile(waits, 90))}
         out["settings"].append(row)
-        print(f"{label:44s}: {len(clips)} recordings -> {len(heard)} turns ({row['cut']} cut at a pause), wait median {row['wait_median_ms']:.0f} ms, p90 {row['wait_p90_ms']:.0f} ms [{time.time() - t0:.0f} s]", flush=True)
+        print(f"{label:58s}: {len(clips)} recordings -> {turns} turns, cut: {cuts}, wait median {row['wait_median_ms']:.0f} ms, p90 {row['wait_p90_ms']:.0f} ms [{time.time() - t0:.0f} s]", flush=True)
     (ROOT / "logs").mkdir(exist_ok=True)
     (ROOT / "logs" / "study_recordings.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
     return 0
