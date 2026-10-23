@@ -205,7 +205,7 @@ async def main() -> int:
     t0 = time.monotonic()
     if a.tap:
         res = await one_call_tap(a.url, clips, a.car, "c1", a.origin, a.tap_interrupt)
-        print("greeting shown as text:", res["greeting"])
+        print(f"greeting: {res['greeting']}  ({res.get('greeting_s')} s of speech before the first tap)")
         for t, line in zip(res["turns"], lines):
             print(f"  {line[:44]:44s} mic closed by the {t['mic_closed_by']} {t['closed_s']:.2f} s after you stopped; first sound {t['silence_s']} s after you stopped" + ("; then YOU TAPPED OVER IT" if t["interrupted_next"] else ""))
         for who, text in res["lines"]:
