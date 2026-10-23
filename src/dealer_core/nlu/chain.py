@@ -25,8 +25,17 @@ def make_backend(name: str, b: BackendCfg, llm: LlmCfg, model_dir: Path) -> NluB
     raise BackendError(f"backend {name!r} has runtime {b.runtime!r}, which is a disabled stub")
 
 
+_BUILT: dict[tuple, NluBackend] = {}
+
+
 def build_backend(name: str, cfg: Config) -> NluBackend:
-    return make_backend(name, cfg.llm.backends[name], cfg.llm, Path(cfg.app.model_dir))
+    """One instance per configured backend: the intent chain and the reply writer used to load the same model twice (2 x 4.5 GB, and two
+    schedulers fighting over the iGPU)."""
+    b = cfg.llm.backends[name]
+    key = (name, b.model_dump_json(), str(cfg.app.model_dir))
+    if key not in _BUILT:
+        _BUILT[key] = make_backend(name, b, cfg.llm, Path(cfg.app.model_dir))
+    return _BUILT[key]
 
 
 class BackendChain:
