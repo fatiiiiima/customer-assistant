@@ -182,7 +182,8 @@ class VoiceCfg(_Strict):
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
     smart_fallback_secs: float = 0.6              # with smart_turn: silence after which the turn ends even if the model says "still going"
-    smart_short_answer_secs: float = 1.4          # right after a question from the agent, an answer this short (yes, a name, a number, a time, a make) counts as finished even if Smart Turn hesitates
+    smart_short_answer_secs: float = 0.0          # OFF. The length rule (an answer this short after a question counts as finished) cut 20 of 36 sentences in half instead of 4: "Toyota" and "Can I book..." are both short
+    smart_peek: bool = True                       # when Smart Turn hesitates, check the WORDS: a complete answer to the agent's last question ends the turn at once
     vad_start_secs: float = 0.1                   # speech must last this long to start a turn (0.2 lost one-word answers such as "Toyota")
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
     vad_confidence: float = 0.7

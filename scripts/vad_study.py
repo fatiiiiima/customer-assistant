@@ -34,8 +34,10 @@ REFERENCE = 0.5
 # answers a caller gives right after the agent asked something (the greeting ends on a question): finished by themselves, nothing more to wait for
 SHORT_ANSWERS = ["Toyota", "a white one", "Mercedes GLE", "yes", "the second one", "any budget", "Ahmed Khan", "tomorrow at three in the afternoon",
                  "zero five zero one two three four five six seven", "BMW X5"]
-SETTINGS = [("0.20 old (fallback 1.0 s, no short-answer rule)", 0.2, 1.0, 0.0), ("0.20 new (fallback 0.6 s + short-answer rule)", 0.2, 0.6, 1.4),
-            ("0.15 new", 0.15, 0.6, 1.4), ("0.35 old", 0.35, 1.0, 0.0), ("0.35 new", 0.35, 0.6, 1.4), ("0.60 new", 0.6, 0.6, 1.4)]
+SETTINGS = [  # (label, VAD silence, Smart Turn fallback, length rule, words rule)
+    ("0.20 old: fallback 1.0 s", 0.2, 1.0, 0.0, False), ("0.20 fallback 0.6 s", 0.2, 0.6, 0.0, False), ("0.20 fallback 0.6 s + words rule", 0.2, 0.6, 0.0, True),
+    ("0.15 fallback 0.6 s + words rule", 0.15, 0.6, 0.0, True), ("0.35 old: fallback 1.0 s", 0.35, 1.0, 0.0, False), ("0.35 fallback 0.6 s + words rule", 0.35, 0.6, 0.0, True),
+    ("0.60 fallback 0.6 s + words rule", 0.6, 0.6, 0.0, True), ("0.20 length rule (measured earlier: 20 cut)", 0.2, 0.6, 1.4, False)]
 STT_S, DECISION_S = 0.20, 0.40           # measured cost of recognition and of the tool decision (live runs, AC)
 
 
@@ -142,13 +144,13 @@ def main() -> int:
                         classifier=Dummy(), reply_mode="template")
         parts = load_engines(cfg)
         short_clips = [(np.clip(soxr.resample(caller.synthesize(t), caller.sample_rate, 16000), -1, 1) * 32767).astype(np.int16) for t in SHORT_ANSWERS]
-        for label, stop, fallback, short in SETTINGS:
+        for label, stop, fallback, short, peek in SETTINGS:
             t0 = time.time()
             res = asyncio.run(run_offline(app, parts, [u["audio"] for u in utter], stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback,
-                                          smart_short_answer_secs=short, timeout_s=3000))
+                                          smart_short_answer_secs=short, smart_peek=peek, timeout_s=3000))
             heard = [t for who, t in res.events if who == "YOU"]
             waits = [t.endpointing_ms for t in res.turns if t.endpointing_ms]
-            res2 = asyncio.run(run_offline(app, parts, short_clips, stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback, smart_short_answer_secs=short,
+            res2 = asyncio.run(run_offline(app, parts, short_clips, stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback, smart_short_answer_secs=short, smart_peek=peek,
                                            speak_opening=True, timeout_s=3000))
             heard2 = [t for who, t in res2.events if who == "YOU"]
             waits2 = [t.endpointing_ms for t in res2.turns if t.endpointing_ms]

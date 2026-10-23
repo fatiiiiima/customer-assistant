@@ -93,3 +93,33 @@ def test_a_long_utterance_or_no_question_is_still_held_when_smart_turn_hesitates
     _, seen = run_ctx(FakeAnalyzer([EndOfTurnState.INCOMPLETE]),
                       [VADUserStartedSpeakingFrame(start_secs=0.1), audio_secs(0.6), VADUserStoppedSpeakingFrame(stop_secs=0.2)], asked=False)
     assert seen == ["VADUserStartedSpeakingFrame"]                      # the agent had not asked anything
+
+
+# ---- the words rule: a complete answer to the agent's question ends the turn when Smart Turn hesitates -------------------------------------------
+def run_peek(text, is_answer):
+    ep = SmartEndpointer(analyzer=FakeAnalyzer([EndOfTurnState.INCOMPLETE]), short_answer_secs=0.0)
+
+    async def peek(pcm):
+        return text
+    ep.peek, ep.is_answer = peek, is_answer
+    out = []
+
+    async def push(frame, direction=FrameDirection.DOWNSTREAM):
+        out.append(frame)
+    ep.push_frame = push
+
+    async def go():
+        for f in [VADUserStartedSpeakingFrame(start_secs=0.1), audio_secs(0.6), VADUserStoppedSpeakingFrame(stop_secs=0.2)]:
+            await ep.process_frame(f, FrameDirection.DOWNSTREAM)
+    asyncio.run(go())
+    return ep, [type(f).__name__ for f in out if not isinstance(f, InputAudioRawFrame)]
+
+
+def test_when_smart_turn_hesitates_a_complete_answer_ends_the_turn():
+    ep, seen = run_peek("Toyota.", lambda t: True)
+    assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"] and ep.short_answers == 1 and ep.peeked == 1
+
+
+def test_when_smart_turn_hesitates_an_unfinished_sentence_is_still_held():
+    ep, seen = run_peek("Can I book", lambda t: False)
+    assert seen == ["VADUserStartedSpeakingFrame"] and ep.peeked == 1

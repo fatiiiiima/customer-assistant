@@ -4,6 +4,7 @@ All local. The language model runs on the iGPU, Whisper on the CPU, Piper on the
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
                    smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False,
-                   smart_short_answer_secs: float | None = None):
+                   smart_short_answer_secs: float | None = None, smart_peek: bool | None = None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -78,6 +79,15 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
 
         endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
+        if vcfg.smart_peek if smart_peek is None else smart_peek:
+            from zoneinfo import ZoneInfo
+
+            from .answers import is_complete_answer
+
+            tz = ZoneInfo(app.service.cfg.branches[0].timezone)
+            endpointer.peek = lambda pcm: asyncio.to_thread(lambda: parts.stt_engine.transcribe(pcm, stt.prompt_for())[0])
+            endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
+                                                                   app.inventory.vocabulary(), app.service.clock(), tz)
         stages.append(endpointer)
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
         from .bargein import BargeIn
