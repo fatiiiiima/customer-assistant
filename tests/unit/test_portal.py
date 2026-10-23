@@ -62,3 +62,18 @@ def test_portal_app_fixed_price_and_booking_hours():
     app.engine.handle(s2, "tell me about the bmw m3")
     r = app.engine.handle(s2, "can you do 250000 for it")
     assert "fixed" in r.reply and "289,000" in r.reply
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_partial_model_names_and_misheard_bmw():
+    from dealer_core.nlu import extractors as ex
+
+    cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
+    app = build_app(cfg, inventory="portal", portal_data=DATA_JS, classifier=NoLlm(), reply_mode="template")
+    v = app.inventory.vocabulary()
+    assert ex.search_filters("Mercedes GLE", v) == {"make": "mercedes", "model": "gle 450"}
+    assert ex.search_filters("the GLE please", v)["model"] == "gle 450"
+    assert ex.search_filters("a range rover", v).get("make") == "land rover"
+    for heard in ("B&W, X5.", "BNW X5", "b and w x5"):                     # Whisper's mishearings of "BMW X5"
+        assert ex.search_filters(heard, v) == {"make": "bmw", "model": "x5"}, heard
+    assert "model" not in ex.search_filters("a toyota", v)                  # a make alone stays a make

@@ -18,7 +18,7 @@ from .numbers import normalise, number_spans
 from .datetime_parse import When, parse_when  # noqa: F401  (re-exported)
 from ..tools.phones import normalize_phone
 
-MAKE_ALIASES = {"mercedes benz": "mercedes", "benz": "mercedes", "merc": "mercedes", "chevy": "chevrolet", "landrover": "land rover"}
+MAKE_ALIASES = {"b w": "bmw", "b and w": "bmw", "bnw": "bmw", "b m w": "bmw", "bm w": "bmw", "mercedes benz": "mercedes", "benz": "mercedes", "merc": "mercedes", "chevy": "chevrolet", "landrover": "land rover"}
 BODY = {"suv": "suv", "suvs": "suv", "crossover": "suv", "4x4": "suv", "sedan": "sedan", "sedans": "sedan", "saloon": "sedan",
         "hatchback": "hatchback", "hatch": "hatchback", "coupe": "coupe", "pickup": "pickup", "pickups": "pickup",
         "truck": "pickup", "trucks": "pickup", "van": "van", "vans": "van", "minivan": "van", "minivans": "van"}
@@ -83,6 +83,13 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
     # Models with digits ("m3", "320i", "c 300") are matched in the form the number normaliser gives the caller's words ("m three"), as well as as written
     hits = [(m, mk) for m, mk in flat if (f" {m} " in text or (any(ch.isdigit() for ch in m) and f" {spoken_form(m)} " in text))
             and (len(m) > 2 or "make" in out)]
+    if not hits:                                              # a caller drops the trim: "the GLE" for "GLE 450", "Range Rover" for "Range Rover Sport"
+        heads: dict[str, list[tuple[str, str]]] = {}
+        for m, mk in flat:
+            heads.setdefault(m.split()[0], []).append((m, mk))
+        for head, owners in heads.items():
+            if len(owners) == 1 and " " in owners[0][0] and len(head) >= 3 and f" {head} " in text and head not in vocab:
+                hits.append(owners[0])
     if not hits:
         long_models = [(m, mk) for m, mk in flat if len(m) >= 6]
         for g in grams:

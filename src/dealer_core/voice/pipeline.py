@@ -62,7 +62,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
                    smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False,
-                   smart_short_answer_secs: float | None = None, smart_peek: bool | None = None):
+                   smart_short_answer_secs: float | None = None, smart_peek: bool | None = None, mic_gate=None, on_user_stop=None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -73,7 +73,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
-    stages: list[FrameProcessor] = [source] + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]
+    stages: list[FrameProcessor] = [source] + ([mic_gate] if mic_gate is not None else []) + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 
@@ -89,6 +89,10 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
                                                                    app.inventory.vocabulary(), app.service.clock(), tz)
         stages.append(endpointer)
+    if on_user_stop is not None:                              # tap-to-talk: told when the turn is over, so the microphone can be closed
+        from .micgate import StopNotifier
+
+        stages.append(StopNotifier(on_user_stop))
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
         from .bargein import BargeIn
 

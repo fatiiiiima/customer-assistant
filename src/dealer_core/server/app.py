@@ -23,6 +23,7 @@ from pipecat.workers.runner import WorkerRunner
 from ..app import App
 from ..config import Config
 from ..dialogue.states import State
+from ..voice.micgate import MicGate
 from ..voice.pipeline import STT_RATE, VoiceParts, build_pipeline
 from ..voice.status import StatusLine, TurnClock
 from .protocol import PortalSerializer
@@ -38,6 +39,7 @@ class ServerState:
     stop_secs: float = 0.35               # the VAD silence (short when smart_turn is on)
     smart_turn: bool = False
     barge_in: bool = True
+    default_mode: str = "tap"             # "tap" (tap to talk, mic closed while the agent answers) | "handsfree" (open mic for the whole call); the page can ask for either
     half_duplex: bool = False             # ignore the microphone while the agent talks (laptop speakers leak into the mic); False for headphones
     smart_fallback_secs: float = 1.0
     active: int = 0
@@ -99,6 +101,7 @@ async def _hello(ws: WebSocket) -> dict:
 async def run_call(state: ServerState, ws: WebSocket) -> None:
     hello = await _hello(ws)
     app, parts = state.app, state.parts
+    tap = (hello.get("mode") or state.default_mode) == "tap"
     tz = ZoneInfo(state.cfg.branches[0].timezone)
     turn = {"n": 0}
     seen = {"shown": (), "booking": None}
@@ -144,8 +147,15 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(
         audio_in_enabled=True, audio_out_enabled=True, audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate,
         serializer=PortalSerializer(), session_timeout=None))
-    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=state.stop_secs, speak_opening=True,
-                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
+    gate = MicGate() if tap else None
+
+    async def turn_over() -> None:                            # tap-to-talk: the server decided your turn is over: close the microphone, tell the page
+        gate.close_after_turn()
+        await send({"type": "mic", "on": False, "reason": "turn"})
+
+    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=state.stop_secs, speak_opening=not tap,
+                                     mic_gate=gate, on_user_stop=turn_over if tap else None,
+                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     brain_ref["brain"] = brain
     car = hello.get("car")
     if isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
@@ -158,7 +168,9 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     async def _gone(_transport, _ws) -> None:
         await worker.cancel()
 
-    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate})
+    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree"})
+    if tap:                                                   # no spoken greeting in tap mode (the mic is open at once): the greeting is shown as text
+        await send({"type": "line", "who": "agent", "turn": 0, "text": app.engine.opening(brain.session)})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel()))
