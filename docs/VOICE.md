@@ -232,3 +232,19 @@ The median does not move with the number of callers; the slow tail is from the l
 | 32 | 0 (1 silent turn) | 7.69 s | 13.42 s | 30.72 s | 76% | 46% / 85% | 83% |
 
 The knee is between 8 and 12 callers. Up to 8 the median is unchanged; at 12-16 the median is about 1.6 s with an occasional 5-12 s turn; at 24 most turns are over 2 s; at 32 the agent is not usable. No call failed, but the waits make it unusable well before that. CPU is only 26-46% on average, so the machine is not out of processor: the limit is the parts that serve one request at a time and are shared by all calls (the speech recogniser behind a lock, the model on the integrated GPU, the voice synthesis). Suggested cap for this laptop: 8 (comfortable) to 10. More capacity needs more of those parts running in parallel, which means a second machine or a GPU.
+
+## What callers can ask (agent + prefix engine, website profile)
+
+Answered by code from the site's data.js (exact, no model): search and lists; one car's price, km, colour, year; warranty, accident and
+inspection (x/150), owners and service history, engine, horsepower and torque, drive (AWD/4WD/...), 0-100 and top speed, fuel economy,
+boot, seats, doors, interior, GCC spec, gearbox, fuel type, features ("does it have a sunroof?"); showroom hours, branches, phone /
+WhatsApp; comparing two cars (price, km, then the two clearest differences); "repeat that"; "what have I booked?" (the page sends its
+bookings when the call starts); cancelling a test drive (after a yes); moving one (read back, then the old one is cancelled once the new one
+is booked; the page is told). Booking: day/time, name, number, read-back, yes. The model still decides open questions and writes the
+follow-up question after code-written facts.
+
+Not built (owner decisions needed): reserving with the AED 3,000 deposit (money), monthly finance figures, trade-in, Arabic.
+
+Note on test numbers from 23 Oct 2026 on: the agent's voice is Joe, so the synthetic test caller is Amy (it used to be Joe). Whisper hears the
+two voices differently (e.g. Amy's "any budget" -> "AE Budget") and Smart Turn waits longer on some of Amy's lines, so end-to-end numbers
+before and after that date are not directly comparable.
