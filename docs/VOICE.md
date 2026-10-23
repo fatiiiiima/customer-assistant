@@ -152,3 +152,23 @@ the current model's tool choice on the 11 decision prompts.
 
 Speculative decoding (Qwen3-0.6B drafting for the 4B): +30-50% tokens/s but +0.15 s to the first token, so almost nothing for 10-25 token clauses: not enabled.
 Prefix caching already works: back-to-back replies reach their first token in 0.34-0.55 s (the long system prompt is not re-read).
+
+## End-of-turn settings, measured on AC power (Best performance), synthetic callers
+
+36 utterances with a mid-sentence pause (pauses 0.45-0.7 s as the detector sees them) + 10 short answers; each setting run in the real pipeline. Same-setting repeat runs differ by about
++-3 cut sentences, so differences smaller than that are noise.
+
+| setting | cut mid-sentence (of 36) | wait median / p90 | short answers: median / max wait |
+|---|---|---|---|
+| VAD 0.20 s, Smart Turn fallback 1.0 s (old) | 7 (4 in the repeat) | 281 / 1750 ms | 274 / 1796 ms |
+| **VAD 0.20 s, fallback 0.6 s (chosen)** | 8 | 281 / **1113 ms** | 305 / **1265 ms** |
+| 0.20 s, fallback 0.6 s + words rule | 11 | 266 / 1132 ms | 312 / 1157 ms |
+| 0.15 s, fallback 0.6 s + words rule | 5 | 672 / 1048 ms | 298 / 1156 ms |
+| 0.35 s, fallback 1.0 s | 5 | 547 / 1992 ms | 508 / 2078 ms |
+| 0.35 s, fallback 0.6 s + words rule | 6 | 547 / 1391 ms | 462 / 1422 ms |
+| 0.60 s, fallback 0.6 s + words rule | 3 | 867 / 1741 ms | 844 / 1765 ms |
+| 0.20 s + length rule (rejected) | **20** | 250 / 725 ms | 203 / 1187 ms |
+
+Findings: the shorter fallback cuts the slow tail by about 0.6 s at no measurable cost; a length rule is harmful ("Toyota" and "Can I book" are both short); the words rule (`voice.smart_peek`)
+gave no gain on these voices and is off until real recordings show one. Speculative start (emulation on the same audio): beginning the work at the first 0.15 s of silence is wrong 4% of
+the time with a 0.35 s confirmation window (0.6 s of work wasted over 24 starts) and 12% with 0.6 s; each correct start answers 0.20 s (0.45 s) sooner.
