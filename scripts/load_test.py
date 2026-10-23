@@ -29,7 +29,9 @@ MIX = [DEFAULT_SCRIPT,
         "Okay, can I come and see the first one on Saturday morning?", "Ten in the morning is fine", "My name is Omar Hassan", "Zero five five nine eight seven six five four three", "Yes that is right"],
        ["Do you have any BMW X5", "Tell me everything about it, the colour, mileage, engine and price", "Is the price negotiable?", "What other cars do you have that are similar to it?", "Thank you that is all for now"],
        ["Good afternoon, I want a Toyota Camry or something similar, not too old", "Show me the cheapest one", "How many kilometres has it done and has it had any accidents?",
-        "Can you book me a test drive tomorrow at five in the afternoon", "My name is Layla Ahmed", "My number is zero five zero three three three two two two one", "Yes please confirm it"]]
+        "Can you book me a test drive tomorrow at five in the afternoon", "My name is Layla Ahmed", "My number is zero five zero three three three two two two one", "Yes please confirm it"],
+       ["What time are you open today", "Do you have any Toyota", "Compare the Camry and the RAV4", "Tell me about the RAV4", "Does it have a warranty",
+        "Has it been in an accident", "How big is the boot", "Can you repeat that", "Thank you"]]
 
 
 def pct(xs: list[float], p: float) -> float:
@@ -75,7 +77,7 @@ async def main() -> int:
     ap.add_argument("--origin", default="http://localhost:8080")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 3, 4])
     ap.add_argument("--voice", default="amy")
-    ap.add_argument("--mix", action="store_true", help="four different conversations (longer questions, comparisons, a negotiation question) instead of one")
+    ap.add_argument("--mix", action="store_true", help="five different conversations (longer questions, comparisons, a negotiation question) instead of one")
     ap.add_argument("--stagger", type=float, default=0.0, help="seconds between caller starts")
     a = ap.parse_args()
     print("synthesising caller lines...", flush=True)

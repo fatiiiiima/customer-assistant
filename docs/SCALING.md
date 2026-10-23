@@ -78,3 +78,27 @@ On a GPU server these become ~0.05 s (recognition) and ~0.2-0.4 s (model), which
    a one-hour soak for memory growth.
 
 Licences: everything named above is MIT or Apache-2.0. Piper voices and espeak-ng (GPL-3) remain the open licence question (docs/LICENSES.md).
+
+## Re-measured with the new features (23 Oct 2026, evening, AC power)
+
+One caller, 32 turns (the 23 before plus a 9-turn "details" conversation: hours, compare, warranty, accident, boot, repeat, thanks),
+synthetic caller voice Amy (the agent is now Joe):
+
+| Run | Median | Mean | p90 | Worst | Over 2 s | Silent |
+|---|---|---|---|---|---|---|
+| 1 | 0.76 s | 1.01 s | 1.69 s | 3.25 s | 1 of 32 | 0 |
+| 2 | 0.88 s | 1.09 s | 1.70 s | 3.16 s | 1 of 32 | 0 |
+
+The new-feature questions (hours, compare, warranty, accident, boot, repeat) took 0.42-0.75 s each: code answers them without a model call.
+The one slow turn is a mishearing ("any budget" heard as "AE Budget"), which the model then answered.
+
+Many callers, five different conversations including the new features, starts 2 s apart:
+
+| Callers | Failed | Median | p90 | Worst | Over 2 s |
+|---|---|---|---|---|---|
+| 1 | 0 | 1.17 s | 1.73 s | 1.75 s | 0% |
+| 8 | 0 | 1.05 s | 1.69 s | 2.53 s | 5% |
+| 16 | 0 | 1.16 s | 1.79 s | 2.55 s | 5% |
+| 24 | 0 | 1.52 s | 2.56 s | 3.39 s | 27% |
+
+(RAM peaked at 83% because the owner's own voice server was running at the same time, holding a second copy of the model.)

@@ -30,6 +30,8 @@ CHATS = {
     "booking": ["Mercedes GLE", "the GLE please", "I'd like a test drive", "tomorrow at three in the afternoon", "my name is Ahmed Khan",
                 "my number is zero five zero one two three four five six seven", "yes that is right"],
     "follow-up": ["Toyota", "any budget", "tell me about the second one", "how much is it"],
+    "details": ["what time are you open today", "do you have any Toyota", "compare the Camry and the RAV4", "tell me about the RAV4",
+                "does it have a warranty", "has it been in an accident", "how big is the boot", "can you repeat that", "thank you"],
 }
 
 
