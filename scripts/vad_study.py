@@ -4,7 +4,7 @@ caller resumes) cost and save?
   .venv\Scripts\python.exe scripts\vad_study.py                 # synthetic callers (and recordings/*.wav if present, see scripts/record_samples.py)
   .venv\Scripts\python.exe scripts\vad_study.py --no-pipeline   # only the speculative-start emulation (fast)
 
-Part A (real pipeline, real time): every utterance goes through VAD + Smart Turn + Whisper at VAD silence 0.15 / 0.35 / 0.6. An utterance that produces more than one turn
+Part A (real pipeline, real time): every utterance goes through VAD + Smart Turn + Whisper at several VAD silences, with the old and the new Smart Turn behaviour (SETTINGS), plus a set of short answers that follow a question. An utterance that produces more than one turn
 was cut in the middle. Utterances carry a mid-sentence pause; pauses up to 0.5 s count as "the caller has not finished" (the reference).
 Part B (emulation on the same audio, with the real detectors): a speculative start begins the speech recognition and the model at the first VAD silence (0.15 s) when Smart Turn
 says the turn is complete, and is cancelled if the caller resumes before the confirmation window (0.35 or 0.6 s of silence) ends. Wasted work = cancelled starts x measured
@@ -31,6 +31,11 @@ LINES = ["I'm looking for|a white SUV", "Can I book|a test drive for tomorrow af
          "Hello|I saw a car on your website", "Can you show me|the cheapest one", "I would like|to come and see it today"]
 NOMINAL_PAUSES = [0.25, 0.5]             # plus the voice's own ~0.2 s of silence around each piece
 REFERENCE = 0.5
+# answers a caller gives right after the agent asked something (the greeting ends on a question): finished by themselves, nothing more to wait for
+SHORT_ANSWERS = ["Toyota", "a white one", "Mercedes GLE", "yes", "the second one", "any budget", "Ahmed Khan", "tomorrow at three in the afternoon",
+                 "zero five zero one two three four five six seven", "BMW X5"]
+SETTINGS = [("0.20 old (fallback 1.0 s, no short-answer rule)", 0.2, 1.0, 0.0), ("0.20 new (fallback 0.6 s + short-answer rule)", 0.2, 0.6, 1.4),
+            ("0.15 new", 0.15, 0.6, 1.4), ("0.35 old", 0.35, 1.0, 0.0), ("0.35 new", 0.35, 0.6, 1.4), ("0.60 new", 0.6, 0.6, 1.4)]
 STT_S, DECISION_S = 0.20, 0.40           # measured cost of recognition and of the tool decision (live runs, AC)
 
 
@@ -136,16 +141,24 @@ def main() -> int:
         app = build_app(load_config(overlay=ROOT / "config" / "portal.yaml"), inventory="portal", portal_data=Path(r"C:\dev\bmw-portal\site\data.js"),
                         classifier=Dummy(), reply_mode="template")
         parts = load_engines(cfg)
-        for stop in (0.15, 0.35, 0.6):
+        short_clips = [(np.clip(soxr.resample(caller.synthesize(t), caller.sample_rate, 16000), -1, 1) * 32767).astype(np.int16) for t in SHORT_ANSWERS]
+        for label, stop, fallback, short in SETTINGS:
             t0 = time.time()
-            res = asyncio.run(run_offline(app, parts, [u["audio"] for u in utter], stop_secs=stop, smart_turn=True, smart_fallback_secs=cfg.voice.smart_fallback_secs,
-                                          timeout_s=3000))
+            res = asyncio.run(run_offline(app, parts, [u["audio"] for u in utter], stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback,
+                                          smart_short_answer_secs=short, timeout_s=3000))
             heard = [t for who, t in res.events if who == "YOU"]
-            row = {"vad_silence": stop, "utterances": len(utter), "turns_answered": len(heard), "extra_turns": max(0, len(heard) - len(utter)),
-                   "endpoint_ms_median": float(np.median([t.endpointing_ms for t in res.turns if t.endpointing_ms])) if res.turns else None}
+            waits = [t.endpointing_ms for t in res.turns if t.endpointing_ms]
+            res2 = asyncio.run(run_offline(app, parts, short_clips, stop_secs=stop, smart_turn=True, smart_fallback_secs=fallback, smart_short_answer_secs=short,
+                                           speak_opening=True, timeout_s=3000))
+            heard2 = [t for who, t in res2.events if who == "YOU"]
+            waits2 = [t.endpointing_ms for t in res2.turns if t.endpointing_ms]
+            row = {"setting": label, "vad_silence": stop, "fallback": fallback, "short_rule": short, "utterances": len(utter), "turns_answered": len(heard),
+                   "cut_mid_sentence": max(0, len(heard) - len(utter)), "wait_ms_median": float(np.median(waits)) if waits else None,
+                   "wait_ms_p90": float(np.percentile(waits, 90)) if waits else None, "short_answers": len(short_clips), "short_turns": len(heard2),
+                   "short_wait_ms_median": float(np.median(waits2)) if waits2 else None, "short_wait_ms_max": float(max(waits2)) if waits2 else None}
             results["settings"].append(row)
-            print(f"A. VAD silence {stop:.2f} s + Smart Turn: {len(utter)} utterances -> {len(heard)} turns ({row['extra_turns']} cut mid-sentence), median wait "
-                  f"{row['endpoint_ms_median']:.0f} ms [{time.time() - t0:.0f} s]", flush=True)
+            print(f"A. {label}: pauses {len(utter)} utterances -> {len(heard)} turns ({row['cut_mid_sentence']} cut), wait median {row['wait_ms_median']:.0f} ms, p90 {row['wait_ms_p90']:.0f} ms | "
+                  f"short answers {len(short_clips)} -> {len(heard2)} turns, wait median {row['short_wait_ms_median']:.0f} ms, max {row['short_wait_ms_max']:.0f} ms [{time.time() - t0:.0f} s]", flush=True)
 
     analyzer = LocalSmartTurnAnalyzerV3(sample_rate=16000, params=SmartTurnParams(stop_secs=cfg.voice.smart_fallback_secs))
     analyzer.set_sample_rate(16000)

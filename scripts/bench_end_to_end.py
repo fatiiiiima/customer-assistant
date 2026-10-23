@@ -87,21 +87,31 @@ def main() -> int:
                 said.append([])
             elif said:
                 said[-1].append(t)
+        flags = [b.get("fallback") for b in res.brain_log] if len(res.brain_log) == len(lines) else [None] * len(lines)
         for i, (line, tt) in enumerate(zip(lines, res.turns)):
             rows.append({"chat": name, "customer": line, "heard": heard[i] if i < len(heard) else None, "silence_s": tt.total_ms / 1000 if tt.total_ms else None,
+                         "fallback": flags[i],
                          "endpoint_ms": tt.endpointing_ms, "stt_ms": tt.stt_ms, "brain_ms": tt.brain_ms, "tts_ms": tt.tts_first_ms,
                          "reply": " ".join(said[i]) if i < len(said) else ""})
         print(f"{name}: {len(lines)} turns in {time.time() - t0:.0f} s", flush=True)
-    ok = [r["silence_s"] for r in rows if r["silence_s"]]
+    heard_turns = [r for r in rows if r["silence_s"]]
+    ok = [r["silence_s"] for r in heard_turns]
+    model = [r["silence_s"] for r in heard_turns if r["fallback"] is False]
+    fb = [r["silence_s"] for r in heard_turns if r["fallback"]]
+    silent = [r for r in rows if not r["silence_s"]]
     ok_sorted = sorted(ok)
-    print(f"\n=== {label}  (AC power: {ac}; engine {a.engine}{' + prefix' if a.prefix else ''}; VAD silence {stop} s; Smart Turn {cfg.voice.smart_turn})")
-    print(f"{'chat':12s} {'customer':50s} {'silence':>8s}  endpoint/STT/brain/TTS (ms)")
+    med = lambda xs: f"{st.median(xs):.2f} s" if xs else "-"
+    print(f"\n=== {label}  (AC power: {ac}; engine {a.engine}{' + prefix' if a.prefix else ''}; VAD silence {stop} s; Smart Turn {cfg.voice.smart_turn}, fallback {cfg.voice.smart_fallback_secs} s)")
+    print(f"{'chat':12s} {'customer':50s} {'silence':>8s}  how   endpoint/STT/brain/TTS (ms)")
     for r in rows:
-        print(f"{r['chat']:12s} {r['customer'][:50]:50s} {('%.2f s' % r['silence_s']) if r['silence_s'] else 'NO AUDIO':>8s}  "
+        how = "-" if not r["silence_s"] else ("FALLBACK" if r["fallback"] else "model" if r["fallback"] is False else "?")
+        print(f"{r['chat']:12s} {r['customer'][:50]:50s} {('%.2f s' % r['silence_s']) if r['silence_s'] else 'NO AUDIO':>8s}  {how:8s} "
               f"{r['endpoint_ms']:.0f}/{r['stt_ms']:.0f}/{r['brain_ms']:.0f}/{r['tts_ms']:.0f}")
+    print(f"\nTURNS {len(rows)}: with audio {len(heard_turns)} (model-written {len(model)}, spoken by the code fallback {len(fb)}), SILENT {len(silent)}"
+          + (f"  <- {[(r['chat'], r['customer'][:28]) for r in silent]}" if silent else ""))
     if ok:
-        print(f"\nsilence before the first sound over {len(ok)} turns: median {st.median(ok):.2f} s, mean {st.mean(ok):.2f} s, p90 {ok_sorted[int(0.9 * (len(ok_sorted) - 1))]:.2f} s, "
-              f"worst {max(ok):.2f} s; over 2 s: {sum(x > 2 for x in ok)}; turns with no audio: {len(rows) - len(ok)}")
+        print(f"silence before the first sound, turns WITH audio: median {med(ok)}, mean {st.mean(ok):.2f} s, p90 {ok_sorted[int(0.9 * (len(ok_sorted) - 1))]:.2f} s, worst {max(ok):.2f} s; over 2 s: {sum(x > 2 for x in ok)}")
+        print(f"   model-written turns: median {med(model)}   fallback turns: median {med(fb)}")
     Path(ROOT / "logs").mkdir(exist_ok=True)
     (ROOT / "logs" / f"e2e_{label}.json").write_text(json.dumps({"label": label, "ac_power": ac, "rows": rows}, indent=1), encoding="utf-8")
     return 0

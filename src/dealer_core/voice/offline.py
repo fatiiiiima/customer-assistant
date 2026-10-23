@@ -47,6 +47,7 @@ class FileSource(FrameProcessor):
         super().__init__(**kwargs)
         self.clips, self._log, self._reply_wait = clips, log, reply_wait
         self._last_audio = last_audio if last_audio is not None else [0.0]      # monotonic time of the latest reply audio
+        self.played = 0                                                          # clips fully sent so far
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -65,6 +66,7 @@ class FileSource(FrameProcessor):
             n = STT_RATE * FRAME_MS // 1000
             for k in range(0, len(clip), n):
                 await send(clip[k:k + n] if len(clip[k:k + n]) == n else np.pad(clip[k:k + n], (0, n - len(clip[k:k + n]))))
+            self.played = i + 1
             self._log.append((time.monotonic(), "speech", f"end:{i}"))
             for _ in range(60):                                        # keep the line open with silence until the reply starts (or 30 s)
                 for _ in range(25):
@@ -99,7 +101,8 @@ class OfflineResult:
 
 
 async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_secs: float = 0.35, speak_opening: bool = False,
-                      timeout_s: float = 240.0, smart_turn: bool = False, smart_fallback_secs: float = 1.0) -> OfflineResult:
+                      timeout_s: float = 240.0, smart_turn: bool = False, smart_fallback_secs: float = 1.0, smart_short_answer_secs: float | None = None,
+                      speak_opening_first: bool | None = None) -> OfflineResult:
     log: list[tuple[float, str, str]] = []
     reply_wait = asyncio.Event()
     last_audio = [0.0]
@@ -111,7 +114,8 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
             await super().process_frame(frame, direction)
             if isinstance(frame, TTSAudioRawFrame):
                 last_audio[0] = time.monotonic()
-                if not reply_wait.is_set():
+                answered_this_clip = sum(1 for who, _ in events if who == "YOU") >= source.played          # audio before this clip's transcript is the previous reply's tail
+                if answered_this_clip and not reply_wait.is_set():
                     log.append((time.monotonic(), "audio", "first"))
                     reply_wait.set()
             await self.push_frame(frame, direction)
@@ -119,7 +123,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
     kinds = {"vad": (VADUserStoppedSpeakingFrame,), "stt": (TranscriptionFrame,), "brain": (TTSSpeakFrame,), "tts": (TTSAudioRawFrame,)}
     probes = {name: Probe(name, log, k) for name, k in kinds.items()}
     source = FileSource(clips, log, reply_wait, last_audio)
-    pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes, smart_turn=smart_turn, smart_fallback_secs=smart_fallback_secs,
+    pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes, smart_turn=smart_turn, smart_fallback_secs=smart_fallback_secs, smart_short_answer_secs=smart_short_answer_secs,
                                      on_turn=lambda r: transcripts.append(r.reply),
                                      on_heard=lambda t: events.append(("YOU", t)), on_say=lambda t: events.append(("AGENT", t)))
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),

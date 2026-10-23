@@ -60,7 +60,8 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
-                   smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False):
+                   smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False,
+                   smart_short_answer_secs: float | None = None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -75,7 +76,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 
-        endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs)
+        endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
         stages.append(endpointer)
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
