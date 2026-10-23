@@ -220,7 +220,7 @@ def test_questions_about_the_car_just_discussed_are_answered_by_code_and_short()
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
 def test_the_owners_transcript_of_23_october():
     """Replayed from a real call: thanks after a booking, a new make mid-call, a fragment, the caller's own earlier slot, and a list of 3 of 4."""
-    e, _ = engine(["search_cars", "search_cars", "get_car", "prepare_booking", "get_car", "prepare_booking"])
+    e, _ = engine(["search_cars", "get_car", "prepare_booking", "get_car", "prepare_booking"])   # "anything works" is decided by code
     s = e.new_session()
     e.handle(s, "Toyota")
     assert "Of the 4" in e.handle(s, "anything works").reply and "one more" in s.history[-1][1]
