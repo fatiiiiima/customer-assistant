@@ -36,6 +36,8 @@ from ..tools.phones import normalize_phone, speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 
+_PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
+_CHANGE = re.compile(r"\b(?:no|not|change|different|another|other|cancel|wait|actually|instead|but)\b")
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
 
 CONTINUE_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership. Your reply has already begun (the start is given to you); you only add the closing question,
@@ -136,7 +138,7 @@ class AgentEngine:
             yield "Goodbye."
             yield TurnResult("Goodbye.", dbg, True)
             return
-        decision = self._decide(s, text)
+        decision = self._fast_decide(s, text) or self._decide(s, text)
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
             tool = "none"
@@ -300,6 +302,25 @@ class AgentEngine:
         return (f"NOW: {now:%A %d %B %Y, %H:%M} (Dubai). Open every day.\n{hint}"
                 f"CAR IN FOCUS: {focus.stock_id + ' ' + T.car_name(focus) if focus else 'none'}\nLAST SHOWN: {shown}\n"
                 f"SEARCH SO FAR: {s.filters or 'nothing'}\nBOOKING DRAFT: {draft}\nCONVERSATION:\n{convo}\n")
+
+    def _fast_decide(self, s: Session, text: str) -> dict | None:
+        """The turns whose action the code can tell for certain, without asking the model (saves its 0.25-0.4 s decision call):
+        a pick from the list just read out, the next booking detail while a booking is being filled in, and a plain yes to the read-back.
+        Anything else, or anything mixed ("yes, but at five"), goes to the model as before."""
+        picked = ex.selection(text, s.shown)
+        if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
+            return {"tool": "get_car", "car_id": picked, "via": "rules"}
+        if not s.car or s.ended:
+            return None
+        words = ex.tokens_of(text)
+        if s.state is State.CONFIRM and s.read_back and _PLAIN_YES.fullmatch(" ".join(words)):
+            return {"tool": "confirm_booking", "via": "rules"}
+        if s.state in (State.SLOT, State.CONTACT) and not _CHANGE.search(" ".join(words)):
+            tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
+            ct = ex.contact(text)
+            if parse_when(text, self.svc.clock(), tz).found or ct.phone or (s.state is State.CONTACT and ct.name):
+                return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}
+        return None
 
     def _decide(self, s: Session, text: str) -> dict:
         """The model names the tool (and the car). Everything else - filters, name, phone, day and time - is taken from the customer's words by code."""

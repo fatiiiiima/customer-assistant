@@ -178,3 +178,27 @@ def test_the_fallback_can_be_switched_off_to_see_the_model_alone():
     e = AgentEngine(app.service, Scripted(["search_cars"]), app.engine.reply_writer)
     e.model_only, e.silent_fallback = True, False
     assert not [x for x in e.handle_stream(e.new_session(), "toyota") if isinstance(x, str)]
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_booking_details_and_a_plain_yes_need_no_model_decision():
+    e, app = engine(["search_cars", "prepare_booking AG-122"])           # the model is asked only for the first two turns
+    s = e.new_session()
+    e.handle(s, "a bmw m3")
+    e.handle(s, "I'd like to book a test drive")
+    for line in ("tomorrow at four in the afternoon", "my name is Sara Khan", "my number is zero five zero one two three four five six seven"):
+        e.handle(s, line)
+    assert s.read_back and not s.booking
+    e.handle(s, "yes that is right")
+    assert s.booking and s.booking.customer_name == "Sara Khan"
+    assert e.backend.decisions == []                                      # every later turn was decided by code (a model call would have failed: nothing left)
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_yes_but_a_change_still_goes_to_the_model():
+    e, _ = engine([])
+    s = e.new_session()
+    s.car, s.read_back = "AG-122", True
+    from dealer_core.dialogue.states import State
+    s.state = State.CONFIRM
+    assert e._fast_decide(s, "yes but at five") is None and e._fast_decide(s, "yes please")["tool"] == "confirm_booking"
