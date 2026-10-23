@@ -38,6 +38,11 @@ from ..tools.service import DealerService
 
 _PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
 _CHANGE = re.compile(r"\b(?:no|not|change|different|another|other|cancel|wait|actually|instead|but)\b")
+_VALUE = re.compile(r"\b(?:good price|fair price|good deal|worth it|worth the|too expensive|expensive|too much|overpriced|pricey)\b")
+_ATTRIBUTE = {"km": re.compile(r"\b(?:kilomet\w*|km|mileage|miles|done|driven)\b"), "colour": re.compile(r"\b(?:colou?r)\b"),
+              "price": re.compile(r"\b(?:price|cost|how much)\b"), "year": re.compile(r"\b(?:year|how old|model year)\b")}
+_ABOUT_THIS_CAR = re.compile(r"\b(?:kilomet\w*|km|mileage|miles|colou?r|price|cost|how much|year|how old)\b")   # only what the code's line answers; engine, warranty, ... go to the model
+_BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|visit|appointment|today|tomorrow|morning|afternoon|evening|tonight)\b")
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
 
 CONTINUE_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership. Your reply has already begun (the start is given to you); you only add the closing question,
@@ -313,6 +318,10 @@ class AgentEngine:
         if not s.car or s.ended:
             return None
         words = ex.tokens_of(text)
+        joined = " ".join(words)
+        if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined))
+                and not _BOOKING_CUE.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make")):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
         if s.state is State.CONFIRM and s.read_back and _PLAIN_YES.fullmatch(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
         if s.state in (State.SLOT, State.CONTACT) and not _CHANGE.search(" ".join(words)):
@@ -463,8 +472,18 @@ class AgentEngine:
             s.shown = [car]
         s.state = State.ANSWERING
         dbg.tools.append(f"get_car({car.stock_id}) -> {car.status.value}")
-        return {"core": f"It's the {T.car_name(car)}, {car.color}, {car.km:,} kilometres, {T.money(car.price)}. Would you like to book a test drive?",
-                "facts": ["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()], "awaiting": True}
+        facts = ["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]
+        words = " ".join(ex.tokens_of(text))
+        ask = "Would you like to book a test drive?"
+        if HAGGLE.search(words) or _VALUE.search(words):                 # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
+            return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
+        just_said = any(who == "agent" and T.car_name(car) in t for who, t in s.history[-2:])
+        if just_said:                                                    # the caller heard the full line a moment ago: answer only what was asked
+            part = [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."), ("price", f"It's {T.money(car.price)}."),
+                                     ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
+            if part:
+                return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
+        return {"core": f"It's the {T.car_name(car)}, {car.color}, {car.km:,} kilometres, {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
 
     def _slot_text(self, slots, now) -> str:
         return " or ".join(T.when_short(x, now) for x in slots)

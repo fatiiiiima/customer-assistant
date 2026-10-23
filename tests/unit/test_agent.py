@@ -202,3 +202,16 @@ def test_yes_but_a_change_still_goes_to_the_model():
     from dealer_core.dialogue.states import State
     s.state = State.CONFIRM
     assert e._fast_decide(s, "yes but at five") is None and e._fast_decide(s, "yes please")["tool"] == "confirm_booking"
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_questions_about_the_car_just_discussed_are_answered_by_code_and_short():
+    e, _ = engine(["get_car AG-122"])
+    s = e.new_session()
+    e.handle(s, "tell me about the bmw m3")
+    km = e.handle(s, "how many kilometres has it done").reply                # no model decision left: code must route it
+    assert "kilometres" in km and "dirhams" not in km                        # just what was asked, not the whole line again
+    haggle = e.handle(s, "can you do it for less").reply
+    assert "fixed" in haggle.lower() and haggle.lower().count("dirhams") == 1
+    assert e._fast_decide(s, "how much is the toyota camry") is None          # another car named: the model decides
+    assert e._fast_decide(s, "does it have a warranty") is None               # the code's line does not answer that
