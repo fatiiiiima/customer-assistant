@@ -149,12 +149,16 @@ async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: 
                 await ws.send((part if len(part) == FRAME else np.pad(part, (0, FRAME - len(part)))).tobytes())
                 await asyncio.sleep(0.02)
             t_end = time.monotonic()
+            st_["first_audio"] = 0.0                                                # only audio after the end of THIS speech counts as the reply
             manual = False
-            try:
-                await asyncio.wait_for(st_["mic_off"].wait(), 4.0)                  # the server closes the microphone when it decides the turn is over
-            except asyncio.TimeoutError:
+            for _ in range(250):                                                    # a real microphone keeps streaming (silence) until the server closes it
+                if st_["mic_off"].is_set():
+                    break
+                await ws.send(silence)
+                await asyncio.sleep(0.02)
+            if not st_["mic_off"].is_set():
                 manual = True
-                await ws.send(json.dumps({"type": "mic", "on": False}))             # tap to finish
+                await ws.send(json.dumps({"type": "mic", "on": False}))             # the server did not decide within 5 s: tap to finish
                 await asyncio.wait_for(st_["mic_off"].wait(), 6.0)
             closed_after = time.monotonic() - t_end
             for _ in range(1500):
