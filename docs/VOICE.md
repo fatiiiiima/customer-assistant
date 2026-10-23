@@ -172,3 +172,17 @@ Prefix caching already works: back-to-back replies reach their first token in 0.
 Findings: the shorter fallback cuts the slow tail by about 0.6 s at no measurable cost; a length rule is harmful ("Toyota" and "Can I book" are both short); the words rule (`voice.smart_peek`)
 gave no gain on these voices and is off until real recordings show one. Speculative start (emulation on the same audio): beginning the work at the first 0.15 s of silence is wrong 4% of
 the time with a 0.35 s confirmation window (0.6 s of work wasted over 24 starts) and 12% with 0.6 s; each correct start answers 0.20 s (0.45 s) sooner.
+
+## Tap to talk (website default)
+
+Tap the mic -> speak -> the server decides the turn is over and closes the mic (the browser releases the microphone: the recording indicator goes off) -> Wazir answers with the mic closed ->
+tap to reply, or tap during the answer to interrupt it. `?voicemode=handsfree` (or `CONFIG.voiceMode = "handsfree"`, or `serve_portal.cmd --hands-free` as the server default) keeps the old open-mic call.
+Measured with the synthetic caller streaming silence like a real mic: the server closes the mic 0.1-0.3 s after you stop, the first sound comes 0.6-0.8 s after you stop (agent + prefix; the
+first turn of a call 1.1-1.8 s), and a tap over the reply interrupts it every time (9 s of speech came back instead of 36 s). Checked in the page with a fake microphone: listening -> thinking (mic released)
+-> speaking -> waiting (green, "tap to reply") -> tap -> listening; tap while speaking -> listening again. No spoken greeting in this mode (the mic is open at once): the greeting is shown as text.
+
+## Your own recordings (24 takes, headset or laptop mic, natural pauses)
+
+Your pauses: median 0.27 s, 3 of 24 over the 0.5 s reference. Through the real pipeline: VAD 0.20 s / fallback 1.0 s (old) cut 5 sentences, VAD 0.20 s / fallback 0.6 s (current) cut 6, with the
+words rule 6, VAD 0.35 s cut 5, VAD 0.60 s cut 0 but waits 953 ms (median) instead of 335 ms. The cuts are phone numbers dictated in groups ("050" | "123" | "4567"), "Is it..." with a 0.22 s pause, and
+"I'm looking for..." with a 0.56 s pause. Whisper heard "Ahmed Khan" as "Edmmer Traun" once and "BMW X5, the grey one" as "BMW X5 Degrelo".
