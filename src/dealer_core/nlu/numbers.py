@@ -13,7 +13,8 @@ ONES = {"zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5
         "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
 TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
 DIGIT_WORDS = {k for k, v in ONES.items() if v < 10}
-NUM_WORDS = set(ONES) | set(TENS) | {"hundred", "thousand", "million", "and"}
+MAGNITUDES = ("thousand", "million", "k", "grand")                 # "a hundred and fifty k", "fifty grand"
+NUM_WORDS = set(ONES) | set(TENS) | {"hundred", "thousand", "million", "and", "k", "grand"}
 _WORD_OF = {v: k for k, v in ONES.items() if k != "oh"}
 _TENS_WORD = {v: k for k, v in TENS.items()}
 
@@ -75,17 +76,21 @@ def _small(chunk: list[str]) -> int | None:
 
 def _value(chunk: list[str]) -> int:
     total, cur = 0, 0
-    for w in chunk:
+    for i, w in enumerate(chunk):
         if w == "and":
             continue
-        if w in ONES:
+        nxt = chunk[i + 1] if i + 1 < len(chunk) else ""
+        if (w in ONES and 1 <= ONES[w] <= 9 and nxt in TENS and "hundred" not in chunk[:i + 1]
+                and any(m in chunk[i + 1:] for m in MAGNITUDES) and cur == 0):
+            cur += ONES[w] * 100                          # "one fifty thousand" = 150,000 (hundreds left out, as people say prices), not 51,000
+        elif w in ONES:
             cur += ONES[w]
         elif w in TENS:
             cur += TENS[w]
         elif w == "hundred":
             cur = max(cur, 1) * 100
-        elif w in ("thousand", "million"):
-            total += max(cur, 1) * (1000 if w == "thousand" else 1_000_000)
+        elif w in MAGNITUDES:
+            total += max(cur, 1) * (1_000_000 if w == "million" else 1000)
             cur = 0
     return total + cur
 
