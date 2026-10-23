@@ -9,6 +9,7 @@ templated, every number comes from the tools / policy engine, and every state ch
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 import random
 import time
@@ -76,6 +77,7 @@ class DialogueEngine:
                  lead_writer: LeadInWriter | None = None, drafter: DraftWriter | None = None,
                  reply_writer: ReplyWriter | None = None) -> None:
         self.svc, self.nlu, self.writer, self.drafter, self.reply_writer = svc, nlu, lead_writer, drafter, reply_writer
+        self.silent_fallback = True                  # a turn the model left silent is never spoken as silence: the code-written reference wording is spoken
         self.model_only = False                      # test mode (voice.model_only): nothing but the model's own sentences is spoken
         self.stream_high_risk = False                # voice: price / booking / hand-off replies are spoken from the exact standard wording
         self.phrases, self.variant_seed = phrasebook or Phrasebook(), variant_seed
@@ -148,8 +150,9 @@ class DialogueEngine:
             for sentence in self._conversational_stream(s, u.intent.value, text, dbg, core):
                 spoken.append(sentence)
                 yield sentence
-        if not spoken and not self.model_only:                           # nothing usable from the model: the standard wording
+        if not spoken and (not self.model_only or self.silent_fallback):  # nothing usable from the model: the standard wording
             spoken = [core]
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
             yield core
         elif not spoken:
             dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: the model gave no usable reply, so nothing was said"
@@ -176,9 +179,14 @@ class DialogueEngine:
                 parts.append(out.text)
                 yield out.text
         else:
-            for sentence in self.reply_writer.stream(w):
-                parts.append(sentence)
-                yield sentence
+            for attempt in range(2):                                 # rejected outright: ask once more, told why (still the model's words)
+                if attempt:
+                    w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {self.reply_writer.last_stream.get('stopped', '')}. Write it again without that.")
+                for sentence in self.reply_writer.stream(w):
+                    parts.append(sentence)
+                    yield sentence
+                if parts:
+                    break
             info = self.reply_writer.last_stream
             dbg.lead_ms = info.get("first_ms", 0.0)
             if info.get("stopped") or info.get("appended") or info.get("whole_reply_issues"):
@@ -204,6 +212,10 @@ class DialogueEngine:
             lines.append("The call is being handed to a colleague.")
         if risk == "chat" and sheet:
             lines.append("Car under discussion: " + sheet.splitlines()[0][2:].split(":")[0])
+        elif sheet:                                   # the cars of the call are always given, so the model never has to reach for the history (or invent a colour or year)
+            lines.append("Cars in this call (true facts you may use):\n" + sheet)
+        if not self.svc.cfg.negotiation.enabled:
+            lines.append("Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'.")
         return "\n".join(lines)
 
     def _conversational(self, s: Session, intent: str, text: str, dbg: TurnDebug, core: str) -> str:

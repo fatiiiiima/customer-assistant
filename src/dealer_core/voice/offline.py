@@ -43,9 +43,10 @@ class Probe(FrameProcessor):
 class FileSource(FrameProcessor):
     """Plays 16 kHz int16 mono clips as the caller would speak them: real-time frames, a pause for the reply, next clip."""
 
-    def __init__(self, clips: list[np.ndarray], log: list, reply_wait: asyncio.Event, **kwargs) -> None:
+    def __init__(self, clips: list[np.ndarray], log: list, reply_wait: asyncio.Event, last_audio: list | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.clips, self._log, self._reply_wait = clips, log, reply_wait
+        self._last_audio = last_audio if last_audio is not None else [0.0]      # monotonic time of the latest reply audio
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -70,7 +71,11 @@ class FileSource(FrameProcessor):
                     await send(silence)
                 if self._reply_wait.is_set():
                     break
-            await asyncio.sleep(2.0)                                   # let the reply play out before the next caller turn
+            await asyncio.sleep(1.0)
+            for _ in range(300):                                       # let the reply play out completely (1 s of quiet) before the next caller turn
+                if time.monotonic() - self._last_audio[0] > 1.0:
+                    break
+                await asyncio.sleep(0.1)
 
 
 @dataclass
@@ -97,6 +102,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
                       timeout_s: float = 240.0, smart_turn: bool = False, smart_fallback_secs: float = 1.0) -> OfflineResult:
     log: list[tuple[float, str, str]] = []
     reply_wait = asyncio.Event()
+    last_audio = [0.0]
     transcripts: list[str] = []
     events: list[tuple[str, str]] = []
 
@@ -104,6 +110,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
             if isinstance(frame, TTSAudioRawFrame):
+                last_audio[0] = time.monotonic()
                 if not reply_wait.is_set():
                     log.append((time.monotonic(), "audio", "first"))
                     reply_wait.set()
@@ -111,7 +118,7 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
 
     kinds = {"vad": (VADUserStoppedSpeakingFrame,), "stt": (TranscriptionFrame,), "brain": (TTSSpeakFrame,), "tts": (TTSAudioRawFrame,)}
     probes = {name: Probe(name, log, k) for name, k in kinds.items()}
-    source = FileSource(clips, log, reply_wait)
+    source = FileSource(clips, log, reply_wait, last_audio)
     pipeline, brain = build_pipeline(app, parts, source, Recorder(), stop_secs=stop_secs, speak_opening=speak_opening, probes=probes, smart_turn=smart_turn, smart_fallback_secs=smart_fallback_secs,
                                      on_turn=lambda r: transcripts.append(r.reply),
                                      on_heard=lambda t: events.append(("YOU", t)), on_say=lambda t: events.append(("AGENT", t)))
@@ -134,27 +141,43 @@ async def run_offline(app, parts: VoiceParts, clips: list[np.ndarray], *, stop_s
 
     # reduce the event log into per-turn timings
     result = OfflineResult(brain_log=list(brain.turn_log), transcripts=transcripts, events=events)
-    ends = [t for t, n, k in log if n == "speech"]
+    result.turns = reduce_log(log)
+    return result
+
+
+def reduce_log(log: list[tuple[float, str, str]]) -> list[TurnTiming]:
+    """Per-turn stage timings from the event log. The stages of a turn are matched IN ORDER, each at or after the stage that feeds it
+    (speech end -> VAD stop -> transcript -> first sentence -> first audio), so no stage can be attributed to a time before the one before it.
+    (The old version took the first event of each kind inside a time window: a long reply still being spoken when the next caller clip began put
+    the previous turn's sentences and audio in the new window, giving negative brain times and 0.7 s 'responses' that were really the old reply.)"""
+    ends = sorted(t for t, n, k in log if n == "speech")
+    ev = {name: sorted(t for t, n, k in log if n == name) for name in ("vad", "stt", "brain", "tts")}
+    turns: list[TurnTiming] = []
+    floor = {name: 0.0 for name in ev}
     for i, t_end in enumerate(ends):
         nxt = ends[i + 1] if i + 1 < len(ends) else float("inf")
-        window = [(t, n, k) for t, n, k in log if t_end <= t < nxt]
 
-        def first(name: str, kind: str | None = None):
-            return next((t for t, n, k in window if n == name and (kind is None or k == kind)), None)
+        def after(name: str, t0: float, limit: float = float("inf")):
+            return next((t for t in ev[name] if t >= max(t0, floor[name]) and t < limit), None)
 
-        vad, stt, brn, tts = first("vad"), first("stt"), first("brain"), first("tts")
+        vad = after("vad", t_end, nxt)
+        stt = after("stt", vad, nxt) if vad is not None else None
+        brn = after("brain", stt, nxt) if stt is not None else None
+        tts = after("tts", brn, nxt) if brn is not None else None
+        for name, t in (("vad", vad), ("stt", stt), ("brain", brn), ("tts", tts)):
+            if t is not None:
+                floor[name] = t + 1e-6                                   # an event belongs to one turn only
         tt = TurnTiming(i)
         if vad is not None:
             tt.endpointing_ms = (vad - t_end) * 1000
-        if vad is not None and stt is not None:
+        if stt is not None:
             tt.stt_ms = (stt - vad) * 1000
-        if stt is not None and brn is not None:
+        if brn is not None:
             tt.brain_ms = (brn - stt) * 1000
-        if brn is not None and tts is not None:
-            tt.tts_first_ms = (tts - brn) * 1000
         if tts is not None:
+            tt.tts_first_ms = (tts - brn) * 1000
             tt.total_ms = (tts - t_end) * 1000
         else:
             tt.note = "no reply audio"
-        result.turns.append(tt)
-    return result
+        turns.append(tt)
+    return turns

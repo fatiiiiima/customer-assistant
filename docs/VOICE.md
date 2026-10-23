@@ -1,5 +1,8 @@
 # Voice (Phase 3): how it works, how fast it is, how to run it
 
+> **DISCARDED numbers.** Every latency figure in this file that is labelled "on battery" (the Smart Turn comparison, the Qwen3-8B timing, the agent-engine timing and the model-comparison table) was measured with the laptop on battery, which roughly halves speed. Do not use those numbers. They are being re-measured on AC power; the valid figures are in `logs/e2e_*.json` and in the section "Re-measured on AC power" below once it exists. The relative findings (which setting cut fewer sentences, which model passed more safety checks) are kept, the absolute milliseconds are not.
+
+
 Everything runs on this laptop: no cloud call anywhere in the audio path.
 
 ```

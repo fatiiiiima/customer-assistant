@@ -75,7 +75,7 @@ async def emulate(x: np.ndarray, stop_secs: float, confirm: float, analyzer) -> 
     pad = np.concatenate([x, np.zeros(16000 * 2, dtype=np.int16)])
     for k in range(0, len(pad) - frame, frame):
         chunk = pad[k:k + frame].tobytes()
-        state = vad.analyze_audio(chunk)
+        state = await vad.analyze_audio(chunk)
         is_speech = state in (VADState.STARTING, VADState.SPEAKING)
         analyzer.append_audio(chunk, is_speech)
         now = k / 16000

@@ -138,3 +138,43 @@ def test_the_core_is_split_into_facts_and_the_waiting_question():
     assert AgentEngine._split_core(PREFIX + " " + QUESTION) == (PREFIX, QUESTION)
     assert AgentEngine._split_core("You're booked for tomorrow at 4:00 PM.") == ("You're booked for tomorrow at 4:00 PM.", "")
     assert AgentEngine._split_core("Which day would suit you?") == ("", "Which day would suit you?")
+
+
+# ---- no silent turns: when the model or a safety check leaves nothing to say, the code-written wording is spoken --------------------------------
+class Garbage(Scripted):
+    """A model whose every reply breaks the safety checks (a guarantee, a made-up price)."""
+
+    def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
+        yield "It is a guaranteed bargain at 1 dirham!"
+
+
+class Silent(Scripted):
+    def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
+        return iter(())
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+@pytest.mark.parametrize("backend_cls", [Garbage, Silent])
+def test_agent_every_turn_is_spoken_even_when_the_model_gives_nothing_usable(backend_cls):
+    cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
+    app = build_app(cfg, inventory="portal", portal_data=DATA_JS, classifier=Scripted([]), reply_mode="conversational",
+                    clock=lambda: NOW.astimezone(timezone.utc), lead_backend=backend_cls([]))
+    decisions = ["search_cars", "get_car", "prepare_booking", "prepare_booking", "none"]
+    e = AgentEngine(app.service, Scripted(decisions), app.engine.reply_writer)
+    e.model_only, e.silent_fallback = True, True
+    s = e.new_session()
+    for line in ["toyota", "how much is it", "i'd like a test drive", "tomorrow at three in the afternoon", "thanks"]:
+        items = list(e.handle_stream(s, line))
+        spoken = [x for x in items if isinstance(x, str)]
+        assert spoken and all(x.strip() for x in spoken), f"silent turn for {line!r}"
+        assert "FALLBACK" in items[-1].debug.note
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_the_fallback_can_be_switched_off_to_see_the_model_alone():
+    cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
+    app = build_app(cfg, inventory="portal", portal_data=DATA_JS, classifier=Scripted([]), reply_mode="conversational",
+                    clock=lambda: NOW.astimezone(timezone.utc), lead_backend=Silent([]))
+    e = AgentEngine(app.service, Scripted(["search_cars"]), app.engine.reply_writer)
+    e.model_only, e.silent_fallback = True, False
+    assert not [x for x in e.handle_stream(e.new_session(), "toyota") if isinstance(x, str)]

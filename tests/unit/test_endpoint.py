@@ -58,3 +58,38 @@ def test_fallback_silence_ends_a_held_turn():
     _, seen = run(FakeAnalyzer([EndOfTurnState.INCOMPLETE], fallback_after=3),
                   [VADUserStartedSpeakingFrame(start_secs=0.2), audio(), VADUserStoppedSpeakingFrame(stop_secs=0.2), audio(), audio(), audio(), audio()])
     assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"]
+
+
+def audio_secs(secs):
+    return InputAudioRawFrame(audio=b"\0" * int(16000 * secs * 2), sample_rate=16000, num_channels=1)
+
+
+def run_ctx(analyzer, frames, asked):
+    ep = SmartEndpointer(analyzer=analyzer, short_answer_secs=1.4)
+    ep.asked_question = (lambda: asked) if asked is not None else None
+    out = []
+
+    async def push(frame, direction=FrameDirection.DOWNSTREAM):
+        out.append(frame)
+    ep.push_frame = push
+
+    async def go():
+        for f in frames:
+            await ep.process_frame(f, FrameDirection.DOWNSTREAM)
+    asyncio.run(go())
+    return ep, [type(f).__name__ for f in out if not isinstance(f, InputAudioRawFrame)]
+
+
+def test_a_short_answer_right_after_a_question_is_finished_even_if_smart_turn_hesitates():
+    ep, seen = run_ctx(FakeAnalyzer([EndOfTurnState.INCOMPLETE]),
+                       [VADUserStartedSpeakingFrame(start_secs=0.1), audio_secs(0.6), VADUserStoppedSpeakingFrame(stop_secs=0.2)], asked=True)
+    assert seen == ["VADUserStartedSpeakingFrame", "VADUserStoppedSpeakingFrame"] and ep.short_answers == 1
+
+
+def test_a_long_utterance_or_no_question_is_still_held_when_smart_turn_hesitates():
+    _, seen = run_ctx(FakeAnalyzer([EndOfTurnState.INCOMPLETE]),
+                      [VADUserStartedSpeakingFrame(start_secs=0.1), audio_secs(3.0), VADUserStoppedSpeakingFrame(stop_secs=0.2)], asked=True)
+    assert seen == ["VADUserStartedSpeakingFrame"]                      # 3 s of speech is not a short answer
+    _, seen = run_ctx(FakeAnalyzer([EndOfTurnState.INCOMPLETE]),
+                      [VADUserStartedSpeakingFrame(start_secs=0.1), audio_secs(0.6), VADUserStoppedSpeakingFrame(stop_secs=0.2)], asked=False)
+    assert seen == ["VADUserStartedSpeakingFrame"]                      # the agent had not asked anything

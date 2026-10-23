@@ -19,8 +19,12 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
 class SmartEndpointer(FrameProcessor):
-    def __init__(self, sample_rate: int = 16000, fallback_secs: float = 1.0, analyzer: LocalSmartTurnAnalyzerV3 | None = None, **kwargs) -> None:
+    def __init__(self, sample_rate: int = 16000, fallback_secs: float = 0.6, analyzer: LocalSmartTurnAnalyzerV3 | None = None, short_answer_secs: float = 1.4, **kwargs) -> None:
         super().__init__(**kwargs)
+        self.short_answer_secs = short_answer_secs
+        self.asked_question = None                # () -> bool: did the agent's last turn end on a question? (set by the pipeline)
+        self._turn_speech = 0.0                   # seconds of speech since the last finished turn
+        self.short_answers = 0                    # turns finished early because the answer was short and followed a question
         self._analyzer = analyzer or LocalSmartTurnAnalyzerV3(sample_rate=sample_rate, params=SmartTurnParams(stop_secs=fallback_secs))
         self._analyzer.set_sample_rate(sample_rate)
         self._speaking = False
@@ -43,7 +47,15 @@ class SmartEndpointer(FrameProcessor):
             self._speaking = False
             self.last_stop = frame
             state, _ = await self._analyzer.analyze_end_of_turn()
+            if (state is not EndOfTurnState.COMPLETE and self.asked_question is not None and self._turn_speech <= self.short_answer_secs
+                    and self.asked_question()):
+                state = EndOfTurnState.COMPLETE        # a short answer right after a question (yes, "Toyota", a number, a time) is finished: do not wait for the fallback
+                self.short_answers += 1
+                clear = getattr(self._analyzer, "clear", None)
+                if clear:
+                    clear()
             if state is EndOfTurnState.COMPLETE:
+                self._turn_speech = 0.0
                 self._holding = False
                 await self.push_frame(frame, direction)
             else:
@@ -51,10 +63,13 @@ class SmartEndpointer(FrameProcessor):
                 self.held += 1
                 logger.debug("smart turn: still going, holding the end of turn")
         elif isinstance(frame, InputAudioRawFrame):
+            if self._speaking:
+                self._turn_speech += len(frame.audio) / 2 / 16000
             state = self._analyzer.append_audio(frame.audio, self._speaking)
             await self.push_frame(frame, direction)
             if self._holding and state is EndOfTurnState.COMPLETE:       # the fallback silence passed: end the turn now
                 self._holding = False
+                self._turn_speech = 0.0
                 stop = self.last_stop
                 await self.push_frame(VADUserStoppedSpeakingFrame(stop_secs=stop.stop_secs if stop else 0.0), direction)
         else:

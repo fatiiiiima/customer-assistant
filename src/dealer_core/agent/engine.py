@@ -43,6 +43,7 @@ in one short natural sentence. Never repeat facts, never mention prices, numbers
 CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
+EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
 TOOLS = ("search_cars", "get_car", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
@@ -105,6 +106,7 @@ class AgentEngine:
     def __init__(self, svc: DealerService, backend, reply_writer: ReplyWriter | None, agent_name: str | None = None) -> None:
         self.svc, self.backend, self.reply_writer = svc, backend, reply_writer
         self.model_only = False
+        self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.prefix_stats: dict = {}
         self.stream_high_risk = True
@@ -152,7 +154,12 @@ class AgentEngine:
         dbg.state_after = s.state.value
         spoken: list[str] = []
         prefix, question = self._split_core(result["core"])
-        if self.prefix_mode and self.reply_writer is not None and not s.ended and prefix:
+        if self.prefix_mode and not s.ended and tool in EXACT_TOOLS:
+            for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word; the model only chose the tool
+                spoken.append(part)
+                yield part
+            self.prefix_stats = {"continuation": "exact-wording"}
+        elif self.prefix_mode and self.reply_writer is not None and not s.ended and prefix:
             dbg.risk = result["risk"]
             for sentence in self._prefix_reply(s, text, result, prefix, question, dbg):
                 spoken.append(sentence)
@@ -180,8 +187,9 @@ class AgentEngine:
             if spoken:
                 dbg.draft = " ".join(spoken)
                 dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), result["core"].lower()).ratio(), 2)
-        if not spoken and not self.model_only:
+        if not spoken and (not self.model_only or self.silent_fallback):
             spoken = [result["core"]]
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
             yield result["core"]
         elif not spoken:
             dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: the model gave no usable reply, so nothing was said"

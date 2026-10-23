@@ -55,6 +55,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     w.opener = cfg.voice.opener
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
+    app.engine.silent_fallback = cfg.voice.silent_turn_fallback
 
 
 def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: FrameProcessor, *, stop_secs: float = 0.35,
@@ -63,7 +64,9 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
-    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=stop_secs)))
+    vcfg = app.service.cfg.voice
+    vad = VADProcessor(vad_analyzer=SileroVADAnalyzer(sample_rate=STT_RATE, params=VADParams(
+        confidence=vcfg.vad_confidence, start_secs=vcfg.vad_start_secs, stop_secs=stop_secs, min_volume=vcfg.vad_min_volume)))
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
     stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
@@ -72,7 +75,9 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 
-        stages.append(SmartEndpointer(STT_RATE, smart_fallback_secs))
+        endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs)
+        endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
+        stages.append(endpointer)
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
         from .bargein import BargeIn
 

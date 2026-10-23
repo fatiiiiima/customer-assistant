@@ -181,7 +181,12 @@ class VoiceCfg(_Strict):
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
-    smart_fallback_secs: float = 1.0              # with smart_turn: silence after which the turn ends even if the model says "still going"
+    smart_fallback_secs: float = 0.6              # with smart_turn: silence after which the turn ends even if the model says "still going"
+    smart_short_answer_secs: float = 1.4          # right after a question from the agent, an answer this short (yes, a name, a number, a time, a make) counts as finished even if Smart Turn hesitates
+    vad_start_secs: float = 0.1                   # speech must last this long to start a turn (0.2 lost one-word answers such as "Toyota")
+    vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
+    vad_confidence: float = 0.7
+    silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
 

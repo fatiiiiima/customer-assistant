@@ -84,7 +84,7 @@ class DealerBrain(FrameProcessor):
             if result is not None:
                 d = result.debug
                 self.turn_log.append({"first_sentence_ms": first_ms, "engine_ms": (time.perf_counter() - t0) * 1000, "intent": d.intent,
-                                      "via": d.via.split(":")[0], "model_written": bool(d.draft), "risk": d.risk, "ended": result.ended,
+                                      "via": d.via.split(":")[0], "model_written": bool(d.draft), "risk": d.risk, "ended": result.ended, "fallback": "FALLBACK" in d.note,
                                       "note": d.note})            # the note holds reasons and flags only: no transcript, no phone number
                 logger.debug(f"brain first sentence {first_ms:.0f} ms, intent {d.intent}, via {self.turn_log[-1]['via']}")
                 if self._on_turn:

@@ -380,3 +380,25 @@ def test_a_model_may_not_say_the_visit_is_booked_before_the_system_does():
     assert verify_sentence("Sara, you're booked for the BMW tomorrow.", "My name is Sara", core, "", "")
     done = "You're booked for tomorrow at 4:00 PM."
     assert not verify_sentence("You're booked for tomorrow at 4:00 PM.", "yes", done, "", "")
+
+
+def test_state_machine_every_turn_is_spoken_even_when_the_model_gives_nothing_usable():
+    from scenarios.conftest import Call
+
+    class Garbage:
+        name = "garbage"
+
+        def lead_in_stream(self, *a, **k):
+            yield "It is a guaranteed bargain at 1 dirham!"
+
+        def lead_in(self, *a, **k):
+            return "It is a guaranteed bargain at 1 dirham!"
+
+    c = Call({"i want a car": "search_cars", "tell me about the first one": "ask_car_info", "how much is it": "ask_car_info"})
+    c.app.engine.reply_writer = ReplyWriter(Garbage())
+    c.app.engine.model_only, c.app.engine.silent_fallback = True, True
+    for line in ["do you have a toyota", "tell me about the first one", "how much is it"]:
+        items = list(c.app.engine.handle_stream(c.s, line))
+        spoken = [x for x in items if isinstance(x, str)]
+        assert spoken and all(x.strip() for x in spoken), f"silent turn for {line!r}"
+        assert "FALLBACK" in items[-1].debug.note
