@@ -101,7 +101,8 @@ llm:
 
 # ---- Text-to-speech (swappable) -----------------------------------------
 tts:
-  backend: piper                # piper | kokoro (chosen in Phase 0b)
+  backend: kokoro               # piper | kokoro. OWNER CHOICE (26 Oct 2026): Kokoro-82M (Apache-2.0), voice Sarah; Piper Joe is the fallback (--tts piper)
+  kokoro_voice: sarah           # Kokoro voice (voice/kokoro_tts.py VOICES), US female, "sounds professional"
   voice: joe                    # Piper voice folder (see voice/tts.py). OWNER CHOICE (23 Oct 2026): Joe, US male, CC0 (shippable). Was amy_medium (licence unconfirmed)
   speaker: 0                    # speaker id inside the voice (amy has one; libritts_r has 904)
   cache_dir: models/tts_cache   # pre-rendered fixed phrases

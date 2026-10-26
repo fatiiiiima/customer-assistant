@@ -24,7 +24,8 @@ import numpy as np
 from .tts import pronounce
 
 VOICES = {"michael": "am_michael", "adam": "am_adam", "puck": "am_puck", "eric": "am_eric", "liam": "am_liam", "onyx": "am_onyx",
-          "george": "bm_george", "lewis": "bm_lewis", "heart": "af_heart", "bella": "af_bella", "emma": "bf_emma"}
+          "george": "bm_george", "lewis": "bm_lewis", "fenrir": "am_fenrir",
+          "heart": "af_heart", "bella": "af_bella", "sarah": "af_sarah", "emma": "bf_emma"}
 
 
 class _OVSession:
@@ -82,7 +83,7 @@ def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> l
 class KokoroOV:
     sample_rate = 24000
 
-    def __init__(self, models: Path, voice: str = "michael", speed: float = 1.0, cache_size: int = 300) -> None:
+    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300) -> None:
         from kokoro_onnx import Kokoro
 
         d = models / "kokoro-v1.0"
