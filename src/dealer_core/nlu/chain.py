@@ -18,6 +18,10 @@ def make_backend(name: str, b: BackendCfg, llm: LlmCfg, model_dir: Path) -> NluB
         from .ollama_backend import OllamaBackend
 
         return OllamaBackend(name, b, llm)
+    if b.runtime == "openai":
+        from .openai_compat import OpenAICompatBackend
+
+        return OpenAICompatBackend(name, b, llm)
     if b.runtime == "openvino":
         from .openvino_backend import OpenVinoBackend
 

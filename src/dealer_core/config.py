@@ -52,7 +52,7 @@ class SttCfg(_Strict):
 class BackendCfg(_Strict):
     """One named NLU backend. Which fields apply depends on `runtime`."""
 
-    runtime: Literal["openvino", "ollama", "cloud_stub"]
+    runtime: Literal["openvino", "ollama", "openai", "cloud_stub"]       # openai = any OpenAI-compatible server on the company network (vLLM, OVMS, TGI, llama.cpp)
     model: str                                   # openvino: folder under <model_dir>/ov ; ollama: model tag
     device: Literal["CPU", "GPU", "NPU"] | None = None   # openvino only
     host: str = "http://127.0.0.1:11434"         # ollama only
