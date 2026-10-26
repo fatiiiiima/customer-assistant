@@ -18,3 +18,6 @@ negotiation:
   enabled: false
 send_details:
   enabled: false        # the website has no message channel: specs and photos are on the car page
+voice:
+  stt_model: whisper-small.en-int8-ov     # 26 Oct: on the owner's recordings 21/24 in 0.17 s on the iGPU, vs base on the CPU 20/24 in 0.23 s
+  stt_device: GPU                          # (not yet load-tested with many callers sharing the iGPU with the language model)
