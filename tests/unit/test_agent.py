@@ -364,3 +364,30 @@ def test_greeting_cheaper_than_the_cheapest_and_superlatives():
     e.handle(s2, "I want something sporty")
     e.handle(s2, "any budget")
     assert "M3" in e.handle(s2, "which one is the fastest").reply                 # the fastest of the three read out
+
+
+def test_phone_numbers_written_in_groups_are_read():
+    """26 Oct: '050, 793, 2546' (how Whisper writes a number said in groups) was not read as a number at all."""
+    from dealer_core.nlu import extractors as ex
+
+    for heard in ("050, 793, 25, 46", "050, 793, 2546", "050 793 2546", "050-793-2546", "055 1234567", "+971 50 793 2546",
+                  "zero five zero seven nine three two five four six"):
+        assert ex.contact(heard).phone in ("+971507932546", "+971551234567"), heard
+    c = ex.contact("Fatima 050, 793, 2546")
+    assert c.phone == "+971507932546" and c.name == "Fatima"
+    assert ex.contact("zero five zero seven nine three two five four six").name is None
+    assert ex.contact("under 150,000").phone is None and ex.contact("2021 BMW 320i").phone is None
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_the_owners_call_of_26_october_number_in_groups():
+    e, _ = engine(["search_cars"])
+    e.prefix_mode = True
+    s = e.new_session()
+    for line in ("Toyota.", "Any budget?", "RAV4.", "Yes.", "Tomorrow."):
+        e.handle(s, line)
+    assert "5 PM" in e.handle(s, "5 PM.").reply                               # the time said back at once
+    assert "name" in e.handle(s, "050, 793, 25, 46").reply and s.draft_phone == "+971507932546"
+    assert "Shall I book it" in e.handle(s, "Fatima").reply
+    e.handle(s, "yes")
+    assert s.booking is not None and s.booking.customer_phone == "+971507932546"

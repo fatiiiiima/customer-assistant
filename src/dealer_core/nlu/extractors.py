@@ -278,7 +278,8 @@ _STOP = {"yes", "no", "ok", "okay", "my", "the", "hello", "hi", "sure", "thanks"
         "to", "too", "for", "at", "on", "in", "by", "pm", "p.m", "a.m", "tomorrow", "today", "tonight", "morning", "afternoon", "evening", "noon",
         "midday", "o'clock", "oclock", "half", "past", "quarter", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
         "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "next", "week", "weekend",
-        "can", "could", "would", "i'd", "like", "want", "book", "test", "drive", "car", "time", "day", "fine", "good", "great", "perfect", "first", "second"}
+        "can", "could", "would", "i'd", "like", "want", "book", "test", "drive", "car", "time", "day", "fine", "good", "great", "perfect", "first", "second",
+        "zero", "oh", "double", "triple", "plus", "under", "over", "around", "about", "budget", "maximum", "max"}
 
 
 @dataclass(frozen=True)
@@ -292,10 +293,21 @@ def _title(name: str) -> str:
     return " ".join(w.capitalize() if w.lower() != "al" else "Al" for w in name.split())
 
 
+_DIGIT_RUN = re.compile(r"\+?\d[\d\s,.\-()]*\d")
+
+
+def _digit_groups(text: str) -> str | None:
+    """A phone number written by the recognizer in groups: "050, 793, 2546", "055 1234567", "+971 50 793 2546". The longest run of
+    digits separated only by spaces, commas, dots, dashes or brackets, when it is 9-13 digits long."""
+    runs = ["".join(ch for ch in m.group(0) if ch.isdigit()) for m in _DIGIT_RUN.finditer(text)]
+    runs = [r for r in runs if 9 <= len(r) <= 13]
+    return max(runs, key=len) if runs else None
+
+
 def contact(text: str) -> Contact:
-    digits = None
-    for val, _, _ in number_spans(tokens_of(text)):
-        if val.isdigit() and 8 <= len(val) <= 13:
+    digits = _digit_groups(text)
+    for val, _, _ in number_spans(tokens_of(text)):              # spoken digits ("zero five zero ...") and joined numbers
+        if val.isdigit() and 8 <= len(val) <= 13 and (digits is None or len(val) > len(digits)):
             digits = val
     phone = normalize_phone(digits) if digits else None
     name = None
