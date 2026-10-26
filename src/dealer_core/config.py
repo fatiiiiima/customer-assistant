@@ -33,6 +33,7 @@ class AppCfg(_Strict):
     model_dir: str = "models"
     currency: str = "AED"
     distance_unit: str = "km"
+    database_url: str = ""             # postgresql://user:pass@host:port/db: bookings shared by every worker (repos/pg_store.py). Empty: in-memory SQLite (one process)
     agent_name: str | None = None      # the advisor's name, said in the greeting (the website: Wazir)
 
 

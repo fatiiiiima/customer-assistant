@@ -60,8 +60,17 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
     """inventory: 'demo' (16 hand-written fake cars) or 'seed' (60 random fake cars).
     backend: a name from config llm.backends (default: llm.text_backend). Pass `classifier` to inject a fake (tests),
     or `chain` to reuse one started BackendChain across many calls."""
-    db = SqliteDb(":memory:")
-    inv = SqliteInventoryRepo(db)
+    import os
+
+    db_url = cfg.app.database_url or os.environ.get("DATABASE_URL", "")
+    if db_url:                                   # production: one PostgreSQL shared by every voice worker on every machine
+        from .repos.pg_store import PgBookingRepo, PgDb, PgInventoryRepo
+
+        db = PgDb(db_url)
+        inv = PgInventoryRepo(db)
+    else:
+        db = SqliteDb(":memory:")
+        inv = SqliteInventoryRepo(db)
     if inventory == "portal":                    # the website's own cars, read from its data.js
         from .site.portal import load_portal_inventory
         if portal_data is None:
@@ -71,7 +80,7 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         seed_demo_inventory(inv)
     else:
         seed_inventory(inv, [b.id for b in cfg.branches])
-    bookings = SqliteBookingRepo(db)
+    bookings = PgBookingRepo(db) if db_url else SqliteBookingRepo(db)
     whatsapp, sink = MockChannel(), MockEscalationSink()
     svc = DealerService(cfg, inv, bookings, {"whatsapp": whatsapp}, sink, clock=clock or utc_now)
     if inventory == "portal":
