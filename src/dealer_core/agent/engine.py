@@ -396,6 +396,8 @@ class AgentEngine:
             return {"tool": "best_of", "via": "rules"}                           # "which one is the fastest / cheapest / newest?": from the data
         if _REPEAT.search(joined) and len(words) <= 8:
             return {"tool": "repeat", "via": "rules"}
+        if s.pending is not None and s.pending.kind == "time_check" and s.car and (_PLAIN_YES.fullmatch(joined) or re.fullmatch(r"(?:yes |yeah )?(?:that's right|correct|exactly)", joined)):
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}  # "yes" to "did you say 5 PM?"
         if s.pending_cancel is not None and (_PLAIN_YES.fullmatch(joined) or _NO.match(joined)):
             return {"tool": "cancel_booking", "via": "rules"}                    # the answer to "shall I cancel ...?"
         if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):
@@ -429,11 +431,15 @@ class AgentEngine:
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
         if s.state is State.CONFIRM and s.read_back and _PLAIN_YES.fullmatch(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
-        if s.state in (State.SLOT, State.CONTACT) and not _CHANGE.search(" ".join(words)):
+        if s.state in (State.SLOT, State.CONTACT):
             tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
-            ct = ex.contact(text)
-            if parse_when(text, self.svc.clock(), tz).found or ct.phone or (s.state is State.CONTACT and ct.name):
-                return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}
+            w = parse_when(text, self.svc.clock(), tz)
+            if w.time is not None or (s.offered_slots and self._offered_pick(s, text) is not None):
+                return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "no, 2 PM", "the afternoon one": a time, whatever comes before it
+            if not _CHANGE.search(" ".join(words)):
+                ct = ex.contact(text)
+                if w.found or ct.phone or (s.state is State.CONTACT and ct.name):
+                    return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}
         return None
 
     def _decide(self, s: Session, text: str) -> dict:
@@ -744,6 +750,8 @@ class AgentEngine:
         if when and when.lower() not in ("null", "none"):
             w = parse_when(when, now, tz)
             day, tm = w.day, w.time
+            if s.pending is not None and s.pending.kind == "time_check" and day is None and tm is None and _PLAIN_YES.match(" ".join(ex.tokens_of(text))):
+                day, tm = s.pending.value.date(), s.pending.value.time()      # "yes" to "did you say 5 PM?": that time
             if tm is None and day is None and s.offered_slots:          # "the first one", "the afternoon one", "the later one"
                 pick = self._offered_pick(s, when)
                 if pick is not None:
@@ -765,15 +773,22 @@ class AgentEngine:
                            "outside_hours_or_off_grid": "We book on the half hour, during opening hours."}.get(reason or "", "That slot isn't free.")
                     return {"core": f"{why} How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
                             "facts": [f"The requested time is not available: {why}", f"Nearest free: {self._slot_text(alts, now)}."]}
+                offered = list(s.offered_slots)
+                confirmed = s.pending is not None and s.pending.kind == "time_check" and s.pending.value == chosen
+                if offered and chosen not in offered and not confirmed:
+                    s.pending, s.state = Pending("time_check", chosen), State.SLOT
+                    choices = " or ".join(T.clock(x) for x in offered)
+                    return {"core": f"Just to check, did you say {T.clock(chosen)}? I'd offered {choices}.", "risk": "high", "awaiting": True,
+                            "facts": [f"Heard {T.clock(chosen)}, which was not one of the offered times ({choices}). It is free, but check first."]}
                 s.draft_slot = chosen
                 slot_set_now = True
-                s.offered_slots, s.slot_day = [], None
+                s.offered_slots, s.slot_day, s.pending = [], None, None
             elif day and not tm:
                 free = list(self.svc.slots.free_slots(car, day))
                 pick = [free[0], free[len(free) // 2]] if len(free) > 1 else free[:1]
                 if pick:
                     s.offered_slots, s.slot_day, s.state = pick, day, State.SLOT
-                    times = " or ".join(T.clock(x) for x in pick)
+                    times = " or ".join(T.clock_part(x) for x in pick)
                     return {"core": f"{T.cap(T.day_name(day, now))} I can do {times}. Which suits you better?", "risk": "high", "awaiting": True,
                             "facts": [f"The customer gave a day but no time. Free on {day:%A}: {times} (and others)."]}
             else:

@@ -37,6 +37,13 @@ def clock(dt: datetime) -> str:
     return f"{h}{f':{dt.minute:02d}' if dt.minute else ''} {'AM' if dt.hour < 12 else 'PM'}"
 
 
+def clock_part(dt: datetime) -> str:
+    """'9 in the morning', '2 in the afternoon', '6 in the evening': easier to tell apart on a call than '9 AM' / '2 PM'."""
+    h = dt.hour % 12 or 12
+    t = f"{h}{f':{dt.minute:02d}' if dt.minute else ''}"
+    return f"{t} in the {'morning' if dt.hour < 12 else 'afternoon' if dt.hour < 17 else 'evening'}"
+
+
 def day_name(day, now: datetime) -> str:
     """'today', 'tomorrow', 'on Thursday', 'on Saturday, 7 November'."""
     days = (day - now.date()).days

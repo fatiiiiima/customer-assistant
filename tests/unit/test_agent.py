@@ -300,7 +300,7 @@ def test_the_owners_call_of_26_october_two_pm_misheard_as_to_pm():
     e.handle(s, "any budget.")
     e.handle(s, "Corolla")
     assert e.handle(s, "yes").debug.intent == "prepare_booking"              # yes to "want to book a test drive?"
-    assert "9 AM or 2 PM" in e.handle(s, "tomorrow.").reply
+    assert "9 in the morning or 2 in the afternoon" in e.handle(s, "tomorrow.").reply
     e.handle(s, "to PM.")
     assert s.draft_slot is not None and s.draft_slot.hour == 14 and s.draft_name is None
     e.handle(s, "Fatima")
@@ -386,8 +386,20 @@ def test_the_owners_call_of_26_october_number_in_groups():
     s = e.new_session()
     for line in ("Toyota.", "Any budget?", "RAV4.", "Yes.", "Tomorrow."):
         e.handle(s, line)
-    assert "5 PM" in e.handle(s, "5 PM.").reply                               # the time said back at once
+    assert "did you say 5 PM" in e.handle(s, "5 PM.").reply                   # not one of the times offered: checked first
+    assert "5 PM" in e.handle(s, "yes").reply                                 # then said back
     assert "name" in e.handle(s, "050, 793, 25, 46").reply and s.draft_phone == "+971507932546"
     assert "Shall I book it" in e.handle(s, "Fatima").reply
     e.handle(s, "yes")
     assert s.booking is not None and s.booking.customer_phone == "+971507932546"
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_a_time_that_was_not_offered_is_checked_first():
+    """26 Oct: '2 PM' heard as '5 PM' after 'I can do 9 AM or 2 PM'; 5 PM is free, so it was booked without a word."""
+    for answers, hour in ((["5 PM.", "no, 2 PM"], 14), (["5 PM.", "yes"], 17), (["2 PM"], 14), (["the afternoon one"], 14), (["the morning one"], 9)):
+        e, _ = engine(["search_cars"])
+        s = e.new_session()
+        for line in ["Toyota.", "Any budget?", "RAV4.", "Yes.", "Tomorrow.", *answers]:
+            e.handle(s, line)
+        assert s.draft_slot is not None and s.draft_slot.hour == hour, answers
