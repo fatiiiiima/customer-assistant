@@ -49,6 +49,20 @@ llm:
       prompt_mode: auto
       timeout_s: 12.0
       batching: true
+    openvino_server:                              # the shared model server on this machine (python -m dealer_core.modelserver), used by many voice workers
+      runtime: openai
+      host: http://127.0.0.1:8001/v1
+      model: Qwen3-4B-Instruct-2507-int4-ov-nocal
+      prompt_mode: static
+      timeout_s: 8.0
+      max_parallel: 64
+    gpu_server:                                   # production: vLLM (or any OpenAI-compatible server) on the company's GPUs; set host and model there
+      runtime: openai
+      host: http://model-server:8000/v1
+      model: Qwen/Qwen3-14B-AWQ
+      prompt_mode: static
+      timeout_s: 6.0
+      max_parallel: 256
     openvino_gpu_mistral:                         # Mistral-7B-Instruct-v0.3 (Apache-2.0), OpenVINO int4 build, owner's request to compare
       runtime: openvino
       device: GPU

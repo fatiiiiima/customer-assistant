@@ -860,7 +860,7 @@ class AgentEngine:
     def _t_check_slots(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
         if car is None:
-            return {"core": "Which car would you like to test drive?", "facts": ["No car identified."], "awaiting": True}
+            return {"core": self._which_car_to_drive(s), "facts": ["No car identified."], "awaiting": True}
         tz, now = self.svc.slots.tz(car.branch_id), self.svc.clock()
         when = str(args.get("when") or text)
         w = parse_when(when, now, tz)
@@ -884,7 +884,7 @@ class AgentEngine:
         if car is None:
             w = parse_when(str(args.get("when") or text), self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id))
             asked = f" The customer asked for {w.day:%A}" + (f" at {w.time:%H:%M}" if w.time else "") + "." if w.day else ""
-            return {"core": "Which car would you like to test drive?", "risk": "high", "awaiting": True,
+            return {"core": self._which_car_to_drive(s), "risk": "high", "awaiting": True,
                     "facts": ["No car has been chosen for the booking yet." + asked, "Ask which of the cars they mean. Nothing is booked yet: do not say it is booked, confirmed or arranged."]}
         s.car = car.stock_id
         name = str(args.get("name") or "").strip()
@@ -1027,6 +1027,14 @@ class AgentEngine:
         s.draft_phone = None
         return {"core": "I couldn't use that phone number. Could you give me your mobile number again?", "risk": "high", "awaiting": True,
                 "facts": [f"The booking was not made ({out.kind.value}). Ask for the mobile number again."]}
+
+    def _which_car_to_drive(self, s: Session) -> str:
+        """Which car, naming the ones just discussed, so the caller can simply say one."""
+        names = [T.short_name(c) for c in s.shown[:3]]
+        if not names:
+            return "Which car would you like to test drive?"
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or the " + names[-1]
+        return f"Which car would you like to test drive: the {listed}?"
 
     def _t_which_car(self, s, args, text, dbg) -> dict:
         names = [T.short_name(c) for c in s.shown[:3]]
