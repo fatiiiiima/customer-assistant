@@ -43,6 +43,8 @@ HIGH_TOOLS = ("propose_price", "book", "escalate", "cancel", "move", "send", "re
 KEY_WORDS = ("colleague", "manager", "approval", "whatsapp", "cancelled", "booked", "subject to confirmation")
 
 # Claims about a car or the dealership that the model must not make unless the FACTS (or the customer) already said them.
+_SMALL = {"two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+_SEAT_COUNT = re.compile(r"\b(two|three|four|five|six|seven|eight|nine|\d+)[- ]?seat(?:s|er|ers)?\b")
 CLAIMS = re.compile(r"\b(?:\w+\s)?condition\b|pristine|immaculate|spotless|flawless|\bmint\b|brand[- ]new|like new|well[- ]maintained|accident[- ]free|"
                     r"one[- ]owner|single owner|reliable|powerful|economical|efficient|spacious|luxurious|low[- ]mileage|high[- ]mileage|fully loaded|"
                     r"sunroof|leather|navigation|bluetooth|camera|turbo|\bv6\b|\bv8\b|\bawd\b|\b4wd\b|warranty|guarantee|financ\w*|\bloans?\b|insurance|"
@@ -279,6 +281,11 @@ def verify_sentence(sentence: str, user_text: str, core: str, facts: str, histor
     if new_caps:
         problems.append(f"new name(s) {sorted(new_caps)[:3]}")
     allowed_text = (core + " " + user_text + " " + facts + " " + history).lower()
+    for m in _SEAT_COUNT.finditer(sentence.lower()):         # "the Camry has seven seats": a seat count must be one the facts give (word counts slip past the number check)
+        n = _SMALL.get(m.group(1), m.group(1))
+        if not re.search(rf"\b(?:{n}|{m.group(1)})[- ]?seat|seats?:? ?(?:{n}|{m.group(1)})\b", allowed_text):
+            problems.append(f"a seat count the facts do not give: '{m.group(0)}'")
+            break
     for m in CLAIMS.finditer(sentence):
         if m.group(0).lower() not in allowed_text:
             problems.append(f"a claim the facts do not support: '{m.group(0).strip()}'")

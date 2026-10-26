@@ -48,6 +48,14 @@ llm:
       model: Qwen3-8B-int4-ov
       prompt_mode: auto
       timeout_s: 12.0
+      batching: true
+    openvino_gpu_mistral:                         # Mistral-7B-Instruct-v0.3 (Apache-2.0), OpenVINO int4 build, owner's request to compare
+      runtime: openvino
+      device: GPU
+      model: Mistral-7B-Instruct-v0.3-int4-ov
+      prompt_mode: auto
+      timeout_s: 12.0
+      batching: true
     openvino_gpu_phi:                             # Phi-4-mini-instruct (MIT): the reply writer with the best latency / safety-check pass rate in our comparison
       runtime: openvino
       device: GPU

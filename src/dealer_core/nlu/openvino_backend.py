@@ -67,9 +67,10 @@ class OpenVinoBackend(NluBackend):
     # -- internals ---------------------------------------------------------------------------
     def _prompt(self, system: str, user: str) -> str:
         hybrid = not self.llm.think and self.path.name.startswith("Qwen3-") and "Instruct-2507" not in self.path.name
-        prompt = self._tok.apply_chat_template(
-            [{"role": "system", "content": system}, {"role": "user", "content": user + (" /no_think" if hybrid else "")}],
-            add_generation_prompt=True, extra_context={"enable_thinking": self.llm.think})
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user + (" /no_think" if hybrid else "")}]
+        if self.path.name.lower().startswith("mistral"):           # Mistral's chat template has no system role: the instructions open the user turn
+            messages = [{"role": "user", "content": system + "\n\n" + messages[1]["content"]}]
+        prompt = self._tok.apply_chat_template(messages, add_generation_prompt=True, extra_context={"enable_thinking": self.llm.think})
         if hybrid and not prompt.rstrip().endswith("</think>"):
             prompt += "<think>\n\n</think>\n\n"           # hybrid Qwen3 models (8B): the converted template ignores enable_thinking, so close the thinking block ourselves
         return prompt

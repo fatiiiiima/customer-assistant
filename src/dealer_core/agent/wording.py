@@ -41,6 +41,12 @@ def what_they_asked(cars: list[CarView], filters: dict) -> str:
 
 def count_line(s: Session, total: int, cars: list[CarView], filters: dict) -> str:
     what = what_they_asked(cars, filters)
+    if filters.get("seats"):
+        what = "cars with seven seats or more"
+    elif filters.get("sporty"):
+        what = "sporty cars"
+    elif what == "cars that fit" and not any(filters.values()):
+        what = "cars"
     return pick(s, "count", [f"We've got {total} {what} in at the moment.", f"There are {total} {what} in stock right now.", f"I've got {total} {what} for you."])
 
 
@@ -53,7 +59,7 @@ def list_line(s: Session, cars: list[CarView], total: int) -> str:
     more = total - len(cars)
     tail = "" if more <= 0 else (", plus one more" if more == 1 else f", plus {more} more")
     if len(cars) == 1:
-        return pick(s, "one", [f"I've got {listed[4:]}.", f"There's {listed}."])
+        return pick(s, "one", [f"I've got {listed}.", f"There's {listed}."])
     return pick(s, "list", [f"There's {listed}{tail}.", f"I've got {listed}{tail}.", f"We have {listed}{tail}."])
 
 

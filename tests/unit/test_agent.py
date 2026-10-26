@@ -182,7 +182,7 @@ def test_the_fallback_can_be_switched_off_to_see_the_model_alone():
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
 def test_booking_details_and_a_plain_yes_need_no_model_decision():
-    e, app = engine(["search_cars", "prepare_booking AG-122"])           # the model is asked only for the first two turns
+    e, app = engine(["search_cars"])                                     # the model is asked only for the first turn
     s = e.new_session()
     e.handle(s, "a bmw m3")
     e.handle(s, "I'd like to book a test drive")
@@ -322,3 +322,31 @@ def test_a_car_that_sounds_like_one_just_listed_is_checked_not_guessed():
     s2 = e.new_session()
     e.handle(s2, "I'm looking for a Toyota.")
     assert e._sounds_like_shown(s2, "do you have an Audi A4") is None                 # asked for by name: no check
+
+
+def test_the_model_backends_import():
+    """A syntax error in a backend made every GPU model 'unavailable' and the chain fell back silently (26 Oct)."""
+    import importlib
+
+    for name in ("dealer_core.nlu.openvino_backend", "dealer_core.nlu.ov_batching", "dealer_core.nlu.ollama_backend", "dealer_core.nlu.chain"):
+        importlib.import_module(name)
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_cheaper_seats_sporty_reliable_and_the_weekend_are_routed_by_code():
+    e, _ = engine(["search_cars"])
+    s = e.new_session()
+    e.handle(s, "I'm looking for a Toyota")
+    e.handle(s, "the second one")                                             # the Camry, 74,500
+    r = e.handle(s, "something cheaper")
+    assert r.debug.intent == "search_cars" and "Corolla" in r.reply and "fixed" not in r.reply
+    e.handle(s, "the Corolla")
+    assert "150 checks" in e.handle(s, "is it reliable").reply
+    assert e.handle(s, "can I see it this weekend").debug.intent == "prepare_booking"
+    s2 = e.new_session()
+    assert "seven seats" in e.handle(s2, "do you have anything with seven seats").reply
+    listed = e.handle(s2, "any budget").reply
+    assert "Carnival" in listed and "Corolla" not in listed                  # the seats filter is kept
+    s3 = e.new_session()
+    assert "M3" in e.handle(s3, "I want something sporty").reply
+    assert e.backend.decisions == ["search_cars"] or e.backend.decisions == []
