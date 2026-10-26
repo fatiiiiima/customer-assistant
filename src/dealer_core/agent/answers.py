@@ -192,6 +192,58 @@ def showroom_answer(site: SiteInfo, words: str) -> list[str] | None:
     return out or None
 
 
+# ------------------------------------------------------------------------------------------------ "which one is the ...?"
+SUPERLATIVES = {  # caller's words -> (what is compared, larger wins?, how it is said)
+    "fastest": (re.compile(r"\b(?:fastest|quickest|fast(?:er)? one|quicker)\b"), "accel", False),
+    "most powerful": (re.compile(r"\b(?:most powerful|most power|strongest|most horsepower)\b"), "power", True),
+    "cheapest": (re.compile(r"\b(?:cheapest|least expensive|lowest price|most affordable|cheaper one)\b"), "price", False),
+    "most expensive": (re.compile(r"\b(?:most expensive|priciest|dearest)\b"), "price", True),
+    "newest": (re.compile(r"\b(?:newest|latest|most recent|youngest)\b"), "year", True),
+    "lowest mileage": (re.compile(r"\b(?:lowest (?:mileage|kilomet\w*)|least (?:mileage|kilomet\w*|driven)|fewest kilomet\w*)\b"), "km", False),
+    "most economical": (re.compile(r"\b(?:most (?:economical|efficient|fuel efficient)|best (?:fuel|economy|mileage)|uses the least)\b"), "economy", False),
+    "biggest boot": (re.compile(r"\b(?:biggest|largest|most) (?:boot|trunk|luggage|space)\b"), "boot", True),
+    "most seats": (re.compile(r"\b(?:most seats|biggest|largest|roomiest|most space)\b"), "seats", True),
+}
+
+
+def superlative_topic(words: str) -> str | None:
+    return next((k for k, (p, _, _) in SUPERLATIVES.items() if p.search(words)), None)
+
+
+def best_of(cars: list[CarView], details: dict[str, CarDetails], words: str) -> tuple[CarView, str] | None:
+    """(the car, the sentence) for "which one is the fastest / cheapest / newest...?" among the cars being discussed."""
+    topic = superlative_topic(words)
+    if topic is None or not cars:
+        return None
+    _, key, larger = SUPERLATIVES[topic]
+
+    def value(c: CarView):
+        d = details.get(c.stock_id)
+        if key == "price":
+            return c.price
+        if key == "year":
+            return c.year
+        if key == "km":
+            return c.km
+        if d is None:
+            return None
+        if key == "economy":
+            m = re.match(r"[\d.]+", d.consumption)
+            return float(m.group()) if m and "L/100" in d.consumption else None
+        return {"accel": d.accel_0_100, "power": d.power_hp, "boot": d.boot_litres, "seats": d.seats}[key]
+
+    scored = [(value(c), c) for c in cars if value(c) is not None]
+    if not scored:
+        return None
+    v, best = (max if larger else min)(scored, key=lambda x: x[0])
+    d = details.get(best.stock_id)
+    what = {"accel": f"nought to a hundred in {v:g} seconds", "power": f"{v} horsepower", "price": T.money(v), "year": f"a {v}",
+            "km": f"{v:,} kilometres", "economy": f"about {spoken_consumption(d.consumption)}" if d else "", "boot": f"{v} litres of boot space",
+            "seats": f"{v} seats"}[key]
+    among = "of these" if len(scored) > 1 else ""
+    return best, f"The {topic} {among} is the {T.short_name(best)}, with {what}.".replace("  ", " ").replace(" with a ", ", a ")
+
+
 # ------------------------------------------------------------------------------------------------ comparison
 def compare(a: CarView, da: CarDetails | None, b: CarView, db: CarDetails | None) -> list[str]:
     """Two cars side by side in at most three sentences: the basics, then the two clearest differences."""

@@ -63,6 +63,7 @@ _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|vi
                           r"weekend|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
 _CHEAPER = re.compile(r"\b(?:something|anything|any|options?|cars?|models?)\b.*\b(?:cheaper|less expensive|lower price)\b|"
                       r"\b(?:cheaper|less expensive) (?:ones?|options?|cars?|models?)\b|^(?:a )?cheaper(?: one)?$")
+_GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
 _OPINION = re.compile(r"\b(?:reliable|reliability|any good(?! for)|good car(?! for)|good choice|worth it|worth buying|would you recommend|do you recommend|good buy|dependable)\b")
 _SPORTY = re.compile(r"\b(?:sporty|sports car|sport car|fast|quick|performance|powerful)\b")
 _SEATS = re.compile(r"\b(seven|eight|7|8)[- ]?seat(?:s|er)?\b|\bthird row\b|\bbig family\b")
@@ -74,7 +75,7 @@ CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|p
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
-TOOLS = ("search_cars", "get_car", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
@@ -313,7 +314,7 @@ class AgentEngine:
         reasons = ""
         for attempt in range(2):
             u = user + (f"\nYour previous attempt was rejected because: {reasons}. Write it again without that." if reasons else "")
-            buf = ""
+            buf, m = "", None
             try:
                 for piece in self.reply_writer.backend.lead_in_stream(CONTINUE_SYSTEM, u, 36, 0.2 if attempt else self.reply_writer.temperature, 4.0, prefill=prefix + " "):
                     buf += piece
@@ -382,6 +383,10 @@ class AgentEngine:
         picked = ex.selection(text, s.shown)
         if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
             return {"tool": "get_car", "car_id": picked, "via": "rules"}
+        if _GREETING.fullmatch(joined):
+            return {"tool": "none", "via": "rules"}
+        if A.superlative_topic(joined) and (s.shown or s.car):
+            return {"tool": "best_of", "via": "rules"}                           # "which one is the fastest / cheapest / newest?": from the data
         if _REPEAT.search(joined) and len(words) <= 8:
             return {"tool": "repeat", "via": "rules"}
         if s.pending_cancel is not None and (_PLAIN_YES.fullmatch(joined) or _NO.match(joined)):
@@ -492,8 +497,21 @@ class AgentEngine:
         return (f", {d.seats} seats, {A.DRIVE.get(d.drive.upper(), d.drive)}, {c.fuel}, {d.power_hp} hp, uses {d.consumption}, boot {d.boot_litres} litres, "
                 f"{d.accident}, {d.owners} previous owner(s), warranty {d.warranty}")
 
+    def _t_best_of(self, s, args, text, dbg) -> dict:
+        pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
+        if s.filters and len(pool) < 2:
+            pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**{k: v for k, v in s.filters.items() if k in ("make", "model", "max_price")}), 50)]
+        line = A.best_of([c for c in pool if c], self.svc.site.cars, " ".join(ex.tokens_of(text)))
+        if not line:
+            return self._t_none(s, args, text, dbg)
+        winner, sentence = line
+        s.car, s.state = winner.stock_id, State.ANSWERING
+        return {"core": f"{sentence} Would you like to hear more about it?", "facts": [sentence], "awaiting": True}
+
     def _t_none(self, s, args, text, dbg) -> dict:
         question = "What are you looking for today?" if not s.car and not s.shown else "Is there anything else I can help with?"
+        if _GREETING.fullmatch(" ".join(ex.tokens_of(text))):
+            return {"core": f"Hi! {question}", "facts": ["The customer said hello."], "awaiting": True}
         if _THANKS.fullmatch(" ".join(ex.tokens_of(text))):
             return {"core": f"You're welcome! {question}", "facts": ["The customer said thank you. Say you're welcome and ask if there is anything else."], "awaiting": False}
         context = []
@@ -560,13 +578,26 @@ class AgentEngine:
         else:
             res = self.svc.search_cars(filters)
         dbg.tools.append(f"search_cars({f}) -> {res.total} match(es)")
-        s.state = State.ANSWERING if res.cars else State.INTEREST
-        s.shown = list(res.cars)
-        s.car = res.cars[0].stock_id if res.total == 1 else None
         wanted = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in f.items()) or "anything"
+        if not res.cars and _CHEAPER.search(words) and base is not None:
+            wider = self.svc.search_cars(SearchFilters(max_price=base.price - 1))
+            s.filters = {"max_price": base.price - 1}
+            if wider.cars:
+                s.shown, s.car, s.state = list(wider.cars), None, State.ANSWERING
+                same = f"The {T.short_name(base)} is our cheapest {base.make} at {T.money(base.price)}. " if f.get("make") else ""
+                listed = W.list_line(s, list(wider.cars), wider.total)
+                lead = listed if listed.startswith("I") else listed[0].lower() + listed[1:]
+                ask_one = "Would you like to hear more about it?" if len(wider.cars) == 1 else "Which one would you like to hear more about?"
+                return {"core": f"{same}Cheaper than that, {lead} {ask_one}",
+                        "facts": [f"Nothing cheaper within {wanted}; cheaper across all makes: {wider.total}."], "awaiting": True}
+            return {"core": f"The {T.short_name(base)} at {T.money(base.price)} is the cheapest car we have right now. Would you like to hear more about it?",
+                    "facts": ["Nothing in stock is cheaper."], "awaiting": True}
         if not res.cars:
             return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?",
                     "facts": [f"Search for {wanted}: no cars in stock match."], "awaiting": True}
+        s.state = State.ANSWERING
+        s.shown = list(res.cars)
+        s.car = res.cars[0].stock_id if res.total == 1 else None
         if len(res.cars) > 1 or res.needs_narrowing:                   # a list is names and prices only: no kilometres etc. for the model to mangle mid-sentence
             sheet = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams" for c in res.cars]
         else:

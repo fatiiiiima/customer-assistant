@@ -350,3 +350,17 @@ def test_cheaper_seats_sporty_reliable_and_the_weekend_are_routed_by_code():
     s3 = e.new_session()
     assert "sporty cars" in e.handle(s3, "I want something sporty").reply
     assert e.backend.decisions == ["search_cars"] or e.backend.decisions == []
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_greeting_cheaper_than_the_cheapest_and_superlatives():
+    e, _ = engine(["search_cars"])
+    s = e.new_session()
+    assert e.handle(s, "hi there").debug.intent == "none" and "Wazir" not in s.history[-1][1]
+    e.handle(s, "I'm looking for a Toyota")
+    r = e.handle(s, "something cheaper").reply
+    assert "cheapest Toyota" in r and "Civic" in r and "i've" not in r
+    s2 = e.new_session()
+    e.handle(s2, "I want something sporty")
+    e.handle(s2, "any budget")
+    assert "M3" in e.handle(s2, "which one is the fastest").reply                 # the fastest of the three read out
