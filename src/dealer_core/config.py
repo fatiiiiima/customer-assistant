@@ -97,6 +97,7 @@ class LlmCfg(_Strict):
 
 class TtsCfg(_Strict):
     backend: Literal["piper", "kokoro"] = "piper"
+    kokoro_voice: str = "michael"       # kokoro backend: michael / adam / puck / eric / liam / onyx (US male), george / lewis (UK male), heart / bella / emma
     voice: str | None = "joe"           # Piper voice folder name (see voice/tts.py VOICES). Owner choice: Joe (CC0)
     speaker: int = 0                    # speaker id inside a multi-speaker voice (libritts_r has many; amy has one)
     cache_dir: str = "models/tts_cache"

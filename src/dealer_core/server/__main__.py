@@ -17,6 +17,8 @@ def main() -> int:
     ap.add_argument("--state-url", default=None, help="shared state for many workers: postgresql://... or redis://... (default: STATE_URL / DATABASE_URL, else none)")
     ap.add_argument("--worker-id", default=None, help="this worker's name in the registry (default host:port)")
     ap.add_argument("--public-url", default=None, help="the address pages use for this worker (default ws://host:port/voice)")
+    ap.add_argument("--tts", choices=["piper", "kokoro"], default=None, help="Wazir's voice engine (default tts.backend)")
+    ap.add_argument("--voice", default=None, help="voice name for that engine (piper: joe ...; kokoro: michael, adam, george ...)")
     ap.add_argument("--backend", default="openvino_gpu", help="llm backend from config; the voice path uses openvino_gpu (the iGPU)")
     ap.add_argument("--mute-while-speaking", action="store_true", help="ignore the microphone while the agent talks (if the agent hears itself on laptop speakers; it can clip a fast reply, so it is off by default and the browser cancels echo)")
     ap.add_argument("--hands-free", action="store_true", help="default to an open microphone for the whole call (the page can still ask for tap-to-talk); default is tap-to-talk")
@@ -38,12 +40,14 @@ def main() -> int:
 
     data_js = a.site / "data.js"
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
+    if a.tts:
+        cfg.tts.backend = a.tts
     app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
                     quality=a.quality)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
     print("Loading speech models...", flush=True)
-    parts = load_engines(cfg, a.stt_model)
+    parts = load_engines(cfg, a.stt_model, a.voice)
     smart = cfg.voice.smart_turn and not a.fixed_silence
     state = ServerState(app, parts, cfg, max_calls=a.max_calls, stop_secs=cfg.voice.smart_stop_secs if smart else cfg.voice.stop_secs,
                         smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs, default_mode="handsfree" if a.hands_free else "tap", half_duplex=a.mute_while_speaking, barge_in=cfg.voice.barge_in and not a.no_barge_in)

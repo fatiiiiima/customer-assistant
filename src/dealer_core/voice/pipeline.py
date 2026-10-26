@@ -38,10 +38,33 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     """Load and warm the local STT and TTS engines (about 5 s, once per process)."""
     models = ROOT / cfg.app.model_dir
     stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotword_terms(ROOT / cfg.stt.hotwords_file))
-    tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies)
+    if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
+        from .kokoro_tts import KokoroOV
+
+        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice)
+    else:
+        tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies)
     stt.warm_up()
     tts.warm_up()
+    if hasattr(tts, "preload"):                         # the phrases said all the time play with no wait
+        tts.preload(common_phrases(cfg))
     return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
+
+
+def common_phrases(cfg: Config) -> list[str]:
+    """What Wazir says word for word again and again: rendered once at start-up by voices that are slow to make speech."""
+    name = cfg.app.agent_name
+    who = f"I'm {name}, and I'm here to help you find your perfect car." if name else "How can I help you find a car?"
+    return [f"Hi, welcome to the AGMC dealership! {who} What are you looking for today?",
+            "Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?",
+            "Would you like to come and see it?", "Want to book a test drive?", "Shall I set up a test drive for you?",
+            "Sure! What day would you like to come in?", "Of course. What day and time suit you?", "What day and time work for you?",
+            "When would you like to come in?", "Perfect. Can I take your name and mobile number?", "Great. What's your name and mobile number?",
+            "Great. And your name, please?", "Lovely. Who should I put the booking under?", "Which one would you like to hear more about?",
+            "Could you tell me your budget or a make?", "What budget do you have in mind, or is there a model you like?",
+            "Sorry, I didn't catch that. Could you say it again?", "Thank you for calling AGMC. Goodbye!", "You're welcome!",
+            "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
+            "No problem at all, take your time.", "Our prices are fixed,"]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
