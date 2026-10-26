@@ -46,12 +46,35 @@ class ServerState:
     served: int = 0
     refused: int = 0
     started: float = field(default_factory=time.monotonic)
+    calls: object = None                  # shared.state.CallStore: each call saved after every turn, so another worker can carry it on
+    registry: object = None               # shared.state.WorkerRegistry: this worker's address and load, for the router
+    worker_id: str = ""
+    public_url: str = ""                  # the address the router hands to pages for this worker
 
 
 def create_server(state: ServerState, allowed_origins: list[str] | None = None) -> FastAPI:
     api = FastAPI(title="AGMC voice server")
     origins = allowed_origins or ["http://localhost:8080", "http://127.0.0.1:8080"]
     api.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET"], allow_headers=["*"])
+
+    @api.on_event("startup")
+    async def _heartbeat() -> None:
+        if state.registry is None:
+            return
+
+        async def beat() -> None:                             # every 2 s: "I am here, this busy" (expires in 6 s if this worker dies)
+            while True:
+                gov = getattr(state.app.engine, "governor", None)
+                state.registry.beat(state.worker_id, state.public_url, state.active, state.max_calls,
+                                    {"quality": gov.snapshot()["turns"] if gov is not None else {}})
+                await asyncio.sleep(2.0)
+
+        asyncio.get_running_loop().create_task(beat())
+
+    @api.on_event("shutdown")
+    async def _leave() -> None:
+        if state.registry is not None:
+            state.registry.leave(state.worker_id)
 
     @api.on_event("startup")
     async def _threads() -> None:
@@ -130,6 +153,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     app, parts = state.app, state.parts
     tap = (hello.get("mode") or state.default_mode) == "tap"
     tz = ZoneInfo(state.cfg.branches[0].timezone)
+    call_id = str(hello.get("call_id") or "")[:64]
     turn = {"n": 0}
     seen = {"shown": (), "booking": None}
 
@@ -165,6 +189,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
             start = kb.start.astimezone(tz)
             emit({"type": "cancelled", "ref": kb.ref, "car_id": kb.stock_id, "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
         seen["cancelled"] = len(s.cancelled)
+        if state.calls is not None and call_id:
+            state.calls.save(call_id, s)                         # after every turn: another worker can carry on from here
         b = s.booking
         if b is not None and b.booking_id != seen["booking"]:
             seen["booking"] = b.booking_id
@@ -184,13 +210,17 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         gate.close_after_turn()
         await send({"type": "mic", "on": False, "reason": "turn"})
 
-    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs, speak_opening=True,
+    resumable = bool(state.calls is not None and call_id and state.calls.store.get(f"call:{call_id}"))   # a reconnect: no greeting again
+    pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs,
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
-                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say)
+                                     half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say,
+                                     speak_opening=not resumable)
     brain_ref["brain"] = brain
-    brain.session.known_bookings = site_bookings(hello, app, tz)         # "what have I booked?", "cancel my test drive": the ones already on the site
+    resumed = bool(resumable and state.calls.load(call_id, brain.session, app.service))
+    if not resumed:
+        brain.session.known_bookings = site_bookings(hello, app, tz)     # "what have I booked?", "cancel my test drive": the ones already on the site
     car = hello.get("car")
-    if isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
+    if not resumed and isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
         brain.session.car = car
         brain.session.state = State.ANSWERING
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
@@ -200,7 +230,9 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     async def _gone(_transport, _ws) -> None:
         await worker.cancel()
 
-    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree"})
+    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree", "resumed": resumed})
+    if resumed:
+        await send({"type": "line", "who": "agent", "turn": 0, "text": "Sorry, we got cut off for a moment. I'm back: where were we?"})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel()))

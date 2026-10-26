@@ -14,6 +14,9 @@ def main() -> int:
     ap.add_argument("--origin", action="append", help="a page origin allowed to connect (repeatable); default http://localhost:8080")
     ap.add_argument("--quality", choices=["auto", "full", "prefix", "code"], default=None,
                     help="agent: auto picks per turn from the model's speed (default); full / prefix / code force one level")
+    ap.add_argument("--state-url", default=None, help="shared state for many workers: postgresql://... or redis://... (default: STATE_URL / DATABASE_URL, else none)")
+    ap.add_argument("--worker-id", default=None, help="this worker's name in the registry (default host:port)")
+    ap.add_argument("--public-url", default=None, help="the address pages use for this worker (default ws://host:port/voice)")
     ap.add_argument("--backend", default="openvino_gpu", help="llm backend from config; the voice path uses openvino_gpu (the iGPU)")
     ap.add_argument("--mute-while-speaking", action="store_true", help="ignore the microphone while the agent talks (if the agent hears itself on laptop speakers; it can clip a fast reply, so it is off by default and the browser cancels echo)")
     ap.add_argument("--hands-free", action="store_true", help="default to an open microphone for the whole call (the page can still ask for tap-to-talk); default is tap-to-talk")
@@ -44,6 +47,16 @@ def main() -> int:
     smart = cfg.voice.smart_turn and not a.fixed_silence
     state = ServerState(app, parts, cfg, max_calls=a.max_calls, stop_secs=cfg.voice.smart_stop_secs if smart else cfg.voice.stop_secs,
                         smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs, default_mode="handsfree" if a.hands_free else "tap", half_duplex=a.mute_while_speaking, barge_in=cfg.voice.barge_in and not a.no_barge_in)
+    import os
+
+    state_url = a.state_url or os.environ.get("STATE_URL") or os.environ.get("DATABASE_URL") or cfg.app.database_url
+    if state_url:
+        from ..shared.state import CallStore, WorkerRegistry, open_store
+
+        store = open_store(state_url)
+        state.calls, state.registry = CallStore(store), WorkerRegistry(store)
+        state.worker_id = a.worker_id or f"{a.host}:{a.port}"
+        state.public_url = a.public_url or f"ws://{a.host}:{a.port}/voice"
     origins = a.origin or ["http://localhost:8080", "http://127.0.0.1:8080"]
     print(f"Voice server ready on ws://{a.host}:{a.port}/voice  (up to {a.max_calls} calls; pages allowed: {', '.join(origins)})", flush=True)
     uvicorn.run(create_server(state, origins), host=a.host, port=a.port, log_level="warning")

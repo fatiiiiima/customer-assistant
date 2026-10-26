@@ -75,3 +75,17 @@ def test_a_call_is_carried_on_by_another_worker_mid_booking(store):
     r = e2.handle(s2, "Sara 050 111 2222")
     assert "Shall I book it" in r.reply and "Sara" in r.reply                   # the booking carries on where it stopped
     assert calls.load("missing", e2.new_session(), app2.service) is False
+
+
+def test_the_router_assigns_the_least_busy_worker_and_says_busy_when_all_are_full(store):
+    from fastapi.testclient import TestClient
+
+    from dealer_core.gateway.__main__ import create_gateway
+
+    reg = WorkerRegistry(store)
+    client = TestClient(create_gateway(reg, ["http://localhost:8080"]))
+    assert client.get("/assign").status_code == 503                             # no worker yet
+    reg.beat("w1", "ws://a/voice", active=7, max_calls=8)
+    reg.beat("w2", "ws://b/voice", active=2, max_calls=8)
+    assert client.get("/assign").json()["url"] == "ws://b/voice"
+    assert client.get("/workers").json()["calls"] == 9
