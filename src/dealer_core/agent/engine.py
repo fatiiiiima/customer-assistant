@@ -243,8 +243,24 @@ class AgentEngine:
         s.remember("agent", line)
         return line
 
-    def handle_stream(self, s: Session, text: str):
-        """Yield the spoken sentences, then the TurnResult (same contract as DialogueEngine.handle_stream)."""
+    def predecide(self, s: Session, text: str) -> dict | None:
+        """The model's decision for `text`, made ahead of the turn (voice/speculate.py: during Smart Turn's hold). None when there is nothing
+        to prepare: the code routes these words itself, or the model has no room (a guess that may be thrown away must not crowd out real turns)."""
+        if self._fast_decide(s, text) is not None:
+            return None
+        if self.governor is not None:
+            if not self.governor.has_room():
+                return None
+            t0 = time.perf_counter()
+            with self.governor.using_model():
+                decision = self._decide(s, text)
+            self.governor.record_decide((time.perf_counter() - t0) * 1000)
+            return decision
+        return self._decide(s, text)
+
+    def handle_stream(self, s: Session, text: str, predecided=None):
+        """Yield the spoken sentences, then the TurnResult (same contract as DialogueEngine.handle_stream).
+        `predecided`: a future holding the decision already made for these words (see `predecide`), used instead of asking the model now."""
         t0 = time.perf_counter()
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
@@ -274,6 +290,13 @@ class AgentEngine:
             return
         decision = self._fast_decide(s, text)
         bridge = ""
+        if decision is None and predecided is not None:
+            try:
+                decision = predecided.result(timeout=self.decide_deadline_s)     # started during the hold: done, or nearly
+            except Exception:
+                decision = None
+            if decision is not None:
+                dbg.note = (dbg.note + "; " if dbg.note else "") + "decision made during the hold"
         if decision is None:
             bridge = self._bridge(s, text)
             if bridge:                                                     # the caller hears this while the model decides (and writes)
@@ -512,7 +535,21 @@ class AgentEngine:
         yield question                                         # never end on a statement: the caller must know what is being asked
 
     # ------------------------------------------------------------------------------------------------ the decision
-    def _context(self, s: Session, text: str = "") -> str:
+    def _code_hint(self, text: str) -> tuple[dict, list[str]]:
+        """The make / model the customer's words match (spelling-tolerant), and up to 5 stock ids of it."""
+        found = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
+        if not found.get("make"):
+            return found, []
+        return found, [c.stock_id for c in self.svc.inventory.search(SearchFilters(make=found["make"], model=found.get("model")), 5)]
+
+    def _options(self, s: Session, hint_ids: list[str]) -> list[str]:
+        """Every answer the decision may give: each tool, and the tools about one car with each car that is in play right now (the code hint,
+        the car in focus, the cars just listed). With a server that can constrain its output the model cannot name anything else."""
+        ids = list(dict.fromkeys([*hint_ids, *([s.car] if s.car else []), *(c.stock_id for c in s.shown)]))[:12]
+        car_tools = ("get_car", "check_slots", "prepare_booking")
+        return [*TOOLS, *(f"{t} {i}" for t in car_tools for i in ids)]
+
+    def _context(self, s: Session, text: str = "", hint: tuple[dict, list[str]] | None = None) -> str:
         tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
         now = self.svc.clock().astimezone(tz)
         focus = self.svc.get_car(s.car) if s.car else None
@@ -521,10 +558,9 @@ class AgentEngine:
         shown = "; ".join(f"{i + 1}) {c.stock_id} {c.year} {c.make} {c.model}" for i, c in enumerate(s.shown)) or "none"
         convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
         # The customer's words are matched to the stock by code (spelling-tolerant), so the model never has to know the whole inventory.
-        found = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
+        found, ids = hint if hint is not None else self._code_hint(text)
         hint = ""
         if found.get("make"):
-            ids = [c.stock_id for c in self.svc.inventory.search(SearchFilters(make=found["make"], model=found.get("model")), 5)]
             hint = f"CODE HINT (spelling corrected): the customer's words match make {found['make']}" + (f", model {found['model']}" if found.get("model") else "") + f", ids {ids}\n"
         return (f"NOW: {now:%A %d %B %Y, %H:%M} (Dubai). Open every day.\n{hint}"
                 f"CAR IN FOCUS: {focus.stock_id + ' ' + T.car_name(focus) if focus else 'none'}\nLAST SHOWN: {shown}\n"
@@ -661,12 +697,20 @@ class AgentEngine:
 
     def _decide(self, s: Session, text: str) -> dict:
         """The model names the tool (and the car). Everything else - filters, name, phone, day and time - is taken from the customer's words by code."""
-        user = self._context(s, text) + f"CUSTOMER (now): {text}\nTOOL:"
+        hint = self._code_hint(text)
+        user = self._context(s, text, hint) + f"CUSTOMER (now): {text}\nTOOL:"
+        options = self._options(s, hint[1])
         try:
-            raw = self.backend.lead_in(DECIDE_SYSTEM, user, self.decide_tokens, None, self.decide_deadline_s)
+            choose = getattr(self.backend, "choose", None)              # a server that can constrain its answer to the listed actions (vLLM)
+            raw = choose(DECIDE_SYSTEM, user, options, self.decide_tokens, self.decide_deadline_s) if choose else None
+            if raw is None:
+                raw = self.backend.lead_in(DECIDE_SYSTEM, user, self.decide_tokens, None, self.decide_deadline_s)
         except Exception as e:                                          # the model did not answer in time: do nothing rather than guess
             return {"tool": "none", "args": {}, "error": type(e).__name__}
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S)
+        if raw.strip() in options:                                      # an exact listed answer: "get_car S1042", "search_cars"
+            tool, _, car_id = raw.strip().partition(" ")
+            return {"tool": tool, "car_id": car_id or None}
         data = _json_from(raw)
         tool = data.get("tool") if data else None
         if tool is None:

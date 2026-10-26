@@ -7,6 +7,9 @@ longer silence (`fallback_secs`) passes.
 
 This processor sits right after the VAD. It lets the VAD's "stopped speaking" through only when Smart Turn says the turn is complete (or the fallback
 silence has passed), and swallows the "started speaking" that follows a held stop, so the speech recognizer hears one continuous segment.
+
+With a `speculation` (voice/speculate.py) a held stop also starts recognising the turn so far, and the model's decision, in the background:
+used as they are if the fallback silence ends the turn, dropped if the caller speaks again.
 """
 from __future__ import annotations
 
@@ -25,7 +28,9 @@ class SmartEndpointer(FrameProcessor):
         self.asked_question = None                # () -> bool: did the agent's last turn end on a question? (set by the pipeline; used by the length rule only)
         self.peek = None                          # async (pcm16 bytes) -> the words so far (the speech recognizer, on the audio of this turn)
         self.is_answer = None                     # (text) -> bool: a complete answer to what the agent just asked?
-        self._turn_audio = bytearray()            # the audio of the turn in progress, for the peek
+        self._turn_audio = bytearray()            # the audio of the turn in progress, for the peek and the speculation
+        self._pre_roll = bytearray()              # the last 0.5 s before speech was detected (the detector fires ~0.1 s into the first word)
+        self.speculation = None                   # voice.speculate.Speculation: work started during a hold
         self._turn_speech = 0.0                   # seconds of speech since the last finished turn
         self.short_answers = 0                    # turns finished early (length rule or words rule)
         self.peeked = 0                           # how many times the words were checked
@@ -45,7 +50,13 @@ class SmartEndpointer(FrameProcessor):
             self._speaking = True
             if self._holding:                     # the caller carried on: the same turn continues
                 self._holding = False
+                if self.speculation is not None:
+                    self.speculation.resumed()
                 return
+            if not self._turn_audio:
+                self._turn_audio += self._pre_roll
+            if self.speculation is not None:
+                self.speculation.clear()          # a new turn: nothing prepared for an earlier one applies
             await self.push_frame(frame, direction)
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
@@ -77,17 +88,24 @@ class SmartEndpointer(FrameProcessor):
             else:
                 self._holding = True
                 self.held += 1
+                if self.speculation is not None and len(self._turn_audio) > 3200:
+                    self.speculation.start(bytes(self._turn_audio))       # most held turns were finished: have the answer's groundwork ready
                 logger.debug("smart turn: still going, holding the end of turn")
         elif isinstance(frame, InputAudioRawFrame):
             if self._speaking or self._holding:
                 self._turn_audio += frame.audio                   # the turn's audio, for the peek (capped at 12 s)
                 del self._turn_audio[:-12 * 32000]
+            else:
+                self._pre_roll += frame.audio
+                del self._pre_roll[:-16000]
             if self._speaking:
                 self._turn_speech += len(frame.audio) / 2 / 16000
             state = self._analyzer.append_audio(frame.audio, self._speaking)
             await self.push_frame(frame, direction)
             if self._holding and state is EndOfTurnState.COMPLETE:       # the fallback silence passed: end the turn now
                 self._holding = False
+                if self.speculation is not None:
+                    self.speculation.confirm()                            # no new speech since the hold: what was started applies
                 self._turn_speech = 0.0
                 self._turn_audio.clear()
                 stop = self.last_stop

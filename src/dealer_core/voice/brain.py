@@ -25,6 +25,7 @@ class DealerBrain(FrameProcessor):
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
         self.interrupted = 0                            # turns abandoned because the caller spoke over the agent
+        self.speculation = None                         # voice.speculate.Speculation: a decision made during Smart Turn's hold
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -49,12 +50,14 @@ class DealerBrain(FrameProcessor):
             t0 = time.perf_counter()
             loop = asyncio.get_running_loop()
             sentences: asyncio.Queue = asyncio.Queue()
+            early = self.speculation.decision_for(text) if self.speculation is not None else None
+            extra = {"predecided": early} if early is not None else {}
 
             cancelled = threading.Event()
 
             def work() -> None:
                 try:
-                    for item in self.engine.handle_stream(self.session, text):
+                    for item in self.engine.handle_stream(self.session, text, **extra):
                         if cancelled.is_set():
                             break                                 # closing the generator also stops the model
                         loop.call_soon_threadsafe(sentences.put_nowait, item)

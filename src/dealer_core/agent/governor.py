@@ -66,6 +66,13 @@ class QualityGovernor:
             old = self.stats.full_first_ms
             self.stats.full_first_ms = first_ms if old is None else (1 - self.alpha) * old + self.alpha * first_ms
 
+    def has_room(self) -> bool:
+        """Can the model take extra work that may be thrown away (a decision made ahead of time)? Not while it is slow or nearly full."""
+        with self._lock:
+            if self.mode == "code" or (self.max_model and self.stats.in_flight >= max(1, self.max_model // 2)):
+                return False
+            return self.stats.full_first_ms is None or self.stats.full_first_ms <= 2 * self.budget_ms
+
     def record_decide(self, ms: float) -> None:
         """How long the model took to name the tool (said before any reply can start on turns the code could not route)."""
         with self._lock:

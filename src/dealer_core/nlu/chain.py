@@ -111,6 +111,11 @@ class BackendChain:
     def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
         return self.backends[self.active].lead_in(system, user, max_tokens, temperature, deadline_s)      # no fallback: a missing lead-in just means the template alone
 
+    def choose(self, system: str, user: str, options: list[str], max_tokens: int = 16, deadline_s: float | None = None) -> str | None:
+        """One of `options` when the active backend can constrain its answer (an OpenAI-compatible server); None otherwise (ask for free text)."""
+        b = self.backends[self.active]
+        return b.choose(system, user, options, max_tokens, deadline_s) if hasattr(b, "choose") else None
+
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
                        deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
         if prefill:

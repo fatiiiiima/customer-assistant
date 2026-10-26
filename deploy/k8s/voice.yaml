@@ -1,4 +1,5 @@
-# 500 callers at once on Kubernetes. Apply after filling in the image, the database secret and the domain:
+# 500 callers at once on Kubernetes. Apply after filling in the image tag (RELEASE_TAG), the database secret and the domain:
+# Every image is pinned: a moving tag changes under you when a pod restarts. Upgrade vLLM deliberately, then re-run the capacity probe.
 #   kubectl apply -f deploy/k8s/voice.yaml
 # Sizing (confirm with scripts/capacity_probe.py and scripts/load_test.py on the real cluster):
 #   workers  ~16 calls each  -> 32 replicas for 500 calls, +4 spare; CPU nodes
@@ -23,7 +24,7 @@ spec:
     spec:
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          image: vllm/vllm-openai:v0.31.0
           args: ["--model", "Qwen/Qwen3-14B-AWQ", "--enable-prefix-caching", "--max-num-seqs", "256", "--gpu-memory-utilization", "0.85"]
           ports: [{ containerPort: 8000 }]
           resources: { limits: { nvidia.com/gpu: 1 } }
@@ -50,7 +51,7 @@ spec:
     spec:
       containers:
         - name: whisper
-          image: vllm/vllm-openai:latest
+          image: vllm/vllm-openai:v0.31.0
           args: ["--model", "openai/whisper-large-v3-turbo", "--gpu-memory-utilization", "0.5"]
           ports: [{ containerPort: 8000 }]
           resources: { limits: { nvidia.com/gpu: 1 } }
@@ -78,7 +79,7 @@ spec:
       terminationGracePeriodSeconds: 900            # let calls in progress finish on a redeploy (a call lasts up to 15 min)
       containers:
         - name: worker
-          image: agmc/voice:latest
+          image: agmc/voice:RELEASE_TAG
           env:
             - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
             - { name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
@@ -86,6 +87,7 @@ spec:
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
             - { name: VA__VOICE__STT_URL, value: "http://stt-server:8000/v1" }        # recognition on the GPU service, not in the worker
             - { name: VA__VOICE__STT_REMOTE_MODEL, value: "openai/whisper-large-v3-turbo" }
+            - { name: VA__VOICE__MODEL_ONLY, value: "false" }      # production: never a test mode (a short model turn is completed by code)
           command: ["sh", "-c"]
           args: ["python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16
                   --worker-id $POD_NAME --public-url wss://voice.agmc.ae/w/$POD_IP/voice --origin https://www.agmc.ae"]
@@ -118,7 +120,7 @@ spec:
     spec:
       containers:
         - name: router
-          image: agmc/voice:latest
+          image: agmc/voice:RELEASE_TAG
           env: [{ name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }]
           command: ["python", "-m", "dealer_core.gateway", "--host", "0.0.0.0", "--port", "8760", "--origin", "https://www.agmc.ae"]
           ports: [{ containerPort: 8760 }]
