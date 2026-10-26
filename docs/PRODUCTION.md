@@ -86,3 +86,11 @@ booking), workers starting at the same moment, a call handed to another worker m
 the metrics, and the model server's plain, streaming, JSON and continue-a-reply requests.
 Not testable on this laptop: vLLM itself, Kubernetes, the ingress, and 500 real callers. Those need the company's hardware; the
 capacity probe and the load test (`--gateway`) are the tools to prove them there.
+
+### Proven on this machine (26 Oct, 3 workers + router + shared model + PostgreSQL)
+
+* `scripts/load_test.py --gateway`: 54 calls at 6 / 18 / 30 callers, all assigned by the router, spread evenly (~130 turns per worker),
+  0 failed, 0 silent; quality mix 12% full / 88% prefix / 0% code (right for this laptop's GPU). Timings not valid: on battery, and
+  RAM at 100% (three workers + model on a 32 GB laptop with other apps open; each worker ~1.4 GB). Production workers get their own nodes.
+* `scripts/failover_test.py`: a worker killed mid-booking; the caller reconnected through the router to another worker, which carried the
+  booking on (car, day and time from before the crash) and booked it. The killed worker was restarted by the supervisor.

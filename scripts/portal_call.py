@@ -105,12 +105,12 @@ async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str,
     return out
 
 
-async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: str, origin: str, interrupt_after: float | None) -> dict:
+async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: str, origin: str, interrupt_after: float | None, call_id: str = "") -> dict:
     """Tap-to-talk, the way the page does it: speak while the mic is open; the server closes it when the turn is over; the next tap reopens it
     (and, if the agent is still speaking, interrupts it). `interrupt_after`: tap again this many seconds after the reply starts, instead of waiting for it to finish."""
     out = {"tag": tag, "turns": [], "audio_s": 0.0}
     async with websockets.connect(url, max_size=None, origin=origin) as ws:
-        await ws.send(json.dumps({"type": "hello", "car": car, "mode": "tap"}))
+        await ws.send(json.dumps({"type": "hello", "car": car, "mode": "tap", "call_id": call_id}))
         st_ = {"ready": asyncio.Event(), "mic_off": asyncio.Event(), "first_audio": 0.0, "last_audio": 0.0, "rate": 22050, "stops": 0, "lines": [], "greeting": ""}
 
         async def reader() -> None:
@@ -124,6 +124,7 @@ async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: 
                 e = json.loads(m)
                 if e["type"] == "ready":
                     st_["rate"] = e["sample_rate"]
+                    out["resumed"] = bool(e.get("resumed"))
                     st_["ready"].set()
                 elif e["type"] == "mic" and not e["on"]:
                     st_["mic_off"].set()
@@ -142,6 +143,8 @@ async def one_call_tap(url: str, clips: list[np.ndarray], car: str | None, tag: 
         out["greeting_s"] = 0.0
         while True:                                                                 # Wazir greets first; the mic is closed until the first tap
             await asyncio.sleep(0.2)
+            if out.get("resumed"):                                                  # a reconnect: no greeting
+                break
             if st_["last_audio"] and time.monotonic() - st_["last_audio"] > 1.0:
                 break
             if time.monotonic() - t0 > 40:
