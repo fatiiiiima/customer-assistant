@@ -19,6 +19,7 @@ The model never sees the floor price or any pricing limit: only the decision the
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -425,7 +426,17 @@ class ReplyWriter:
         self.retries, self.max_tokens = retries, max_tokens
         self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
         self.opener = False                                                # voice: open with a 5-word reaction so speech can start within a second
+        self._local = threading.local()                                    # one writer serves every call of a worker: per-turn state is per thread
         self.last_stream: dict = {}                                        # what the last stream() did, for the debug trace
+
+    @property
+    def last_stream(self) -> dict:
+        """What the last stream() on THIS thread did. Each turn runs in its own thread, so two callers' turns never read each other's."""
+        return getattr(self._local, "stream", {})
+
+    @last_stream.setter
+    def last_stream(self, value: dict) -> None:
+        self._local.stream = value
 
     def unsupported(self, w: WriterInput, draft: str) -> bool:
         """The model's own strict yes/no check for a FALSE STATEMENT (the word-level checks cannot see "we do have red cars from a few makes").
@@ -480,7 +491,7 @@ class ReplyWriter:
             feedback = "; ".join(bad)
         return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, "; ".join(bad))
 
-    def stream(self, w: WriterInput):
+    def stream(self, w: WriterInput, temperature: float | None = None):
         """Yield the reply one VERIFIED sentence at a time, as the model produces it, so speech can start after the first sentence.
 
         * Stops (without error) at the first sentence that fails verification, at the deadline, or at the end. A sentence the model did not finish
@@ -489,8 +500,10 @@ class ReplyWriter:
         * What the system wants said IS said: a fact sentence of the standard wording that the reply does not cover is added as it is, and if the
           system is waiting on a question that the model did not ask (or asked about something else) the system's own question is asked.
         * Yields nothing at all if even the first sentence is not usable: the caller then speaks the standard wording.
-        `self.last_stream` describes what happened (for the debug trace)."""
+        `self.last_stream` describes what happened (for the debug trace). `temperature` overrides the writer's own for this reply only
+        (a retry), without touching state other callers' turns read."""
         t0 = time.perf_counter()
+        temperature = self.temperature if temperature is None else temperature
         self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False}
         if w.risk == "high" and not self.high_risk:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
@@ -551,7 +564,7 @@ class ReplyWriter:
             return now
 
         try:
-            for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, self.temperature, deadline):
+            for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, temperature, deadline):
                 buf += piece
                 while not stopped and (cut := split_point(buf)):
                     sentence, buf = buf[:cut[0]], buf[cut[1]:]

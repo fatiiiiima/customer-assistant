@@ -21,8 +21,9 @@ from .brain import DealerBrain
 from .gate import HalfDuplexGate
 from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
-from .stt import WhisperOpenVino, hotword_terms
+from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
+from ..agent.engine import BRIDGES
 from ..agent.wording import OPENERS
 
 STT_RATE = 16000
@@ -30,7 +31,7 @@ STT_RATE = 16000
 
 @dataclass
 class VoiceParts:
-    stt_engine: WhisperOpenVino
+    stt_engine: WhisperOpenVino | RemoteWhisper
     tts_engine: PiperSherpa
     hotword_groups: dict = field(default_factory=dict)
 
@@ -38,7 +39,11 @@ class VoiceParts:
 def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = None) -> VoiceParts:
     """Load and warm the local STT and TTS engines (about 5 s, once per process)."""
     models = ROOT / cfg.app.model_dir
-    stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotword_terms(ROOT / cfg.stt.hotwords_file))
+    hotwords = hotword_terms(ROOT / cfg.stt.hotwords_file)
+    if cfg.voice.stt_url:                               # a shared, batched recognizer on a GPU server (production): no Whisper in the worker
+        stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords)
+    else:
+        stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies)
     if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
@@ -68,7 +73,7 @@ def common_phrases(cfg: Config) -> list[str]:
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
-            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,", "Let me check.", "Let me see.", "Let me have a look."]
+            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + [b for b in BRIDGES]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
@@ -85,6 +90,8 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
+    if hasattr(app.engine, "bridge_after_ms"):                # agent engine: "Let me check." while a slow model decides (voice only; text chat does not wait on audio)
+        app.engine.bridge_after_ms = cfg.voice.bridge_after_ms
 
 
 _NUMBER_ASK = re.compile(r"\b(?:phone|mobile|number|digits)\b", re.I)

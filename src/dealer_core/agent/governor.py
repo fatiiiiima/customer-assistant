@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 class GovernorStats:
     turns: dict[str, int] = field(default_factory=lambda: {"full": 0, "prefix": 0, "code": 0})
     full_first_ms: float | None = None          # moving average, full mode, model's first sentence
+    decide_ms: float | None = None              # moving average, the model's tool decision (the turns code could not route)
     in_flight: int = 0
 
 
@@ -65,6 +66,22 @@ class QualityGovernor:
             old = self.stats.full_first_ms
             self.stats.full_first_ms = first_ms if old is None else (1 - self.alpha) * old + self.alpha * first_ms
 
+    def record_decide(self, ms: float) -> None:
+        """How long the model took to name the tool (said before any reply can start on turns the code could not route)."""
+        with self._lock:
+            old = self.stats.decide_ms
+            self.stats.decide_ms = ms if old is None else (1 - self.alpha) * old + self.alpha * ms
+
+    def expected_wait_ms(self) -> float | None:
+        """How long a caller is expected to hear nothing on a turn that needs the model's decision: the decision, plus the model's first
+        sentence while full turns fit the budget (on prefix turns the code's facts follow the decision at once). None until measured."""
+        with self._lock:
+            if self.stats.decide_ms is None:
+                return None
+            first = self.stats.full_first_ms
+            writing = first if (self.mode in ("auto", "full") and first is not None and first <= self.budget_ms) else 0.0
+            return self.stats.decide_ms + writing
+
     @contextmanager
     def using_model(self):
         with self._lock:
@@ -77,5 +94,6 @@ class QualityGovernor:
 
     def snapshot(self) -> dict:
         with self._lock:
-            return {"mode": self.mode, "budget_ms": self.budget_ms, "full_first_ms": round(self.stats.full_first_ms or 0), "in_flight": self.stats.in_flight,
+            return {"mode": self.mode, "budget_ms": self.budget_ms, "full_first_ms": round(self.stats.full_first_ms or 0),
+                    "decide_ms": round(self.stats.decide_ms or 0), "in_flight": self.stats.in_flight,
                     "turns": dict(self.stats.turns), "at": time.time()}

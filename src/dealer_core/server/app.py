@@ -51,6 +51,7 @@ class ServerState:
     worker_id: str = ""
     public_url: str = ""                  # the address the router hands to pages for this worker
     metrics: object = None                # server.metrics.Metrics (GET /metrics)
+    load_changed: object = None           # asyncio.Event: a call started or ended, so the router hears about it now, not in up to 2 s
 
 
 def create_server(state: ServerState, allowed_origins: list[str] | None = None) -> FastAPI:
@@ -63,19 +64,28 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         if state.registry is None:
             return
 
-        async def beat() -> None:                             # every 2 s: "I am here, this busy" (expires in 6 s if this worker dies)
+        state.load_changed = asyncio.Event()
+
+        async def beat() -> None:
+            """Every 2 s, and soon after a call starts or ends: "I am here, this busy" (expires in 6 s if this worker dies). The write runs in a
+            thread: a slow database must never stall the event loop that carries every call's audio."""
             while True:
                 gov = getattr(state.app.engine, "governor", None)
-                state.registry.beat(state.worker_id, state.public_url, state.active, state.max_calls,
-                                    {"quality": gov.snapshot()["turns"] if gov is not None else {}})
-                await asyncio.sleep(2.0)
+                await asyncio.to_thread(state.registry.beat, state.worker_id, state.public_url, state.active, state.max_calls,
+                                        {"quality": gov.snapshot()["turns"] if gov is not None else {}})
+                state.load_changed.clear()
+                try:
+                    await asyncio.wait_for(state.load_changed.wait(), timeout=2.0)
+                    await asyncio.sleep(0.2)                       # a burst of new calls is reported once, not once per call
+                except asyncio.TimeoutError:
+                    pass
 
         asyncio.get_running_loop().create_task(beat())
 
     @api.on_event("shutdown")
     async def _leave() -> None:
         if state.registry is not None:
-            state.registry.leave(state.worker_id)
+            await asyncio.to_thread(state.registry.leave, state.worker_id)
 
     @api.on_event("startup")
     async def _threads() -> None:
@@ -117,6 +127,8 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
             return
         state.active += 1
         state.served += 1
+        if state.load_changed is not None:
+            state.load_changed.set()
         if state.metrics is not None:
             state.metrics.call("served")
         try:
@@ -125,6 +137,8 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
             logger.error(f"call failed: {type(e).__name__}: {e}")
         finally:
             state.active -= 1
+            if state.load_changed is not None:
+                state.load_changed.set()
             try:
                 await ws.close()
             except Exception:
@@ -171,6 +185,11 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     call_id = str(hello.get("call_id") or "")[:64]
     turn = {"n": 0}
     seen = {"shown": (), "booking": None}
+    saver = None
+    if state.calls is not None and call_id:
+        from ..shared.state import AsyncCallSaver
+
+        saver = AsyncCallSaver(state.calls, call_id)
 
     async def send(msg: dict) -> None:
         try:
@@ -204,8 +223,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
             start = kb.start.astimezone(tz)
             emit({"type": "cancelled", "ref": kb.ref, "car_id": kb.stock_id, "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
         seen["cancelled"] = len(s.cancelled)
-        if state.calls is not None and call_id:
-            state.calls.save(call_id, s)                         # after every turn: another worker can carry on from here
+        if saver is not None:
+            saver.save(s)                                        # after every turn (written off the event loop): another worker can carry on from here
         b = s.booking
         if b is not None and b.booking_id != seen["booking"]:
             seen["booking"] = b.booking_id
@@ -230,19 +249,23 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         gate.close_after_turn()
         await send({"type": "mic", "on": False, "reason": "turn"})
 
-    resumable = bool(state.calls is not None and call_id and state.calls.store.get(f"call:{call_id}"))   # a reconnect: no greeting again
+    resumable = bool(saver is not None and await asyncio.to_thread(state.calls.exists, call_id))   # a reconnect: no greeting again
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs,
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
                                      half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say,
                                      speak_opening=not resumable)
     brain_ref["brain"] = brain
-    resumed = bool(resumable and state.calls.load(call_id, brain.session, app.service))
-    if not resumed:
-        brain.session.known_bookings = site_bookings(hello, app, tz)     # "what have I booked?", "cancel my test drive": the ones already on the site
-    car = hello.get("car")
-    if not resumed and isinstance(car, str) and app.service.get_car(car) is not None:           # the visitor is looking at this car: "this one" means it
-        brain.session.car = car
-        brain.session.state = State.ANSWERING
+    def prepare() -> bool:                                    # database reads, in a thread: the event loop keeps every other call's audio moving
+        resumed_ = bool(resumable and state.calls.load(call_id, brain.session, app.service))
+        if not resumed_:
+            brain.session.known_bookings = site_bookings(hello, app, tz)     # "what have I booked?", "cancel my test drive": the ones already on the site
+        car = hello.get("car")
+        if not resumed_ and isinstance(car, str) and app.service.get_car(car) is not None:      # the visitor is looking at this car: "this one" means it
+            brain.session.car = car
+            brain.session.state = State.ANSWERING
+        return resumed_
+
+    resumed = await asyncio.to_thread(prepare)
     worker = PipelineWorker(pipeline, params=PipelineParams(audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate),
                             idle_timeout_secs=None)
 
@@ -260,3 +283,5 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         await runner.run()
     finally:
         limit.cancel()
+        if saver is not None:
+            await saver.flush()

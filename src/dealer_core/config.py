@@ -203,6 +203,13 @@ class VoiceCfg(_Strict):
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stt_device: str = "CPU"                      # CPU | GPU (NPU cannot take the recognizer hint). small.en on the GPU: 21/24 of the owner's recordings in 0.17 s
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
+    bridge_after_ms: float = 450.0               # agent engine: when the model's decision (+ first sentence) is measured to take longer than this, a pre-rendered
+                                                 # "Let me check." plays at once while it is made. ~1 s target minus end-of-turn (0.2-0.35 s), recognition and first audio. 0 = off
+    stt_copies: int = 1                          # local recognizer copies per worker: calls in one worker transcribe in parallel instead of queueing on one lock
+    stt_url: str = ""                            # recognition on a shared GPU server instead of in the worker (OpenAI-compatible /v1/audio/transcriptions:
+                                                 # vLLM with a Whisper model, speaches / faster-whisper-server). Empty = local OpenVINO Whisper
+    stt_remote_model: str = "openai/whisper-large-v3-turbo"   # the name that server knows the model by
+    stt_timeout_s: float = 3.0                   # a remote transcription slower than this counts as "not heard" (the caller is asked again)
 
 
 class Config(_Strict):

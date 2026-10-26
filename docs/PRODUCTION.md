@@ -94,3 +94,88 @@ capacity probe and the load test (`--gateway`) are the tools to prove them there
   RAM at 100% (three workers + model on a 32 GB laptop with other apps open; each worker ~1.4 GB). Production workers get their own nodes.
 * `scripts/failover_test.py`: a worker killed mid-booking; the caller reconnected through the router to another worker, which carried the
   booking on (car, day and time from before the crash) and booked it. The killed worker was restarted by the supervisor.
+
+## 7. Under 1 s at 500 callers: the latency budget and what closes it (26 Oct, second pass)
+
+The target is **end of the caller's speech -> first sound they hear, under 1 s**, for every turn, while sounding like a person. The reply is
+always "half template, half model": code supplies every fact and the exact booking wording; the model supplies the conversational wording
+when it is fast enough (the governor, section 1). What was still in the way, and what was changed:
+
+| Stage | Laptop (measured) | Production target | Notes |
+|---|---|---|---|
+| End of turn (VAD 0.2 s + Smart Turn) | 0.2-0.35 s | 0.2-0.35 s | unchanged; the floor of the budget |
+| Recognition | 0.2 s (Whisper base, CPU) | ~0.05-0.1 s (estimate) | **new:** `voice.stt_url` sends it to a batched GPU server |
+| Model's tool decision (turns code cannot route) | 0.25-0.4 s | ~0.1-0.2 s (estimate) | **new:** covered by a pre-rendered "Let me check." when it is slow |
+| First sentence | prefix: at once; full: 0.5-1.2 s | full: ~0.2-0.3 s (estimate) | governor picks full / prefix / code per turn |
+| First audio | 0.03-0.15 s (Piper); 0 for pre-rendered phrases | same | |
+
+Production figures marked "estimate" are not measured: no GPU here. Run `scripts/capacity_probe.py` and `scripts/load_test.py --gateway` on
+the real hardware before sizing.
+
+### The bridge: "Let me check." only when it is needed (built)
+
+Turns the code routes itself (a pick from the list, a booking detail, a price or km question about the car in focus, a plain "yes") already
+answer in milliseconds. The slow turns are the ones where the model must first name the tool: nothing could be said until it had.
+Now, on those turns, a short lookup line ("Let me check.", "Let me see.", "Let me have a look.", "One moment, let me look.") is spoken at
+once, while the model decides and writes. It is pre-rendered by the voice, so it plays immediately. To keep it natural rather than a tic:
+
+* it is said only when the governor's live measurements (decision + first sentence, `expected_wait_ms()`) exceed `voice.bridge_after_ms`
+  (450 ms: what is left of 1 s after end of turn, recognition and first audio). On a fast GPU it is simply never said;
+* only for requests that sound like a lookup (stock, price, colour, km, times...), never for "thanks", "hello", "bye", "yes";
+* never two turns running unless the wait is more than twice the threshold, and never the same words twice in a row;
+* the reply that follows drops its own "Sure," / "Of course." so the caller never hears two acknowledgements.
+
+`agent/engine.py: _bridge`, `agent/governor.py: record_decide / expected_wait_ms`, `voice.bridge_after_ms` (0 turns it off).
+
+### Correct with many callers on one worker (fixed)
+
+One engine and one reply writer serve every call of a worker; turns run in parallel threads. Three pieces of per-turn state lived on the
+shared objects, so two callers' turns could overwrite each other:
+`AgentEngine._last_text` (the decision's spelling-corrected CODE HINT could be built from **another caller's words**), the writer's
+temperature (set to 0.2 for a retry and restored, racing other turns), and `last_stream` / `last_level` / `prefix_stats` (debug traces and
+the "rejected because" retry text read from another call). The text is now passed explicitly, the retry temperature is a parameter, and
+the traces are per thread. Tests: `tests/unit/test_scale.py`.
+
+### Nothing blocks the event loop that carries the audio (fixed)
+
+Each worker's single event loop moves every call's audio frames. Several database calls ran directly on it: the call snapshot after
+every turn, the heartbeat to the registry, and the reads when a call starts or resumes. With PostgreSQL a few milliseconds each, at 16
+calls that is audible jitter for everyone on the worker, and a slow database stalled all of them. They now run in threads; snapshots are
+coalesced per call (only the newest waits while one is being written; the last one is flushed when the call ends).
+`shared/state.py: AsyncCallSaver`, `server/app.py`.
+
+### The router under a burst (fixed)
+
+Workers report their load every 2 s. The old `/assign` read every report from the database (one query per worker plus a DELETE, on the
+event loop) and gave the call to the least busy worker. In a burst, every call in those 2 s went to the **same** worker (its report did
+not change yet), which then told most of them "busy". Now:
+
+* the router keeps the reports in memory, refreshed in the background every 0.5 s: `/assign` makes no database call;
+* a call it hands out counts against that worker until the worker's own report can include it (3 s);
+* "power of two choices": two workers with room are drawn at random and the emptier one wins, so two router copies spread a burst too;
+* workers report again ~0.2 s after a call starts or ends, not only every 2 s.
+
+Tested: 512 callers in one report interval on 32 workers x 16 places fill every worker exactly to 16 and the 513th hears "busy"; 300 callers
+through two router copies never put more than 16 on one worker. `gateway/__main__.py: Assigner`.
+
+### Recognition that scales with the number of calls (built)
+
+Each worker had one Whisper behind a lock, so the turns of all its calls waited in line, and Whisper took CPU from every call's speech
+detection and voice. Two options now:
+
+* `voice.stt_url` (production): any server with the OpenAI transcription API (vLLM with `openai/whisper-large-v3-turbo`, speaches,
+  faster-whisper-server). Turns from every worker are batched on a GPU; the worker runs no recognizer. A failed or slow transcription is
+  "not heard" (the caller is asked again); a worker that cannot reach the server at start-up does not start. `deploy/` runs one.
+* `voice.stt_copies` (CPU-only machines): several local copies, so a worker's calls transcribe in parallel.
+
+### Next, in order of value (not built)
+
+1. **Start on the first silence, not the confirmed end of turn.** Transcribe and run the decision speculatively when the VAD first stops;
+   throw it away if Smart Turn says the caller is still talking. Saves recognition + decision time (~0.2-0.4 s) on most turns.
+2. **Constrained decision output.** The decision prompt returns free text that is parsed; with vLLM, `guided_choice` over the tool names
+   makes it a few tokens and never unparseable. A small dedicated decision model (`dialogue.decision_backend`) on the same vLLM halves it again.
+3. **Prompt order for the prefix cache.** `_context` puts the minute-level clock and the code hint before the conversation; put the
+   unchanging parts first so vLLM reuses more of each prompt.
+4. **WebRTC media (LiveKit)** instead of the WebSocket for production audio (section 4): jitter buffers, echo cancellation, reconnects.
+5. **Pin image versions** in `deploy/` (`vllm/vllm-openai:latest` changes under you), and set `voice.model_only: false` for production
+   (it is a test mode).

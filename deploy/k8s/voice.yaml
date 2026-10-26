@@ -3,6 +3,7 @@
 # Sizing (confirm with scripts/capacity_probe.py and scripts/load_test.py on the real cluster):
 #   workers  ~16 calls each  -> 32 replicas for 500 calls, +4 spare; CPU nodes
 #   model    vLLM, 2+ GPU replicas (one can fail); requests are batched, ~10-20% of callers wait on it at any moment
+#   stt      Whisper on a GPU, batched for every worker (OpenAI transcription API); workers then run no recognizer of their own
 #   database managed PostgreSQL (bookings + call snapshots + worker registry)
 ---
 apiVersion: v1
@@ -35,6 +36,33 @@ spec:
   selector: { app: model-server }
   ports: [{ port: 8000, targetPort: 8000 }]
 ---
+# Speech recognition for every worker, batched on a GPU. 500 callers end ~5-10 turns a second between them; one GPU transcribes far more than
+# that with large-v3-turbo. Any server with POST /v1/audio/transcriptions works (vLLM below; speaches / faster-whisper-server too): confirm the
+# exact serving flags for the vLLM version you pin, then measure with scripts/capacity_probe.py.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: stt-server }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: stt-server } }
+  template:
+    metadata: { labels: { app: stt-server } }
+    spec:
+      containers:
+        - name: whisper
+          image: vllm/vllm-openai:latest
+          args: ["--model", "openai/whisper-large-v3-turbo", "--gpu-memory-utilization", "0.5"]
+          ports: [{ containerPort: 8000 }]
+          resources: { limits: { nvidia.com/gpu: 1 } }
+          readinessProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 10, failureThreshold: 60 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: stt-server }
+spec:
+  selector: { app: stt-server }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: voice-worker }
@@ -56,6 +84,8 @@ spec:
             - { name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: VA__VOICE__STT_URL, value: "http://stt-server:8000/v1" }        # recognition on the GPU service, not in the worker
+            - { name: VA__VOICE__STT_REMOTE_MODEL, value: "openai/whisper-large-v3-turbo" }
           command: ["sh", "-c"]
           args: ["python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16
                   --worker-id $POD_NAME --public-url wss://voice.agmc.ae/w/$POD_IP/voice --origin https://www.agmc.ae"]
