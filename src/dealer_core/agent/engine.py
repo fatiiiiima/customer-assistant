@@ -63,6 +63,8 @@ _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|vi
                           r"weekend|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
 _CHEAPER = re.compile(r"\b(?:something|anything|any|options?|cars?|models?)\b.*\b(?:cheaper|less expensive|lower price)\b|"
                       r"\b(?:cheaper|less expensive) (?:ones?|options?|cars?|models?)\b|^(?:a )?cheaper(?: one)?$")
+_OTHER_RANGE = re.compile(r"\b(?:what|which|any)\s+(?:other|else)\b.*\b(?:cars?|models?|makes?|brands?|have|got|stock|sell)\b|"
+                          r"\bother (?:makes|brands|models|cars)\b|^what else\b|\bwhat else (?:is there|have you got|do you have)\b")
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
 _NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
                          r"no thanks|no thank you|not right now|i'm just looking|just looking|just browsing)\b")
@@ -78,7 +80,7 @@ CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|p
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
-TOOLS = ("search_cars", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "browse_makes", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
@@ -369,6 +371,8 @@ class AgentEngine:
         Anything else, or anything mixed ("yes, but at five"), goes to the model as before."""
         words = ex.tokens_of(text)
         joined = " ".join(words)
+        if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):   # the answer to "which one?" comes first, whatever it names
+            return {"tool": "cancel_booking" if s.pending.kind == "cancel_which" else "reschedule_booking", "via": "rules"}
         booking_flow = s.read_back or s.state in (State.SLOT, State.CONTACT)          # a booking is being filled in or read back
         if not booking_flow:                                                     # managing bookings and comparing come before "which car": they name cars too
             if s.known_bookings and _CANCEL.search(joined) and not _MOVE.search(joined):
@@ -386,8 +390,20 @@ class AgentEngine:
         picked = ex.selection(text, s.shown)
         if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
             return {"tool": "get_car", "car_id": picked, "via": "rules"}
+        named = ex.find_vehicle(words, self.svc.inventory.vocabulary())
+        if not booking_flow and s.shown:                                         # "the A4" (heard "the a four") right after a list with the A4 in it
+            hit = [c for c in s.shown if c.model.lower() == (named.get("model") or "") or re.search(
+                rf"\b(?:{re.escape(c.model.lower())}|{re.escape(' '.join(ex.tokens_of(c.model)))})\b", joined)]
+            if len(hit) == 1:
+                return {"tool": "get_car", "car_id": hit[0].stock_id, "via": "rules"}     # "the A4" right after a list with the A4 in it
+        if not booking_flow and named.get("make") and not named.get("model") and len(words) <= 5 and not s.car \
+                and not _OTHER_RANGE.search(joined) and not A.superlative_topic(joined):
+            return {"tool": "search_cars", "via": "rules"}                        # "Toyota" / "maybe a Toyota": that make
         if _GREETING.fullmatch(joined):
             return {"tool": "none", "via": "rules"}
+        if not booking_flow and _OTHER_RANGE.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make") \
+                and not re.search(r"\b(?:cheaper|bigger|smaller|similar|like (?:it|this|that))\b", joined):
+            return {"tool": "browse_makes", "via": "rules"}                       # "what other car models do you have?": the rest of the stock, not more of one make
         if _NEVER_MIND.search(joined) and len(words) <= 10:
             if booking_flow:
                 return {"tool": "cancel_draft", "via": "rules"}
@@ -510,6 +526,26 @@ class AgentEngine:
         return (f", {d.seats} seats, {A.DRIVE.get(d.drive.upper(), d.drive)}, {c.fuel}, {d.power_hp} hp, uses {d.consumption}, boot {d.boot_litres} litres, "
                 f"{d.accident}, {d.owners} previous owner(s), warranty {d.warranty}")
 
+    def _t_browse_makes(self, s, args, text, dbg) -> dict:
+        """What else is in stock, by make: after a booking or a search, "what other cars do you have?" means the rest of the showroom."""
+        current = (self.svc.get_car(s.car).make if s.car and self.svc.get_car(s.car) else None) or (s.filters.get("make") or "").title() or None
+        counts = {}
+        for mk in self.svc.inventory.vocabulary():
+            n = self.svc.inventory.count(SearchFilters(make=mk))
+            if n:
+                counts[mk] = n
+        names = {mk: next((c.make for c in self.svc.inventory.search(SearchFilters(make=mk), 1)), mk.title()) for mk in counts}
+        others = sorted((mk for mk in counts if not current or names[mk].lower() != current.lower()), key=lambda mk: -counts[mk])
+        total = sum(counts[mk] for mk in others)
+        shown = [names[mk] for mk in others[:6]]
+        more = len(others) - len(shown)
+        parts = shown + ([f"{more} other makes"] if more > 0 else [])
+        listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
+        lead = f"Besides {current}, we've got {total} more cars" if current else f"We've got {total} cars"
+        s.filters, s.shown, s.car, s.state = {}, [], None, State.INTEREST
+        return {"core": f"{lead}, from {listed}. Which make would you like to hear about?",
+                "facts": [f"In stock by make: " + ", ".join(f"{names[mk]} {counts[mk]}" for mk in others)], "awaiting": True}
+
     def _t_best_of(self, s, args, text, dbg) -> dict:
         pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
         if s.filters and len(pool) < 2:
@@ -608,6 +644,8 @@ class AgentEngine:
                         "facts": [f"Nothing cheaper within {wanted}; cheaper across all makes: {wider.total}."], "awaiting": True}
             return {"core": f"The {T.short_name(base)} at {T.money(base.price)} is the cheapest car we have right now. Would you like to hear more about it?",
                     "facts": ["Nothing in stock is cheaper."], "awaiting": True}
+        if not res.cars and ex.wants_others(text) and f.get("make"):
+            return self._t_browse_makes(s, args, text, dbg)
         if not res.cars:
             return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?",
                     "facts": [f"Search for {wanted}: no cars in stock match."], "awaiting": True}
@@ -620,7 +658,7 @@ class AgentEngine:
             sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
         if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
             s.narrow_asks += 1
-            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} Could you tell me your budget or a make?",
+            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} {'What budget do you have in mind, or is there a model you like?' if f.get('make') else 'Could you tell me your budget or a make?'}",
                     "facts": [f"Search for {wanted}: exactly {res.total} cars match (say the number {res.total}, never 'a few' or 'several'), too many to read out. Examples:", *sheet,
                               "Ask one narrowing question (budget, make, body type or colour) instead of listing them all."], "awaiting": True}
         more = res.total - len(res.cars)
