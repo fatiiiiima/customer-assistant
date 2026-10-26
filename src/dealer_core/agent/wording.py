@@ -81,8 +81,12 @@ def ask_day(s: Session, c: CarView) -> str:
                                "Of course. What day and time suit you?"])
 
 
-def ask_missing(s: Session, missing: list[str], name: str | None) -> str:
-    """The next detail the booking needs, asked the way a person would."""
+def ask_missing(s: Session, missing: list[str], name: str | None, time_said: str = "") -> str:
+    """The next detail the booking needs, asked the way a person would. `time_said`: the slot the caller just gave, said back first
+    ("Great, tomorrow at 5 PM.") so a misheard time is caught at once, not only at the read-back."""
+    if time_said:
+        ask = {("mobile number",): "And your mobile number?", ("name",): "And your name, please?"}.get(tuple(missing), "Can I take your name and mobile number?")
+        return pick(s, "ack_time", [f"Great, {time_said} it is. {ask}", f"Lovely, {time_said}. {ask}", f"Perfect, {time_said}. {ask}"])
     thanks = f"Thanks, {name.split()[0]}." if name and "name" not in missing else "Thanks."
     if missing == ["mobile number"]:
         return pick(s, "ask_phone", [f"{thanks} And your mobile number?", f"{thanks} What's the best mobile number to reach you on?"])

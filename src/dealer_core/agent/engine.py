@@ -740,6 +740,7 @@ class AgentEngine:
         tz, now = self.svc.slots.tz(car.branch_id), self.svc.clock()
         when = str(args.get("when") or "").strip()
         problems: list[str] = []
+        slot_set_now = False
         if when and when.lower() not in ("null", "none"):
             w = parse_when(when, now, tz)
             day, tm = w.day, w.time
@@ -765,6 +766,7 @@ class AgentEngine:
                     return {"core": f"{why} How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
                             "facts": [f"The requested time is not available: {why}", f"Nearest free: {self._slot_text(alts, now)}."]}
                 s.draft_slot = chosen
+                slot_set_now = True
                 s.offered_slots, s.slot_day = [], None
             elif day and not tm:
                 free = list(self.svc.slots.free_slots(car, day))
@@ -787,7 +789,8 @@ class AgentEngine:
             need = " and ".join(missing)
             known = [f"{k}: {v}" for k, v in (("when", T.when_full(s.draft_slot) if s.draft_slot else None), ("name", s.draft_name),
                                               ("phone", speak_phone(s.draft_phone) if s.draft_phone else None)) if v]
-            return {"core": W.ask_missing(s, missing, s.draft_name), "risk": "high", "awaiting": True,
+            said = T.when_short(s.draft_slot, now).replace(":00 ", " ") if slot_set_now and s.draft_slot else ""
+            return {"core": W.ask_missing(s, missing, s.draft_name, said), "risk": "high", "awaiting": True,
                     "facts": [f"Booking draft for the {T.car_name(car)}. Known: {'; '.join(known) or 'nothing yet'}.", f"Still missing: {need}.",
                               *fact_sheet([car], self._branch_name).splitlines(),
                               *[f"Note: {p}." for p in problems], "Ask for the missing detail(s) only, in plain words (no 'I'll' or 'we'll'). Nothing is booked yet: do not say it is booked, confirmed or arranged.",
