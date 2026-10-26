@@ -195,6 +195,18 @@ class CallStore:
         except Exception:
             pass                                   # never let the shared store break a live call
 
+    def save_json(self, call_id: str, data: str) -> None:
+        try:
+            self.store.set(f"call:{call_id}", data, self.ttl)
+        except Exception:
+            pass
+
+    def exists(self, call_id: str) -> bool:
+        try:
+            return bool(self.store.get(f"call:{call_id}"))
+        except Exception:
+            return False
+
     def load(self, call_id: str, session, service) -> bool:
         try:
             raw = self.store.get(f"call:{call_id}")
@@ -210,6 +222,44 @@ class CallStore:
             self.store.delete(f"call:{call_id}")
         except Exception:
             pass
+
+
+class AsyncCallSaver:
+    """Saves one call's snapshot after every turn WITHOUT blocking the worker's event loop (which carries every call's audio).
+
+    The snapshot is taken on the loop at once (cheap, and consistent with the turn that just ended); the write to Redis / PostgreSQL runs in
+    a thread. Writes for one call never overlap and never go backwards: while one is in flight only the newest snapshot waits, older ones are
+    dropped. `flush()` at the end of the call waits for the last one, so a reconnect finds the latest state."""
+
+    def __init__(self, calls: CallStore, call_id: str) -> None:
+        import asyncio
+
+        self.calls, self.call_id = calls, call_id
+        self._pending: str | None = None
+        self._task: asyncio.Task | None = None
+        self.writes = 0
+
+    def save(self, session) -> None:
+        import asyncio
+
+        try:
+            self._pending = json.dumps(snapshot(session))
+        except Exception:
+            return
+        if self._task is None or self._task.done():
+            self._task = asyncio.get_running_loop().create_task(self._drain())
+
+    async def _drain(self) -> None:
+        import asyncio
+
+        while self._pending is not None:
+            data, self._pending = self._pending, None
+            await asyncio.to_thread(self.calls.save_json, self.call_id, data)
+            self.writes += 1
+
+    async def flush(self) -> None:
+        if self._task is not None:
+            await self._task
 
 
 # ------------------------------------------------------------------------------------------------ worker registry

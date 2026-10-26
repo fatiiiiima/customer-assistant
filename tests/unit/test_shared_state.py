@@ -83,9 +83,11 @@ def test_the_router_assigns_the_least_busy_worker_and_says_busy_when_all_are_ful
     from dealer_core.gateway.__main__ import create_gateway
 
     reg = WorkerRegistry(store)
-    client = TestClient(create_gateway(reg, ["http://localhost:8080"]))
-    assert client.get("/assign").status_code == 503                             # no worker yet
-    reg.beat("w1", "ws://a/voice", active=7, max_calls=8)
-    reg.beat("w2", "ws://b/voice", active=2, max_calls=8)
-    assert client.get("/assign").json()["url"] == "ws://b/voice"
-    assert client.get("/workers").json()["calls"] == 9
+    api = create_gateway(reg, ["http://localhost:8080"])
+    with TestClient(api) as client:
+        assert client.get("/assign").status_code == 503                         # no worker yet
+        reg.beat("w1", "ws://a/voice", active=7, max_calls=8)
+        reg.beat("w2", "ws://b/voice", active=2, max_calls=8)
+        api.state.assigner.refresh()                                            # the router reads reports in the background every 0.5 s
+        assert client.get("/assign").json()["url"] == "ws://b/voice"
+        assert client.get("/workers").json()["calls"] == 9

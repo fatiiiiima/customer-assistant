@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import threading
 import time
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -78,6 +79,13 @@ _NONE_CLAIM = re.compile(r"\b(?:don't|do not|doesn't|no longer|not) (?:have|carr
 _HAS_OPENER = re.compile(r"(?:sure|ok(?:ay)?|right|alright|great|perfect|lovely|of course|no problem|thanks|thank you|done|all set|yes|"
                          r"no|sorry|just to check|hmm|so|well|absolutely|good|let's see|let me|ah|oh)\b", re.I)
 _NEGATIVE = re.compile(r"\b(?:don't|doesn't|isn't|aren't|not|no|none|can't|haven't|hasn't|sorry|unfortunately|fixed)\b", re.I)
+# Said the moment a turn needs the model's decision, while it is made (pre-rendered by the voice: voice/pipeline.py common_phrases).
+# Only "I am looking it up" wording: it fits every answer that can follow ("Let me check. I don't have any red BMWs right now.").
+BRIDGES = ["Let me check.", "Let me see.", "Let me have a look.", "One moment, let me look."]
+_BRIDGE_CUE = re.compile(r"\b(?:do you have|have you got|got any|any|show me|looking for|look for|how much|price|cost|cheap\w*|expensive|budget|under|below|"
+                         r"what|which|is there|are there|available|in stock|stock|compare|difference|better|km|kilomet\w*|mileage|colou?r|year|"
+                         r"suv|sedan|hatchback|coupe|pickup|van|electric|hybrid|petrol|diesel|automatic|manual|seats?|when|free|open|times?|slots?)\b")
+_REACTION_LEAD = re.compile(r"^(?:sure|ok(?:ay)?|right|alright|great|perfect|lovely|of course|absolutely|no problem)[,!.]\s+(?=\S)", re.I)
 _COMMON_STARTS = {"we've", "we", "we're", "we'd", "there", "there's", "there're", "it", "it's", "that", "that's", "the", "this", "these", "those",
                   "under", "our", "you", "you're", "your", "here", "here's", "both", "one", "all", "for", "at", "what", "which", "how", "only",
                   "a", "an", "with", "each", "none", "not", "sadly", "unfortunately", "they", "they're", "its"}
@@ -196,12 +204,31 @@ class AgentEngine:
         self.governor = None                             # QualityGovernor: picks full / prefix / code per turn from the model's live speed (agent/governor.py)
         if self.reply_writer is not None:
             self.reply_writer.extra_check = self._stock_claims
+        self._local = threading.local()                  # one engine serves every call of a worker: per-turn state lives per thread
         self.last_level = ""
         self.prefix_stats: dict = {}
         self.stream_high_risk = True
         self.nlu = None
         self.decide_tokens, self.decide_deadline_s = 16, 5.0
-        self._last_text = ""
+        self.bridge_after_ms = 0.0                       # > 0: when the model's decision is expected to keep the caller waiting longer than this, a short
+                                                         # "Let me check." is said at once while it is made (0 = never; voice sets it from voice.bridge_after_ms)
+
+    @property
+    def last_level(self) -> str:
+        """The quality level of the last turn on THIS thread (each turn runs in its own thread, so callers never see each other's)."""
+        return getattr(self._local, "level", "")
+
+    @last_level.setter
+    def last_level(self, value: str) -> None:
+        self._local.level = value
+
+    @property
+    def prefix_stats(self) -> dict:
+        return getattr(self._local, "prefix_stats", {})
+
+    @prefix_stats.setter
+    def prefix_stats(self, value: dict) -> None:
+        self._local.prefix_stats = value
 
     # ------------------------------------------------------------------------------------------------ entry points
     def new_session(self) -> Session:
@@ -246,10 +273,16 @@ class AgentEngine:
             yield TurnResult(line, dbg, False)
             return
         decision = self._fast_decide(s, text)
+        bridge = ""
         if decision is None:
+            bridge = self._bridge(s, text)
+            if bridge:                                                     # the caller hears this while the model decides (and writes)
+                yield bridge
+            t_decide = time.perf_counter()
             if self.governor is not None:
                 with self.governor.using_model():
                     decision = self._decide(s, text)
+                self.governor.record_decide((time.perf_counter() - t_decide) * 1000)
             else:
                 decision = self._decide(s, text)
         tool = decision.get("tool", "none")
@@ -267,13 +300,17 @@ class AgentEngine:
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
         dbg.state_after = s.state.value
-        spoken: list[str] = []
+        spoken: list[str] = [bridge] if bridge else []
+        if bridge:                                                       # "Let me check. Sure! What day ..." -> "Let me check. What day ..."
+            result["core"] = _REACTION_LEAD.sub("", result["core"], count=1)
+            result["core"] = result["core"][:1].upper() + result["core"][1:]
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "bridge said while the model decided"
         prefix, question = self._split_core(result["core"])
         level = self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
         if level == "full" and tool in _FACT_TOOLS and prefix:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
-        opener, lead = self._opener(s, tool, result["core"]), ""
+        opener, lead = ("", bridge) if bridge else (self._opener(s, tool, result["core"]), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
@@ -303,18 +340,16 @@ class AgentEngine:
             facts = "\n".join(result["facts"])
             w = WriterInput(caller=text, core=result["core"], risk=result["risk"], history=list(s.history), facts=facts, awaiting=result["awaiting"])
             dbg.risk = result["risk"]
-            temperature = self.reply_writer.temperature
             t_write = time.perf_counter()
-            if lead:                                            # said while the model writes; the model's own opener is then dropped
+            if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
                 spoken.append(lead)
                 yield lead
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
-                    self.reply_writer.temperature = 0.2
                     why = self.reply_writer.last_stream.get("stopped", "")
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
-                    for sentence in self.reply_writer.stream(w):
+                    for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
                         if lead and len(spoken) == 1:
                             sentence = _after_opener(sentence)
                             if not sentence:
@@ -329,9 +364,8 @@ class AgentEngine:
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
                 if len(spoken) > (1 if lead else 0):
                     break
-            self.reply_writer.temperature = temperature
             if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
-                spoken.append(_lower_first(result["core"]))
+                spoken.append(result["core"] if bridge else _lower_first(result["core"]))
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
                 yield spoken[-1]
             if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
@@ -346,11 +380,11 @@ class AgentEngine:
             if spoken:
                 dbg.draft = " ".join(spoken)
                 dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), result["core"].lower()).ratio(), 2)
-        if not spoken and (not self.model_only or self.silent_fallback):
-            spoken = [result["core"]]
+        if spoken == ([bridge] if bridge else []) and (not self.model_only or self.silent_fallback):
+            spoken.append(result["core"])
             dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
             yield result["core"]
-        elif not spoken:
+        elif spoken == ([bridge] if bridge else []):
             dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: the model gave no usable reply, so nothing was said"
         reply = " ".join(spoken)
         s.remember("customer", text)
@@ -359,6 +393,28 @@ class AgentEngine:
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + 2, max_words=90)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         yield TurnResult(reply, dbg, s.ended)
+
+    def _bridge(self, s: Session, text: str) -> str:
+        """A short "Let me check." said at once when this turn must wait for the model's decision and the wait is expected to be noticeable.
+
+        Natural, not robotic: only when the governor's live measurements say the caller would otherwise wait longer than `bridge_after_ms`
+        (on a fast GPU it is never said), only for a request that sounds like a lookup (not "thanks", "hello", "yes"), never two turns running,
+        and never the same wording twice in a row."""
+        if self.bridge_after_ms <= 0 or self.governor is None or s.ended:
+            return ""
+        wait = self.governor.expected_wait_ms()
+        if wait is None or wait < self.bridge_after_ms:
+            return ""
+        words = " ".join(ex.tokens_of(text))
+        looks_up = bool(_BRIDGE_CUE.search(words)) or bool(ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary()).get("make"))
+        if not looks_up or _THANKS.fullmatch(words) or _BYE.search(words) or _GREETING.fullmatch(words):
+            return ""
+        turn = sum(1 for who, _ in s.history if who == "customer")
+        if s.last_variant.get("bridge_turn") == turn - 1 and wait < 2 * self.bridge_after_ms:
+            return ""                                                   # said last turn: say it again only when the wait is really long
+        line = W.pick(s, "bridge", BRIDGES)
+        s.last_variant["bridge_turn"] = turn
+        return line
 
     def _opener(self, s: Session, tool: str, core: str) -> str:
         """A short acknowledgement before a factual answer, when the answer does not already start with one. It is rendered in advance by
@@ -456,7 +512,7 @@ class AgentEngine:
         yield question                                         # never end on a statement: the caller must know what is being asked
 
     # ------------------------------------------------------------------------------------------------ the decision
-    def _context(self, s: Session) -> str:
+    def _context(self, s: Session, text: str = "") -> str:
         tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
         now = self.svc.clock().astimezone(tz)
         focus = self.svc.get_car(s.car) if s.car else None
@@ -465,7 +521,7 @@ class AgentEngine:
         shown = "; ".join(f"{i + 1}) {c.stock_id} {c.year} {c.make} {c.model}" for i, c in enumerate(s.shown)) or "none"
         convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
         # The customer's words are matched to the stock by code (spelling-tolerant), so the model never has to know the whole inventory.
-        found = ex.find_vehicle(ex.tokens_of(self._last_text), self.svc.inventory.vocabulary())
+        found = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
         hint = ""
         if found.get("make"):
             ids = [c.stock_id for c in self.svc.inventory.search(SearchFilters(make=found["make"], model=found.get("model")), 5)]
@@ -605,8 +661,7 @@ class AgentEngine:
 
     def _decide(self, s: Session, text: str) -> dict:
         """The model names the tool (and the car). Everything else - filters, name, phone, day and time - is taken from the customer's words by code."""
-        self._last_text = text
-        user = self._context(s) + f"CUSTOMER (now): {text}\nTOOL:"
+        user = self._context(s, text) + f"CUSTOMER (now): {text}\nTOOL:"
         try:
             raw = self.backend.lead_in(DECIDE_SYSTEM, user, self.decide_tokens, None, self.decide_deadline_s)
         except Exception as e:                                          # the model did not answer in time: do nothing rather than guess

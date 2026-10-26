@@ -10,7 +10,14 @@ services:
 
   model-server:                   # vLLM (Apache-2.0): every worker's model requests, batched, on the GPU
     image: vllm/vllm-openai:latest
-    command: ["--model", "Qwen/Qwen3-14B-AWQ", "--enable-prefix-caching", "--max-num-seqs", "256", "--gpu-memory-utilization", "0.85"]
+    command: ["--model", "Qwen/Qwen3-14B-AWQ", "--enable-prefix-caching", "--max-num-seqs", "256", "--gpu-memory-utilization", "0.75"]
+    deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+    volumes: [hf:/root/.cache/huggingface]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 10s, retries: 60 }
+
+  stt-server:                     # Whisper for every worker, batched on the GPU (OpenAI transcription API); shares the GPU with the model here
+    image: vllm/vllm-openai:latest
+    command: ["--model", "openai/whisper-large-v3-turbo", "--gpu-memory-utilization", "0.1"]
     deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
     volumes: [hf:/root/.cache/huggingface]
     healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 10s, retries: 60 }
@@ -20,9 +27,11 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:change-me@postgres:5432/agmc
       STATE_URL: postgresql://postgres:change-me@postgres:5432/agmc
+      VA__VOICE__STT_URL: http://stt-server:8000/v1
+      VA__VOICE__STT_REMOTE_MODEL: openai/whisper-large-v3-turbo
     command: ["sh", "-c", "python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16 --worker-id $$HOSTNAME --public-url ws://$$HOSTNAME:8765/voice --origin https://www.agmc.ae"]
     volumes: [./models:/app/models:ro, ./site:/site:ro]
-    depends_on: { postgres: { condition: service_healthy }, model-server: { condition: service_healthy } }
+    depends_on: { postgres: { condition: service_healthy }, model-server: { condition: service_healthy }, stt-server: { condition: service_healthy } }
 
   router:                         # pages ask it which worker takes a call
     image: agmc/voice:latest
