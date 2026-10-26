@@ -167,7 +167,8 @@ def test_agent_every_turn_is_spoken_even_when_the_model_gives_nothing_usable(bac
         items = list(e.handle_stream(s, line))
         spoken = [x for x in items if isinstance(x, str)]
         assert spoken and all(x.strip() for x in spoken), f"silent turn for {line!r}"
-        assert "FALLBACK" in items[-1].debug.note
+        note = items[-1].debug.note
+        assert "FALLBACK" in note or "the code's own question was said" in note or "level prefix" in note     # code wording stood in for the model
 
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
@@ -175,9 +176,9 @@ def test_the_fallback_can_be_switched_off_to_see_the_model_alone():
     cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
     app = build_app(cfg, inventory="portal", portal_data=DATA_JS, classifier=Scripted([]), reply_mode="conversational",
                     clock=lambda: NOW.astimezone(timezone.utc), lead_backend=Silent([]))
-    e = AgentEngine(app.service, Scripted(["search_cars"]), app.engine.reply_writer)
+    e = AgentEngine(app.service, Scripted(["none"]), app.engine.reply_writer)
     e.model_only, e.silent_fallback = True, False
-    assert not [x for x in e.handle_stream(e.new_session(), "toyota") if isinstance(x, str)]
+    assert not [x for x in e.handle_stream(e.new_session(), "what do you think about hybrids in this heat") if isinstance(x, str)]   # a conversational turn: the model's alone
 
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")

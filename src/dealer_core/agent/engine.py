@@ -75,6 +75,7 @@ _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) 
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")
 _NONE_CLAIM = re.compile(r"\b(?:don't|do not|doesn't|no longer|not) (?:have|carry|stock|sell)\b|\bno \w+ (?:in stock|available)\b|"
                          r"\bout of stock\b|\bnone (?:in stock|available|left)\b|\bsold out\b")
+_FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info")   # replies that are lists or figures
 _HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
 _NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
@@ -248,6 +249,8 @@ class AgentEngine:
         spoken: list[str] = []
         prefix, question = self._split_core(result["core"])
         level = self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
+        if level == "full" and tool in _FACT_TOOLS and prefix:
+            level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
         if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
@@ -294,7 +297,11 @@ class AgentEngine:
                     break
             self.reply_writer.temperature = temperature
             if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
-                _, core_q = self._split_core(result["core"])
+                # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
+                core_facts, core_q = self._split_core(result["core"])
+                if core_facts:
+                    spoken.append("That is: " + core_facts[0].lower() + core_facts[1:] if not core_facts.startswith("I") else "That is: " + core_facts)
+                    yield spoken[-1]
                 close = core_q or W.anything_else(s)
                 spoken.append(close)
                 yield close
