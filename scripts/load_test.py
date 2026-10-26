@@ -38,8 +38,18 @@ def pct(xs: list[float], p: float) -> float:
     return float(np.percentile(xs, p)) if xs else float("nan")
 
 
+GATEWAY = {"url": ""}
+
+
 async def staggered(url, origin, clips, i: int, stagger: float):
     await asyncio.sleep(i * stagger)
+    if GATEWAY["url"]:                                       # like the page: ask the router which worker takes this call
+        import urllib.request
+
+        def assign():
+            with urllib.request.urlopen(GATEWAY["url"].rstrip("/") + "/assign", timeout=5) as r:
+                return json.loads(r.read())["url"]
+        url = await asyncio.to_thread(assign)
     return await one_call_tap(url, clips, None, f"c{i + 1}", origin, None)
 
 
@@ -74,12 +84,14 @@ async def level(url: str, origin: str, scripts, n: int, stagger: float) -> dict:
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="ws://127.0.0.1:8766/voice")
+    ap.add_argument("--gateway", default="", help="ask this router for a worker per call (e.g. http://127.0.0.1:8760), like the page does")
     ap.add_argument("--origin", default="http://localhost:8080")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 3, 4])
     ap.add_argument("--voice", default="amy")
     ap.add_argument("--mix", action="store_true", help="five different conversations (longer questions, comparisons, a negotiation question) instead of one")
     ap.add_argument("--stagger", type=float, default=0.0, help="seconds between caller starts")
     a = ap.parse_args()
+    GATEWAY["url"] = a.gateway
     print("synthesising caller lines...", flush=True)
     scripts = [caller_audio(s, a.voice) for s in (MIX if a.mix else [DEFAULT_SCRIPT])]
     rows = []
