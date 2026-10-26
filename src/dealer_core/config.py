@@ -195,6 +195,7 @@ class VoiceCfg(_Strict):
     tap_stop_secs: float = 0.35                   # tap mode: a cut turn closes the mic mid-sentence, so it waits longer (24 real recordings: 0.35 s cut 2 sentences vs 4-5 at 0.2 s, for ~0.2 s more wait)
     silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
+    stt_device: str = "CPU"                      # CPU | GPU (NPU cannot take the recognizer hint). small.en on the GPU: 21/24 of the owner's recordings in 0.17 s
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
 
 

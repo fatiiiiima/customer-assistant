@@ -308,3 +308,17 @@ def test_the_owners_call_of_26_october_two_pm_misheard_as_to_pm():
     e.handle(s, "yes")
     assert s.booking is not None and s.booking.customer_name == "Fatima"
     assert "41,000 kilometres" in e.handle(s, "how many kilometres has it done").reply      # after booking, car questions still work
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_a_car_that_sounds_like_one_just_listed_is_checked_not_guessed():
+    """26 Oct: 'the RAV4' heard as 'the Audi A4' right after a Toyota list."""
+    e, _ = engine(["search_cars"])
+    s = e.new_session()
+    e.handle(s, "I'm looking for a Toyota.")
+    e.handle(s, "any budget?")
+    assert "did you mean the RAV4 or the Audi A4" in e.handle(s, "the Audi A4.").reply
+    assert "RAV4" in e.handle(s, "the RAV4").reply and s.car == "AG-103"
+    s2 = e.new_session()
+    e.handle(s2, "I'm looking for a Toyota.")
+    assert e._sounds_like_shown(s2, "do you have an Audi A4") is None                 # asked for by name: no check

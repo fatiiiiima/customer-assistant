@@ -176,6 +176,17 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
+        check = self._sounds_like_shown(s, text)
+        if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
+            heard, near = check
+            s.shown, s.car, s.state = [near, heard], None, State.ANSWERING
+            line = f"Just to check, did you mean the {T.short_name(near)} or the {T.short_name(heard)}?"
+            dbg.intent, dbg.via, dbg.note = "none", "rules", "sounds like a car just listed: asked which"
+            s.remember("customer", text)
+            s.remember("agent", line)
+            yield line
+            yield TurnResult(line, dbg, False)
+            return
         decision = self._fast_decide(s, text) or self._decide(s, text)
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
@@ -559,6 +570,26 @@ class AgentEngine:
                 return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
         s.described = car.stock_id
         return {"core": f"{W.car_line(s, car)} {ask}", "facts": facts, "awaiting": True}
+
+    def _sounds_like_shown(self, s: Session, text: str):
+        """(the car heard, the listed car it sounds like) when the caller seems to name a car just read out but the recognizer heard another
+        one: 'A4' after a list with the RAV4, 'Camri'... None when the heard car is itself in the list, or nothing listed sounds like it."""
+        if not s.shown or s.state in (State.SLOT, State.CONTACT, State.CONFIRM):
+            return None
+        found = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())
+        model = (found.get("model") or "").lower()
+        if not model or any(c.model.lower() == model for c in s.shown):
+            return None
+        heard = next((self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(make=found.get("make"), model=model), 1)), None)
+        if heard is None or (found.get("make") and _LOOKING.search(" ".join(ex.tokens_of(text)))):   # "do you have an Audi A4?": a real new request
+            return None
+
+        def alike(a: str, b: str) -> bool:
+            digits_a, digits_b = re.sub(r"\D", "", a), re.sub(r"\D", "", b)
+            return SequenceMatcher(None, a, b).ratio() >= 0.6 or (digits_a and digits_a == digits_b and (a.endswith(b) or b.endswith(a)))
+
+        near = next((c for c in s.shown if alike(c.model.lower().replace(" ", ""), model.replace(" ", ""))), None)
+        return (heard, near) if near is not None else None
 
     @staticmethod
     def _offered_pick(s: Session, text: str):

@@ -53,6 +53,7 @@ def main() -> int:
     ap.add_argument("--vad-silence", type=float, default=None, help="VAD silence; default voice.smart_stop_secs")
     ap.add_argument("--allow-battery", action="store_true", help="run anyway (the numbers are then DISCARDED, labelled as such)")
     ap.add_argument("--chats", nargs="*", default=list(CHATS))
+    ap.add_argument("--stt", help="recognizer as model@device, e.g. whisper-small.en-int8-ov@GPU (default: voice.stt_model on voice.stt_device)")
     a = ap.parse_args()
     ac = on_ac_power()
     if not ac and not a.allow_battery:
@@ -67,13 +68,16 @@ def main() -> int:
     from dealer_core.voice.tts import PiperSherpa
 
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
+    if a.stt:
+        model, _, device = a.stt.partition("@")
+        cfg.voice.stt_model, cfg.voice.stt_device = model, device or "CPU"
     app = build_app(cfg, inventory="portal", portal_data=Path(r"C:\dev\bmw-portal\site\data.js"), backend=a.backend,
                     engine="agent" if a.engine == "agent" else None, agent_prefix=a.prefix if a.engine == "agent" else None)
     start(app, quiet=True)
     apply_voice_profile(app, cfg)
     parts = load_engines(cfg)
     caller = PiperSherpa(ROOT / "models", "amy")                       # a different voice from the agent's (Joe)
-    label = a.engine + ("+prefix" if a.prefix else "") + ("" if ac else "_ON_BATTERY_DISCARDED")
+    label = a.engine + ("+prefix" if a.prefix else "") + (f"_{cfg.voice.stt_model}@{cfg.voice.stt_device}" if a.stt else "") + ("" if ac else "_ON_BATTERY_DISCARDED")
     stop = a.vad_silence or cfg.voice.smart_stop_secs
     rows = []
     for name in a.chats:

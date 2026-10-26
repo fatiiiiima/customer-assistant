@@ -71,7 +71,8 @@ def main() -> int:
     models = sys.argv[1:] or ["whisper-base-int8-ov", "whisper-small.en-int8-ov", "whisper-small-int8-ov"]
     out = []
     for model in models:
-        eng = WhisperOpenVino(ROOT / "models" / "ov" / model, ROOT / "models" / "ov_cache", "CPU")
+        name, _, device = model.partition("@")                       # "whisper-small.en-int8-ov@NPU" runs it on the NPU
+        eng = WhisperOpenVino(ROOT / "models" / "ov" / name, ROOT / "models" / "ov_cache", device or "CPU")
         eng.warm_up()
         for hint in ("none", "fixed", "question"):
             passed, ms, misses = 0, [], []
