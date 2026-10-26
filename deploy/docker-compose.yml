@@ -1,0 +1,39 @@
+# The whole system on ONE GPU machine (a first deployment, or a staging box).
+#   docker compose -f deploy/docker-compose.yml up -d --scale worker=6
+# For 500 callers across several machines, use the Kubernetes files in deploy/k8s/ instead.
+services:
+  postgres:                       # bookings, stock, call snapshots, worker registry
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: change-me, POSTGRES_DB: agmc }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 5s, retries: 10 }
+
+  model-server:                   # vLLM (Apache-2.0): every worker's model requests, batched, on the GPU
+    image: vllm/vllm-openai:latest
+    command: ["--model", "Qwen/Qwen3-14B-AWQ", "--enable-prefix-caching", "--max-num-seqs", "256", "--gpu-memory-utilization", "0.85"]
+    deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+    volumes: [hf:/root/.cache/huggingface]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 10s, retries: 60 }
+
+  worker:                         # voice workers: scale with --scale worker=N (each ~16 calls)
+    image: agmc/voice:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:change-me@postgres:5432/agmc
+      STATE_URL: postgresql://postgres:change-me@postgres:5432/agmc
+    command: ["sh", "-c", "python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16 --worker-id $$HOSTNAME --public-url ws://$$HOSTNAME:8765/voice --origin https://www.agmc.ae"]
+    volumes: [./models:/app/models:ro, ./site:/site:ro]
+    depends_on: { postgres: { condition: service_healthy }, model-server: { condition: service_healthy } }
+
+  router:                         # pages ask it which worker takes a call
+    image: agmc/voice:latest
+    environment: { STATE_URL: postgresql://postgres:change-me@postgres:5432/agmc }
+    command: ["python", "-m", "dealer_core.gateway", "--host", "0.0.0.0", "--port", "8760", "--origin", "https://www.agmc.ae"]
+    ports: ["8760:8760"]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  prometheus:                     # collects /metrics from every worker
+    image: prom/prometheus:latest
+    volumes: [./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ["9090:9090"]
+
+volumes: { pgdata: {}, hf: {} }

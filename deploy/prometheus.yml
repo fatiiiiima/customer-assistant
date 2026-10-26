@@ -1,0 +1,8 @@
+global: { scrape_interval: 15s }
+scrape_configs:
+  - job_name: voice-workers
+    dns_sd_configs: [{ names: ["tasks.worker", "worker"], type: A, port: 8765 }]
+    metrics_path: /metrics
+  - job_name: model-server            # vLLM exposes its own /metrics (queue length, tokens/s, time to first token)
+    static_configs: [{ targets: ["model-server:8000"] }]
+rule_files: ["/etc/prometheus/alerts.yml"]

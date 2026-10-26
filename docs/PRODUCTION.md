@@ -67,3 +67,22 @@ synthesis); the load test showed ~16 comfortable, ~24 usable. So: probe first, t
 `tests/scenarios/test_conversations.py`: realistic multi-turn calls checked for loops, repeated replies, wrong prices and turns that
 end without a question, run with no model help (the safety net must hold on its own). Next: grow it to 200+ calls and score the
 model-written replies for naturalness, so model, prompt and level choices are made with numbers.
+
+## 6. What is built for scale, and how to run it
+
+| Piece | What it does | Where |
+|---|---|---|
+| Shared model server | one model for every worker on a machine, OpenAI-compatible like vLLM, batched | `python -m dealer_core.modelserver` |
+| Bookings + stock in PostgreSQL | shared by every worker; double booking impossible in the database (unique indexes + car row lock) | `repos/pg_store.py`, `app.database_url` / `DATABASE_URL` |
+| Shared call state | each call saved after every turn; a reconnecting call is carried on by any worker (no second greeting) | `shared/state.py` (PostgreSQL, Redis or memory) |
+| Worker registry + router | workers report load every 2 s; the router gives each new call the least busy worker, 503 "busy" when all are full | `python -m dealer_core.gateway` |
+| Page | asks the router for a worker (`CONFIG.voiceGateway`), sends a call id, reconnects once if its worker drops | `bmw-portal/site/voice.js` |
+| Metrics | calls, reply-time histogram, quality-level mix, model load at `/metrics` | `server/metrics.py`, `deploy/prometheus.yml` |
+| One-machine cluster | database + model server + N workers + router, restarts a worker that dies | `scripts/run_cluster.py --workers 3` |
+| Deployment | container image, one-GPU-machine compose file, Kubernetes for 500 callers (workers autoscaled on active calls, 2 vLLM replicas) | `deploy/` |
+
+Tested here: every booking test on a real PostgreSQL 16 (pgserver), a 16-caller race for one slot across 4 workers (exactly one
+booking), workers starting at the same moment, a call handed to another worker mid-booking, the router's choice and its "busy",
+the metrics, and the model server's plain, streaming, JSON and continue-a-reply requests.
+Not testable on this laptop: vLLM itself, Kubernetes, the ingress, and 500 real callers. Those need the company's hardware; the
+capacity probe and the load test (`--gateway`) are the tools to prove them there.

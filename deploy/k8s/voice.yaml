@@ -1,0 +1,104 @@
+# 500 callers at once on Kubernetes. Apply after filling in the image, the database secret and the domain:
+#   kubectl apply -f deploy/k8s/voice.yaml
+# Sizing (confirm with scripts/capacity_probe.py and scripts/load_test.py on the real cluster):
+#   workers  ~16 calls each  -> 32 replicas for 500 calls, +4 spare; CPU nodes
+#   model    vLLM, 2+ GPU replicas (one can fail); requests are batched, ~10-20% of callers wait on it at any moment
+#   database managed PostgreSQL (bookings + call snapshots + worker registry)
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: voice-db }
+stringData:
+  DATABASE_URL: postgresql://agmc:CHANGE-ME@postgres.internal:5432/agmc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: model-server }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: model-server } }
+  template:
+    metadata: { labels: { app: model-server } }
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args: ["--model", "Qwen/Qwen3-14B-AWQ", "--enable-prefix-caching", "--max-num-seqs", "256", "--gpu-memory-utilization", "0.85"]
+          ports: [{ containerPort: 8000 }]
+          resources: { limits: { nvidia.com/gpu: 1 } }
+          readinessProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 10, failureThreshold: 60 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: model-server }
+spec:
+  selector: { app: model-server }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: voice-worker }
+spec:
+  replicas: 36
+  selector: { matchLabels: { app: voice-worker } }
+  strategy: { rollingUpdate: { maxUnavailable: 2, maxSurge: 4 } }
+  template:
+    metadata:
+      labels: { app: voice-worker }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8765", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 900            # let calls in progress finish on a redeploy (a call lasts up to 15 min)
+      containers:
+        - name: worker
+          image: agmc/voice:latest
+          env:
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
+            - { name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
+            - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
+            - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+          command: ["sh", "-c"]
+          args: ["python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16
+                  --worker-id $POD_NAME --public-url wss://voice.agmc.ae/w/$POD_IP/voice --origin https://www.agmc.ae"]
+          ports: [{ containerPort: 8765 }]
+          resources: { requests: { cpu: "3", memory: 6Gi }, limits: { cpu: "4", memory: 8Gi } }
+          readinessProbe: { httpGet: { path: /health, port: 8765 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8765 }, periodSeconds: 15, failureThreshold: 4 }
+          volumeMounts: [{ name: models, mountPath: /app/models, readOnly: true }]
+      volumes: [{ name: models, persistentVolumeClaim: { claimName: speech-models } }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: voice-worker }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: voice-worker }
+  minReplicas: 8
+  maxReplicas: 48
+  metrics:                                           # keep workers ~70% full on average (needs the Prometheus adapter)
+    - type: Pods
+      pods: { metric: { name: voice_calls_active }, target: { type: AverageValue, averageValue: "11" } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: voice-router }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: voice-router } }
+  template:
+    metadata: { labels: { app: voice-router } }
+    spec:
+      containers:
+        - name: router
+          image: agmc/voice:latest
+          env: [{ name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }]
+          command: ["python", "-m", "dealer_core.gateway", "--host", "0.0.0.0", "--port", "8760", "--origin", "https://www.agmc.ae"]
+          ports: [{ containerPort: 8760 }]
+          readinessProbe: { httpGet: { path: /health, port: 8760 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: voice-router }
+spec:
+  selector: { app: voice-router }
+  ports: [{ port: 80, targetPort: 8760 }]
+# The ingress (not shown, depends on the cluster) serves https://voice.agmc.ae/assign -> voice-router, and
+# wss://voice.agmc.ae/w/<pod-ip>/voice -> that pod's port 8765 (so a call stays on the worker the router chose).
