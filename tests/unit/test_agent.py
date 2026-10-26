@@ -348,5 +348,5 @@ def test_cheaper_seats_sporty_reliable_and_the_weekend_are_routed_by_code():
     listed = e.handle(s2, "any budget").reply
     assert "Carnival" in listed and "Corolla" not in listed                  # the seats filter is kept
     s3 = e.new_session()
-    assert "M3" in e.handle(s3, "I want something sporty").reply
+    assert "sporty cars" in e.handle(s3, "I want something sporty").reply
     assert e.backend.decisions == ["search_cars"] or e.backend.decisions == []
