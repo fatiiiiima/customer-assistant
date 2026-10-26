@@ -203,6 +203,8 @@ class VoiceCfg(_Strict):
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stt_device: str = "CPU"                      # CPU | GPU (NPU cannot take the recognizer hint). small.en on the GPU: 21/24 of the owner's recordings in 0.17 s
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
+    speculate: bool = True                       # smart_turn: while it holds a pause as "still going", recognise the turn and make the model's decision in the
+                                                 # background; used as they are if the caller has in fact finished (no new speech before the fallback silence)
     bridge_after_ms: float = 450.0               # agent engine: when the model's decision (+ first sentence) is measured to take longer than this, a pre-rendered
                                                  # "Let me check." plays at once while it is made. ~1 s target minus end-of-turn (0.2-0.35 s), recognition and first audio. 0 = off
     stt_copies: int = 1                          # local recognizer copies per worker: calls in one worker transcribe in parallel instead of queueing on one lock

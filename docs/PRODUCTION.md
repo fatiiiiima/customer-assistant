@@ -168,14 +168,39 @@ detection and voice. Two options now:
   "not heard" (the caller is asked again); a worker that cannot reach the server at start-up does not start. `deploy/` runs one.
 * `voice.stt_copies` (CPU-only machines): several local copies, so a worker's calls transcribe in parallel.
 
-### Next, in order of value (not built)
+### Work started during Smart Turn's hold (built)
 
-1. **Start on the first silence, not the confirmed end of turn.** Transcribe and run the decision speculatively when the VAD first stops;
-   throw it away if Smart Turn says the caller is still talking. Saves recognition + decision time (~0.2-0.4 s) on most turns.
-2. **Constrained decision output.** The decision prompt returns free text that is parsed; with vLLM, `guided_choice` over the tool names
-   makes it a few tokens and never unparseable. A small dedicated decision model (`dialogue.decision_backend`) on the same vLLM halves it again.
-3. **Prompt order for the prefix cache.** `_context` puts the minute-level clock and the code hint before the conversation; put the
-   unchanging parts first so vLLM reuses more of each prompt.
-4. **WebRTC media (LiveKit)** instead of the WebSocket for production audio (section 4): jitter buffers, echo cancellation, reconnects.
-5. **Pin image versions** in `deploy/` (`vllm/vllm-openai:latest` changes under you), and set `voice.model_only: false` for production
-   (it is a test mode).
+When Smart Turn hears a pause but judges the sentence unfinished, the turn stays open until the caller speaks again or 0.6 s of silence
+passes (`voice.smart_fallback_secs`). Usually the caller had in fact finished, and only then did recognition and the model's decision
+start. Now the moment a pause is held, the turn so far is recognised and (agent engine) the decision is made in the background
+(`voice/speculate.py`). If the silence then ends the turn, both are used as they are: the turn ended on exactly that audio, and the
+decision is only used for the same words and if the call has not moved on. If the caller speaks again, both are dropped. This removes
+recognition + decision (~0.5 s on the laptop) from the turns Smart Turn hesitated on. Turns Smart Turn ends at once gain nothing (recognition
+already starts at once there). Cost: the work done for a caller who carries on is wasted; the decision is skipped when the governor says
+the model has no room (`has_room`). The audio from just before speech was detected (0.5 s) is kept, so the first syllable is not lost.
+`voice.speculate` (on).
+
+### The decision, constrained to what is in play (built, vLLM)
+
+The model's tool decision was free text, parsed. On an OpenAI-compatible server that supports it, the request now lists every allowed
+answer: each tool, and the tools about one car paired only with the cars in play (the code hint for the caller's words, the car in focus,
+the cars just listed). vLLM then cannot answer anything else: no chatter, no invented stock id, a few tokens. Field:
+`structured_outputs: {"choice": [...]}` (vLLM 0.12+; it replaced `guided_choice`). A server that refuses it (HTTP 400) is asked in free
+text from then on; one that ignores it (the local `dealer_core.modelserver`) answers in free text, parsed as before. Not used with the
+in-process OpenVINO model: it compiles a grammar per list (seconds) and the list changes every turn.
+
+### Images pinned, production out of test mode (done)
+
+`deploy/` pins vLLM `v0.31.0`, PostgreSQL `16.15`, Prometheus `v3.15.0`; our own image takes a release tag (`VOICE_TAG` in compose,
+`RELEASE_TAG` in Kubernetes). Workers run with `VA__VOICE__MODEL_ONLY=false`.
+
+### Not done, and why
+
+* **Prompt order for the prefix cache.** On a closer look it gains little: the conversation in the decision prompt is a sliding window
+  (the last 4 lines), so the prompt after the system part changes every turn whatever the order. The long system prompt, the part worth
+  caching, is already first and shared by every call.
+* **WebRTC media (LiveKit)** instead of the WebSocket (section 4): needs the website's page (`bmw-portal`, another repository) and a LiveKit
+  server; the worker side is a transport swap in `server/app.py`.
+* The intent call (state-machine engine) still sends `guided_json` next to `response_format`. vLLM 0.12+ no longer reads `guided_json`, but
+  its request models accept unknown top-level fields, so `response_format` should carry the schema: confirm on the pinned version with
+  the capacity probe, and drop `guided_json` once the local model server reads `structured_outputs`.

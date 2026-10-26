@@ -159,6 +159,14 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             endpointer.peek = lambda pcm: asyncio.to_thread(lambda: parts.stt_engine.transcribe(pcm, stt.prompt_for())[0])
             endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
                                                                    app.inventory.vocabulary(), app.service.clock(), tz)
+        if vcfg.speculate:                                    # recognise (and decide) during Smart Turn's hold; used if the caller has finished
+            from .services import clean_transcript
+            from .speculate import Speculation
+
+            spec = Speculation(lambda pcm: clean_transcript(parts.stt_engine.transcribe(pcm, stt.prompt_for())[0]),
+                               (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
+                               lambda: len(brain.session.history))
+            endpointer.speculation = stt.speculation = brain.speculation = spec
         stages.append(endpointer)
     if on_user_stop is not None:                              # tap-to-talk: told when the turn is over, so the microphone can be closed
         from .micgate import StopNotifier

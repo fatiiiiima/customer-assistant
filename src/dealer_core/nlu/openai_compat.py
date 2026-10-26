@@ -11,7 +11,9 @@ job; vLLM does both. Nothing here leaves the network: `base_url` points at the c
       model: Qwen/Qwen3-14B-AWQ              # the name the server knows it by
       timeout_s: 6.0
 
-Structured output for the intent call uses the server's JSON-schema support (vLLM: `guided_json`, others: `response_format`). A reply begun
+Structured output for the intent call uses the server's JSON-schema support (vLLM: `guided_json`, others: `response_format`); the agent's
+tool decision uses vLLM's `structured_outputs: {"choice": [...]}` (vLLM 0.12+, where it replaced `guided_choice`): the model can only answer
+one of the listed actions; see `choose`. A reply begun
 by code ("prefill") is continued with `continue_final_message` (vLLM) and, for servers without it, by telling the model what was said.
 """
 from __future__ import annotations
@@ -38,6 +40,7 @@ class OpenAICompatBackend(NluBackend):
         key = os.environ.get(cfg.api_key_env) if cfg.api_key_env else None
         self.client = httpx.Client(timeout=cfg.timeout_s, headers={"Authorization": f"Bearer {key}"} if key else {},
                                    limits=httpx.Limits(max_connections=cfg.max_parallel, max_keepalive_connections=cfg.max_parallel))
+        self.can_choose = True                     # False once the server refused a constrained choice (then the decision is asked as free text)
 
     def health(self) -> BackendHealth:
         try:
@@ -103,6 +106,23 @@ class OpenAICompatBackend(NluBackend):
     def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
         out = self._post(self._body(system, user, max_tokens, temperature), deadline_s or self.cfg.timeout_s)
         return re.sub(r"^\s*<think>.*?</think>\s*", "", out["choices"][0]["message"]["content"] or "", flags=re.S)
+
+    def choose(self, system: str, user: str, options: list[str], max_tokens: int = 16, deadline_s: float | None = None) -> str | None:
+        """One of `options` word for word (vLLM `structured_outputs.choice`): a few tokens, never chatter, never an action or car id not listed.
+        A server that ignores the field answers in free text, which the caller parses as before. None if the server refuses it (HTTP 400):
+        the caller then asks for free text, and this server is not asked this way again."""
+        if not self.can_choose:
+            return None
+        body = self._body(system, user, max_tokens, 0.0)
+        body["structured_outputs"] = {"choice": list(options)}
+        try:
+            out = self._post(body, deadline_s or self.cfg.timeout_s)
+        except BackendError as e:
+            if "HTTP 400" in str(e):
+                self.can_choose = False
+                return None
+            raise
+        return re.sub(r"^\s*<think>.*?</think>\s*", "", out["choices"][0]["message"]["content"] or "", flags=re.S).strip()
 
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
                        deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
