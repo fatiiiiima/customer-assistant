@@ -1,1 +1,0 @@
-C:/dev/voice-agent/.venv/Lib/site-packages/pgserver/pginstall/bin/postgres.exe "-D" "C:/dev/voice-agent/data/pg_test" "-h" "127.0.0.1" "-p" "62838"

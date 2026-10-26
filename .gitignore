@@ -11,3 +11,6 @@ benchmarks/recordings/*.wav
 benchmarks/results/synth/
 samples/
 recordings/
+
+# local PostgreSQL data (pgserver)
+data/pg_*/
