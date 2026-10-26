@@ -273,7 +273,12 @@ _NAME_CUE = re.compile(r"(?:my name is|this is|i am|i'm|it is|it's|its|name's|ca
                        r"(?=\s+(?:and|my|phone|number|mobile|call|reach|you can)\b|[,.;:\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)",
                        re.I)
 _STOP = {"yes", "no", "ok", "okay", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
-        "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh"}
+        "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh",
+        # words of a time or day, never of a name: "to PM" (two PM misheard), "tomorrow at", "at two"
+        "to", "too", "for", "at", "on", "in", "by", "pm", "p.m", "a.m", "tomorrow", "today", "tonight", "morning", "afternoon", "evening", "noon",
+        "midday", "o'clock", "oclock", "half", "past", "quarter", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "next", "week", "weekend",
+        "can", "could", "would", "i'd", "like", "want", "book", "test", "drive", "car", "time", "day", "fine", "good", "great", "perfect", "first", "second"}
 
 
 @dataclass(frozen=True)

@@ -54,8 +54,11 @@ class NluBackend(ABC):
         raise BackendError(f"{self.name} cannot write lead-ins")
 
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
-                       deadline_s: float | None = None) -> Iterator[str]:
-        """Free text as it is produced (pieces of a few characters). Backends that cannot stream give the whole text at once."""
+                       deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
+        """Free text as it is produced (pieces of a few characters). Backends that cannot stream give the whole text at once.
+        `prefill`: the reply already begun by code. A backend that cannot continue a started reply is told what was said instead."""
+        if prefill:
+            user = f"{user}\n(You have already said: \"{prefill.strip()}\". Write only what comes next.)"
         yield self.lead_in(system, user, max_tokens, temperature, deadline_s)
 
     @abstractmethod

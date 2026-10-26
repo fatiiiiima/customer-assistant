@@ -65,6 +65,7 @@ class Session:
     pending_cancel: KnownBooking | None = None               # agent engine: "shall I cancel ...?" asked, yes/no awaited
     replacing: KnownBooking | None = None                    # agent engine: the booking being moved; cancelled once the new one is booked
     cancelled: list[KnownBooking] = field(default_factory=list)        # cancelled in this call (the server tells the page)
+    described: str = ""                                      # agent engine: the car whose full line was just read out
 
     def remember(self, who: str, text: str) -> None:
         """Keep the conversation so far (this call only; never written to a log). The reply writer and the intent call read it."""

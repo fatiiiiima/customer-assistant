@@ -47,7 +47,13 @@ def _clean(text: str) -> str:
     t = text.lower().replace("’", "'")
     t = re.sub(r"(\d)\s*(a|p)\.?\s*m\.?", r"\1 \2m", t)               # 4 p.m. -> 4 pm
     t = re.sub(r"[^a-z0-9: ]+", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    # Words the recognizer writes for a spoken hour: "to PM" / "too PM" (two), "for PM" (four), "ate" (eight), "won" (one) - only right
+    # before am / pm / o'clock, or after "at", where they cannot mean anything else
+    homophones = {"to": "two", "too": "two", "for": "four", "fore": "four", "ate": "eight", "won": "one", "tree": "three"}
+    t = re.sub(r"\b(to|too|for|fore|ate|won|tree)(?= (?:am|pm|a m|p m|o clock)\b)", lambda m: homophones[m[1]], t)
+    t = re.sub(r"\b(at) (to|too|for|fore|ate|won|tree)\b(?! (?:the|a|an|my|you|me|it)\b)", lambda m: f"{m[1]} {homophones[m[2]]}", t)
+    return t
 
 
 def _parse_day(t: str, today: date) -> tuple[date | None, str]:

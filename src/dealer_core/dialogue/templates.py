@@ -31,6 +31,22 @@ def short_name(c: CarView) -> str:
     return f"{c.make} {c.model}" if len(c.model) <= 3 or any(ch.isdigit() for ch in c.model[:2]) else c.model
 
 
+def clock(dt: datetime) -> str:
+    """'9 AM', '2:30 PM': the time alone, for when the day has just been said."""
+    h = dt.hour % 12 or 12
+    return f"{h}{f':{dt.minute:02d}' if dt.minute else ''} {'AM' if dt.hour < 12 else 'PM'}"
+
+
+def day_name(day, now: datetime) -> str:
+    """'today', 'tomorrow', 'on Thursday', 'on Saturday, 7 November'."""
+    days = (day - now.date()).days
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return f"on {day:%A}" if days < 7 else f"on {day:%A}, {day.day} {day:%B}"
+
+
 def when_clock(hour: int) -> str:
     h = hour % 12 or 12
     return f"{h} {'AM' if hour < 12 else 'PM'}"

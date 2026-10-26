@@ -224,7 +224,7 @@ def test_the_owners_transcript_of_23_october():
     e, _ = engine(["search_cars", "get_car", "prepare_booking", "get_car", "prepare_booking"])   # "anything works" is decided by code
     s = e.new_session()
     e.handle(s, "Toyota")
-    assert "Of the 4" in e.handle(s, "anything works").reply and "one more" in s.history[-1][1]
+    assert "plus one more" in e.handle(s, "anything works").reply
     e.handle(s, "Corolla.")
     e.handle(s, "yes, I want a test drive")
     e.handle(s, "tomorrow at nine a.m.")
@@ -247,7 +247,7 @@ def test_any_range_or_style_lists_the_cars_without_the_model():
     s = e.new_session()
     e.handle(s, "Toyota")
     r = e.handle(s, "any range or style")
-    assert r.debug.intent == "search_cars" and "Of the 4" in r.reply and e.backend.decisions == []
+    assert r.debug.intent == "search_cars" and "plus one more" in r.reply and e.backend.decisions == []
 
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
@@ -288,3 +288,23 @@ def test_existing_bookings_can_be_listed_cancelled_after_a_yes_and_moved():
     assert "now Sunday at 10:00 AM" in e.handle(s, "yes").reply
     assert [k.ref for k in s.cancelled] == ["TD-A", "TD-B"] and s.known_bookings[0].start.hour == 10 and s.booking is not None
     assert e.backend.decisions == []
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_the_owners_call_of_26_october_two_pm_misheard_as_to_pm():
+    """'to PM' (two PM misheard) after the times were offered: tomorrow at 2 PM, and never the customer's name."""
+    e, _ = engine(["search_cars"])
+    e.prefix_mode = True
+    s = e.new_session()
+    e.handle(s, "Toyota.")
+    e.handle(s, "any budget.")
+    e.handle(s, "Corolla")
+    assert e.handle(s, "yes").debug.intent == "prepare_booking"              # yes to "want to book a test drive?"
+    assert "9 AM or 2 PM" in e.handle(s, "tomorrow.").reply
+    e.handle(s, "to PM.")
+    assert s.draft_slot is not None and s.draft_slot.hour == 14 and s.draft_name is None
+    e.handle(s, "Fatima")
+    assert "for Fatima" in e.handle(s, "0507902546").reply
+    e.handle(s, "yes")
+    assert s.booking is not None and s.booking.customer_name == "Fatima"
+    assert "41,000 kilometres" in e.handle(s, "how many kilometres has it done").reply      # after booking, car questions still work

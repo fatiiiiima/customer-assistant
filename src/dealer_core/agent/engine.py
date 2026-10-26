@@ -23,6 +23,7 @@ from difflib import SequenceMatcher
 
 from ..dialogue import templates as T
 from . import answers as A
+from . import wording as W
 from ..dialogue import voice_rules
 from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
@@ -53,6 +54,8 @@ _MOVE = re.compile(r"\b(?:move|reschedule|re schedule|postpone|push (?:it|back)|
                    r"change (?:the|my) (?:time|day|date|booking|test drive|appointment)|different (?:time|day)|another (?:time|day))\b")
 _COMPARE = re.compile(r"\b(?:compare|comparison|difference|differences|versus|vs|which (?:one )?is better|which (?:one )?should i|better between|"
                       r"how do they compare|side by side)\b")
+_OFFERED_DRIVE = re.compile(r"\b(?:test drive|take a look|have a look|look at it|check it out|come (?:in|and see|by)|see it|in person|take (?:it|her) for a spin|a spin|drive it|"
+                            r"schedule|book|set up|visit|viewing|try it)\b")
 _THANKS = re.compile(r"(?:(?:ok|okay|great|perfect|alright|lovely|cool|awesome) )?(?:thank you|thanks|thank you so much|thanks a lot|cheers)(?: (?:so much|very much|a lot))?")
 _LOOKING = re.compile(r"\b(?:looking for|look for|do you have|have you got|any|show me|what about|how about|interested in|i want|i'd like|i would like)\b")
 _FILLER = {"the", "a", "an", "and", "so", "uh", "um", "umm", "hmm", "er", "erm", "ah", "oh", "to", "of", "in", "is", "it", "but", "or", "well"}
@@ -317,7 +320,8 @@ class AgentEngine:
                 return
             reasons = "; ".join(problems)
         stats["reason"] = reasons
-        dbg.note = (dbg.note + "; " if dbg.note else "") + f"prefix mode: follow-up rejected ({reasons})"
+        dbg.note = (dbg.note + "; " if dbg.note else "") + f"prefix mode: follow-up rejected ({reasons}); the code's own question was said"
+        yield question                                         # never end on a statement: the caller must know what is being asked
 
     # ------------------------------------------------------------------------------------------------ the decision
     def _context(self, s: Session) -> str:
@@ -363,6 +367,11 @@ class AgentEngine:
             return {"tool": "cancel_booking", "via": "rules"}                    # the answer to "shall I cancel ...?"
         if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):
             return {"tool": "cancel_booking" if s.pending.kind == "cancel_which" else "reschedule_booking", "via": "rules"}
+        q = expected.last_question(s.last_agent()).lower()
+        offered = _OFFERED_DRIVE.search(q) or (s.described == s.car and q and not re.search(
+            r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
+        if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and _PLAIN_YES.fullmatch(joined) and offered:
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
         if _THANKS.fullmatch(joined):
             return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
         if not booking_flow:
@@ -512,20 +521,18 @@ class AgentEngine:
             sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
         if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
             s.narrow_asks += 1
-            return {"core": f"I have {res.total} cars like that. Could you tell me your budget or a make?",
+            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} Could you tell me your budget or a make?",
                     "facts": [f"Search for {wanted}: exactly {res.total} cars match (say the number {res.total}, never 'a few' or 'several'), too many to read out. Examples:", *sheet,
                               "Ask one narrowing question (budget, make, body type or colour) instead of listing them all."], "awaiting": True}
         more = res.total - len(res.cars)
         if not res.needs_narrowing:
             s.narrow_asks = 0
-        items = [f"a {T.car_name(c)} at {T.money(c.price)}" for c in res.cars]
-        listed = items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
-        ask = "Would you like to hear more, or book a test drive?" if len(items) == 1 else "Which one would you like to hear more about?"
-        if more > 0:                                                       # say the total, so "I have 4" and three names do not contradict each other
-            others = "one more" if more == 1 else f"{more} more"
-            return {"core": f"Of the {res.total}, I have {listed}, and {others}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
+        ask = "Would you like to hear more, or book a test drive?" if len(res.cars) == 1 else "Which one would you like to hear more about?"
+        listed = W.list_line(s, list(res.cars), res.total)               # says "plus one more" when the list is 3 of 4
+        if more > 0:
+            return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
                                                               *([f"There are {more} more not listed: say how many in total ({res.total}) and read out only these {len(res.cars)}."] if more > 0 else [])], "awaiting": True}
-        return {"core": f"I have {listed}. {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet], "awaiting": True}
+        return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet], "awaiting": True}
 
     def _t_get_car(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
@@ -538,19 +545,31 @@ class AgentEngine:
         dbg.tools.append(f"get_car({car.stock_id}) -> {car.status.value}")
         facts = ["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]
         words = " ".join(ex.tokens_of(text))
-        ask = "Would you like to book a test drive?"
+        ask = W.offer_test_drive(s)
         if HAGGLE.search(words) or _VALUE.search(words):                 # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
             return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
         detail = A.detail_answer(car, self.svc.site.cars.get(car.stock_id), words)
         if detail:                                                       # warranty, accident, engine, boot, "does it have a sunroof?": from the spec sheet
             return {"core": " ".join(detail) + " " + ask, "facts": facts + [f"Answered from the spec sheet: {' '.join(detail)}"], "awaiting": True}
-        just_said = any(who == "agent" and T.car_name(car) in t for who, t in s.history[-2:])
+        just_said = s.described == car.stock_id
         if just_said:                                                    # the caller heard the full line a moment ago: answer only what was asked
             part = [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."), ("price", f"It's {T.money(car.price)}."),
                                      ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
             if part:
                 return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
-        return {"core": f"It's the {T.car_name(car)}, {car.color}, {car.km:,} kilometres, {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
+        s.described = car.stock_id
+        return {"core": f"{W.car_line(s, car)} {ask}", "facts": facts, "awaiting": True}
+
+    @staticmethod
+    def _offered_pick(s: Session, text: str):
+        """Which of the times just offered the caller means: "the first one", "the second", "the morning one", "the later one"."""
+        words = " ".join(ex.tokens_of(text))
+        slots = sorted(s.offered_slots)
+        if re.search(r"\b(?:first|earlier|earliest|morning)\b", words):
+            return slots[0]
+        if re.search(r"\b(?:second|last|later|latest|afternoon|evening)\b", words) and len(slots) > 1:
+            return slots[-1]
+        return None
 
     def _booked_car(self, s: Session) -> str:
         car = self.svc.get_car(s.booking.stock_id) if s.booking else None
@@ -602,10 +621,17 @@ class AgentEngine:
         problems: list[str] = []
         if when and when.lower() not in ("null", "none"):
             w = parse_when(when, now, tz)
-            if w.day and w.time:
-                chosen = combine(w.day, w.time, tz)
+            day, tm = w.day, w.time
+            if tm is None and day is None and s.offered_slots:          # "the first one", "the afternoon one", "the later one"
+                pick = self._offered_pick(s, when)
+                if pick is not None:
+                    day, tm = pick.date(), pick.time()
+            if tm is not None and day is None and (s.slot_day or s.offered_slots):   # "2 PM" right after "tomorrow I can do 9 AM or 2 PM"
+                day = s.slot_day or s.offered_slots[0].date()
+            if day and tm:
+                chosen = combine(day, tm, tz)
                 reason = self.svc.slots.invalid_reason(car.branch_id, chosen)
-                free = self.svc.slots.free_slots(car, w.day) if reason is None else []
+                free = self.svc.slots.free_slots(car, day) if reason is None else []
                 if reason or chosen not in free:
                     alts = list(self.svc.slots.alternatives(car, chosen))[:2]
                     s.draft_slot, s.state = None, State.SLOT                     # waiting for another time: the next answer is a time
@@ -618,18 +644,21 @@ class AgentEngine:
                     return {"core": f"{why} How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
                             "facts": [f"The requested time is not available: {why}", f"Nearest free: {self._slot_text(alts, now)}."]}
                 s.draft_slot = chosen
-            elif w.day and not w.time:
-                free = list(self.svc.slots.free_slots(car, w.day))
+                s.offered_slots, s.slot_day = [], None
+            elif day and not tm:
+                free = list(self.svc.slots.free_slots(car, day))
                 pick = [free[0], free[len(free) // 2]] if len(free) > 1 else free[:1]
                 if pick:
-                    return {"core": f"On {w.day:%A} I can do {self._slot_text(pick, now)}. Which would you like?", "risk": "high", "awaiting": True,
-                            "facts": [f"The customer gave a day but no time. Free on {w.day:%A}: {self._slot_text(pick, now)} (and others)."]}
+                    s.offered_slots, s.slot_day, s.state = pick, day, State.SLOT
+                    times = " or ".join(T.clock(x) for x in pick)
+                    return {"core": f"{T.cap(T.day_name(day, now))} I can do {times}. Which suits you better?", "risk": "high", "awaiting": True,
+                            "facts": [f"The customer gave a day but no time. Free on {day:%A}: {times} (and others)."]}
             else:
                 problems.append("the day and time were not understood")
         missing = [x for x, v in (("day and time", s.draft_slot), ("name", s.draft_name), ("mobile number", s.draft_phone)) if not v]
         s.state = State.SLOT if not s.draft_slot else State.CONTACT
         if missing and not s.draft_slot and not s.draft_name and not s.draft_phone:
-            return {"core": f"Of course. Which day and time would suit you for the {T.car_name(car)}?", "risk": "high", "awaiting": True,
+            return {"core": W.ask_day(s, car), "risk": "high", "awaiting": True,
                     "facts": [f"The customer wants a test drive of the {T.car_name(car)}. Nothing is booked yet.", *fact_sheet([car], self._branch_name).splitlines(),
                               "Ask which day and time suit them. Do not say anything is booked or confirmed, and do not offer times yourself.",
                               "Do not read the car's details out again; the customer knows the car."]}
@@ -637,7 +666,7 @@ class AgentEngine:
             need = " and ".join(missing)
             known = [f"{k}: {v}" for k, v in (("when", T.when_full(s.draft_slot) if s.draft_slot else None), ("name", s.draft_name),
                                               ("phone", speak_phone(s.draft_phone) if s.draft_phone else None)) if v]
-            return {"core": f"To book the {T.car_name(car)} I still need your {need}.", "risk": "high", "awaiting": True,
+            return {"core": W.ask_missing(s, missing, s.draft_name), "risk": "high", "awaiting": True,
                     "facts": [f"Booking draft for the {T.car_name(car)}. Known: {'; '.join(known) or 'nothing yet'}.", f"Still missing: {need}.",
                               *fact_sheet([car], self._branch_name).splitlines(),
                               *[f"Note: {p}." for p in problems], "Ask for the missing detail(s) only, in plain words (no 'I'll' or 'we'll'). Nothing is booked yet: do not say it is booked, confirmed or arranged.",
@@ -650,8 +679,7 @@ class AgentEngine:
                     "facts": [f"The car is no longer available ({status.value if status else 'sold'}).", *fact_sheet(list(similar[:2]), self._branch_name).splitlines()]}
         s.read_back = True
         s.state = State.CONFIRM
-        line = (f"Let me confirm: a test drive of the {T.car_name(car)} on {T.when_full(s.draft_slot)} at our {self._branch_name(car)}, "
-                f"for {s.draft_name}, phone {speak_phone(s.draft_phone)}. Is that right?")
+        line = W.read_back(car, s.draft_slot, self._branch_name(car), s.draft_name, speak_phone(s.draft_phone))
         if s.replacing is not None and s.replacing.stock_id == car.stock_id:
             line = (f"Let me confirm: I'll move your test drive of the {T.car_name(car)} from {T.when_short(s.replacing.start, now)} "
                     f"to {T.when_full(s.draft_slot)}. Is that right?")
@@ -679,7 +707,7 @@ class AgentEngine:
             if back.kind is BookingKind.BOOKED:
                 old.booking_id = back.booking.booking_id
         if out.kind is BookingKind.BOOKED:
-            s.booking, s.state = out.booking, State.CONFIRM
+            s.booking, s.state = out.booking, State.ANSWERING          # booked: back to talking about cars (questions, another booking)
             s.draft_slot = None
             s.known_bookings.append(KnownBooking(car.stock_id, out.booking.start, s.draft_name or "", s.draft_phone or "", booking_id=out.booking.booking_id))
             if old is not None:
@@ -688,7 +716,7 @@ class AgentEngine:
                 return {"core": f"Done. Your test drive of the {T.car_name(car)} is now {T.when_short(out.booking.start, now)}.", "risk": "high", "awaiting": False,
                         "facts": [f"MOVED: {T.car_name(car)} from {T.when_full(old.start)} to {T.when_full(out.booking.start)}."]}
             lic = " Please bring a valid driving licence." if self.svc.cfg.test_drive.licence_required else ""
-            return {"core": f"You're booked for {T.when_short(out.booking.start, now)}.{lic}", "risk": "high", "awaiting": False,
+            return {"core": W.booked(s, T.when_short(out.booking.start, now).replace(":00 ", " "), bool(lic)), "risk": "high", "awaiting": False,
                     "facts": [f"BOOKED: {T.car_name(car)} on {T.when_full(out.booking.start)} for {s.draft_name}.",
                               "Please bring a valid driving licence." if lic else "The booking is made."]}
         if out.kind in (BookingKind.SLOT_TAKEN, BookingKind.SLOT_INVALID):
