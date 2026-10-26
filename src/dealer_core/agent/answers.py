@@ -32,6 +32,7 @@ TOPICS: dict[str, re.Pattern] = {
     "spec": re.compile(r"\bgcc\b|\bspecs?\b|\bimport\w*\b|\bamerican spec\b|\bus spec\b|\bregional\b"),
     "gearbox": re.compile(r"\bgear ?box\b|\btransmission\b|\bautomatic\b|\bmanual\b|\bgears\b"),
     "fuel": re.compile(r"\b(?:petrol|diesel|hybrid|electric|ev|plug in)\b|\bwhat fuel\b|\bfuel type\b"),
+    "range": re.compile(r"\b(?:range|how far can it (?:go|drive)|on a (?:full )?charge|battery)\b"),
     "features": re.compile(r"\bfeatures?\b|\bextras?\b|\bequipment\b|\boptions\b|\bwhat does it come with\b|\bwhat comes with\b|\bloaded\b"),
     "about": re.compile(r"\btell me (?:more|about it|everything)\b|\bdescribe\b|\bwhat is it like\b|\bwhat's it like\b|\bany good\b(?! for)|\bworth (?:it|buying)\b"),
 }
@@ -132,6 +133,8 @@ def detail_answer(car: CarView, d: CarDetails | None, words: str) -> list[str] |
             "fuel": f"It's {'a hybrid' if car.fuel == 'hybrid' else 'electric' if car.fuel == 'electric' else car.fuel}.",
             "features": f"Highlights include {_feature_list(d, 4)}.",
             "about": d.blurb if d.blurb.endswith(".") else d.blurb + ".",
+            "range": ("I don't have its range figure on file, but it uses about " + spoken_consumption(d.consumption) + "."
+                      if car.fuel == "electric" else f"It uses about {spoken_consumption(d.consumption)}."),
         }[t]
         if t == "inspection" and "accident" in out:
             continue
@@ -202,6 +205,7 @@ SUPERLATIVES = {  # caller's words -> (what is compared, larger wins?, how it is
     "lowest mileage": (re.compile(r"\b(?:lowest (?:mileage|kilomet\w*)|least (?:mileage|kilomet\w*|driven)|fewest kilomet\w*)\b"), "km", False),
     "most economical": (re.compile(r"\b(?:most (?:economical|efficient|fuel efficient)|best (?:fuel|economy|mileage)|uses the least)\b"), "economy", False),
     "biggest boot": (re.compile(r"\b(?:biggest|largest|most) (?:boot|trunk|luggage|space)\b"), "boot", True),
+    "best for a family": (re.compile(r"\b(?:better|best|good) (?:for (?:a |the )?famil\w+|family car)\b|\bfor (?:a |the )?family\b"), "family", True),
     "most seats": (re.compile(r"\b(?:most seats|biggest|largest|roomiest|most space)\b"), "seats", True),
 }
 
@@ -230,6 +234,8 @@ def best_of(cars: list[CarView], details: dict[str, CarDetails], words: str) -> 
         if key == "economy":
             m = re.match(r"[\d.]+", d.consumption)
             return float(m.group()) if m and "L/100" in d.consumption else None
+        if key == "family":
+            return d.seats * 1000 + d.boot_litres                         # seats first, then the boot
         return {"accel": d.accel_0_100, "power": d.power_hp, "boot": d.boot_litres, "seats": d.seats}[key]
 
     scored = [(value(c), c) for c in cars if value(c) is not None]
@@ -239,7 +245,7 @@ def best_of(cars: list[CarView], details: dict[str, CarDetails], words: str) -> 
     d = details.get(best.stock_id)
     what = {"accel": f"nought to a hundred in {v:g} seconds", "power": f"{v} horsepower", "price": T.money(v), "year": f"a {v}",
             "km": f"{v:,} kilometres", "economy": f"about {spoken_consumption(d.consumption)}" if d else "", "boot": f"{v} litres of boot space",
-            "seats": f"{v} seats"}[key]
+            "seats": f"{v} seats", "family": f"{d.seats} seats and a {d.boot_litres}-litre boot" if d else ""}[key]
     among = "of these" if len(scored) > 1 else ""
     return best, f"The {topic} {among} is the {T.short_name(best)}, with {what}.".replace("  ", " ").replace(" with a ", ", a ")
 

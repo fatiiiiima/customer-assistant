@@ -46,7 +46,7 @@ def test_json_is_found_inside_chatter():
 
 @pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
 def test_a_booking_needs_a_read_back_and_a_yes_and_is_then_made_by_code():
-    e, app = engine(["search_cars", "prepare_booking AG-122", "prepare_booking AG-122", "prepare_booking AG-122", "confirm_booking"])
+    e, app = engine([])                                                   # every turn is decided by code now
     s = e.new_session()
     e.handle(s, "a bmw m3")
     assert s.car == "AG-122"
@@ -213,7 +213,7 @@ def test_questions_about_the_car_just_discussed_are_answered_by_code_and_short()
     assert "kilometres" in km and "dirhams" not in km                        # just what was asked, not the whole line again
     haggle = e.handle(s, "can you do it for less").reply
     assert "fixed" in haggle.lower() and haggle.lower().count("dirhams") == 1
-    assert e._fast_decide(s, "how much is the toyota camry") is None          # another car named: the model decides
+    assert e._fast_decide(s, "how much is the toyota camry")["car_id"] == "AG-102"   # another car named: that car
     assert e._fast_decide(s, "does it have a warranty")["tool"] == "get_car"  # answered from the spec sheet
     assert e._fast_decide(s, "is it any good for off roading in the desert") is None   # nothing the data answers: the model
 

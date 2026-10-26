@@ -269,7 +269,7 @@ def asks_if_only_one(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------------- contact details
-_NAME_CUE = re.compile(r"(?:my name is|this is|i am|i'm|it is|it's|its|name's|call me|name:)\s+([A-Za-z][A-Za-z' ]*?)"
+_NAME_CUE = re.compile(r"(?:my name is|the name is|name is|this is|i am|i'm|it is|it's|its|name's|call me|name:)\s+([A-Za-z][A-Za-z' ]*?)"
                        r"(?=\s+(?:and|my|phone|number|mobile|call|reach|you can)\b|[,.;:\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)",
                        re.I)
 _STOP = {"yes", "no", "ok", "okay", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",

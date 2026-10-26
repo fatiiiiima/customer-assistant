@@ -34,8 +34,14 @@ def what_they_asked(cars: list[CarView], filters: dict) -> str:
         return plural(T.short_name(cars[0]))
     name = next((c.make for c in cars), make.title()) if make else ""
     kind = {"suv": "SUVs", "sedan": "sedans", "hatchback": "hatchbacks", "coupe": "coupes", "van": "vans", "pickup": "pickups"}.get(str(body or ""), "")
+    colour = str(filters.get("color") or "")
     if name and kind:
-        return f"{name} {kind}"
+        return f"{colour + ' ' if colour else ''}{name} {kind}"
+    if colour:
+        return f"{colour} {kind or (plural(name) if name else 'cars')}"
+    fuel = filters.get("fuel")
+    if fuel:
+        return f"{'electric' if fuel == 'electric' else fuel} {kind or 'cars'}"
     return plural(name) if name else kind or "cars that fit"
 
 
@@ -70,6 +76,10 @@ def car_line(s: Session, c: CarView) -> str:
         f"That's a {c.year} {c.model}, {c.color}, {km}, and it's {price}.",
         f"The {c.model} is a {c.year} in {c.color}. It's done {km} and it's {price}.",
     ])
+
+
+def anything_else(s: Session) -> str:
+    return pick(s, "else", ["Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?"])
 
 
 def offer_test_drive(s: Session) -> str:
