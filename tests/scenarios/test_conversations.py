@@ -61,6 +61,7 @@ CALLS = {
     "details of one car": ["tell me about the Land Cruiser", "is it reliable", "how many owners has it had", "does it have a sunroof",
                            "is it four wheel drive", "what's the fuel economy like", "has it been in an accident"],
     "haggling": ["BMW X5", "how much is it", "can you do 180,000", "what is your best price", "is that a good price"],
+    "offer on the car then best price": ["Toyota Land Cruiser", "how much is it", "can you do one hundred and fifty thousand", "What is your best price?"],
     "showroom questions": ["what time do you open", "where are you located", "do you have a branch in sharjah", "what's your whatsapp number"],
     "compare": ["Toyota", "compare the Camry and the RAV4", "which one is better for a family", "the RAV4"],
     "time not offered": ["Toyota", "the Corolla", "can I book a test drive", "tomorrow", "5 PM", "no, 2 PM", "Sara", "055 123 4567", "yes"],
@@ -124,3 +125,28 @@ def test_a_call_holds_up_without_the_model(name):
             problems.append(f"'nothing matches' right after a list, after {line!r}")
     transcript = "\n".join(f"  YOU: {l}\n  WAZIR: {r}" for l, r, _ in replies)
     assert not problems, "\n".join(problems) + "\n\n" + transcript
+
+
+def test_openers_start_fact_replies_once_and_read_naturally():
+    """With openers on, a fact reply starts with a short acknowledgement (the voice has it ready), never two, and the words after it
+    are not capitalised as if a new sentence began."""
+    from dealer_core.agent.wording import NEUTRAL_OPENERS, OPENERS
+
+    OPENERS = OPENERS + NEUTRAL_OPENERS
+
+    e, app = agent()
+    e.openers = True
+    opened = 0
+    for name, lines in CALLS.items():
+        s = e.new_session()
+        e.opening(s)
+        for line in lines:
+            r = e.handle(s, line)
+            first = r.reply.split(" ", 1)
+            if r.debug.intent in ("search_cars", "browse_makes", "compare_cars", "best_of", "get_car") and first[0] + (" " + first[1].split(" ", 1)[0] if " " in first[1] else "") in [o for o in OPENERS] or first[0] in OPENERS:
+                opened += 1
+                after = r.reply[len(next(o for o in OPENERS if r.reply.startswith(o))):].strip()
+                assert not any(after.startswith(o) for o in OPENERS), (name, line, r.reply)
+                assert not re.match(r"(We've|There|It's|That's|The|We) ", after), (name, line, r.reply)
+            assert not re.match(r"(Sure|Okay|Right|Alright|Let's see|Sure thing), (Sure|Okay|Great|Sorry|Of course)\b", r.reply), (name, line, r.reply)
+    assert opened >= 20

@@ -171,6 +171,7 @@ class DialogueCfg(_Strict):
     quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code (agent/governor.py)
     model_budget_ms: float = 700.0               # auto: time to the model's first sentence that still keeps the reply under ~1 s; slower -> prefix
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
+    openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
     engine: str = "state_machine"                # "state_machine" (code decides, model words) | "agent" (the model picks tools, code runs them; experimental)
     high_risk_drafts: bool = True                # conversational mode: let the model word price/booking/hand-off replies too (exact figures verified)

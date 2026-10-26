@@ -78,6 +78,20 @@ def car_line(s: Session, c: CarView) -> str:
     ])
 
 
+OPENERS = ["Sure,", "Okay,", "Right,", "Alright,", "Let's see,", "So,"]
+NEUTRAL_OPENERS = ["Okay,", "Right,", "Hmm,"]                  # before a "no" ('Sure, I don't see a sunroof' sounds wrong)
+
+
+def checking(s: Session) -> str:
+    """Said before the free times: the voice has it ready, so it plays while the times are being spoken into audio."""
+    return pick(s, "checking", ["Let me check.", "Let me see.", "Let me have a look."])
+
+
+def opener(s: Session, negative: bool = False) -> str:
+    """A short acknowledgement before an answer (not the same one twice running)."""
+    return pick(s, "opener_no" if negative else "opener", NEUTRAL_OPENERS if negative else OPENERS)
+
+
 def anything_else(s: Session) -> str:
     return pick(s, "else", ["Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?"])
 

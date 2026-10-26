@@ -61,15 +61,31 @@ class _Named:
         self.name, self.type = name, kind
 
 
+_BREAK_BEFORE = {"with", "and", "at", "in", "for", "from", "or", "but", "which", "on", "so"}
+
+
 def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> list[str]:
-    """'Sure, the RAV4 is a 2021 in white, with ...' -> ['Sure, the RAV4', 'is a 2021 in white,', 'with ...']: a short first piece so the
-    first sound comes quickly; then clauses (at commas) of up to `max_words`."""
+    """'Sure, the RAV4 is a 2021 in white, with ...' -> ['Sure,', 'the RAV4 is a 2021 in white,', 'with ...'].
+
+    An opener ('Sure,' 'Great.' 'Of course,') is a piece of its own: it is usually rendered in advance, so it plays at once, and the next
+    piece is made while it plays, so that one is kept short (it must be ready before the opener ends). Without an opener: a short first
+    piece (to a comma, or `first_words` words). Then clauses (at commas) of up to `max_words`."""
     words = text.split()
-    if len(words) <= first_words + 2:
+    opener = next((i + 1 for i, w in enumerate(words[:3]) if w.endswith((",", ".", "!"))), 0)
+    if opener and len(words) > opener:
+        out, rest = [" ".join(words[:opener])], words[opener:]
+        if len(rest) <= 9:
+            return out + [" ".join(rest)]
+        cut = next((i + 1 for i in range(2, 8) if rest[i].endswith(",")), 0) or \
+            next((i for i in range(4, 8) if rest[i].lower() in _BREAK_BEFORE), 6)
+        out.append(" ".join(rest[:cut]))
+        rest = rest[cut:]
+    elif len(words) <= first_words + 2:
         return [text]
-    cut = next((i + 1 for i, w in enumerate(words[:first_words + 3]) if w.endswith(",") and i >= 1), first_words)
-    head, rest = " ".join(words[:cut]), words[cut:]
-    out, cur = [head], []
+    else:
+        cut = next((i + 1 for i, w in enumerate(words[:first_words + 3]) if w.endswith(",") and i >= 1), first_words)
+        out, rest = [" ".join(words[:cut])], words[cut:]
+    cur: list[str] = []
     for w in rest:
         cur.append(w)
         if (w.endswith(",") and len(cur) >= 4) or len(cur) >= max_words:

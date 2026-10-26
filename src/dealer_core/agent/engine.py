@@ -75,6 +75,26 @@ _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) 
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")
 _NONE_CLAIM = re.compile(r"\b(?:don't|do not|doesn't|no longer|not) (?:have|carry|stock|sell)\b|\bno \w+ (?:in stock|available)\b|"
                          r"\bout of stock\b|\bnone (?:in stock|available|left)\b|\bsold out\b")
+_HAS_OPENER = re.compile(r"(?:sure|ok(?:ay)?|right|alright|great|perfect|lovely|of course|no problem|thanks|thank you|done|all set|yes|"
+                         r"no|sorry|just to check|hmm|so|well|absolutely|good|let's see|let me|ah|oh)\b", re.I)
+_NEGATIVE = re.compile(r"\b(?:don't|doesn't|isn't|aren't|not|no|none|can't|haven't|hasn't|sorry|unfortunately|fixed)\b", re.I)
+_COMMON_STARTS = {"we've", "we", "we're", "we'd", "there", "there's", "there're", "it", "it's", "that", "that's", "the", "this", "these", "those",
+                  "under", "our", "you", "you're", "your", "here", "here's", "both", "one", "all", "for", "at", "what", "which", "how", "only",
+                  "a", "an", "with", "each", "none", "not", "sadly", "unfortunately", "they", "they're", "its"}
+
+
+def _lower_first(text: str) -> str:
+    """'We've got 4 BMWs' -> 'we've got 4 BMWs' after an opener; names ('Toyota', 'I') keep their capital."""
+    first = text.split(" ", 1)[0]
+    return text[0].lower() + text[1:] if first.lower().strip(",.") in _COMMON_STARTS and first[:1].isupper() else text
+
+
+def _after_opener(sentence: str) -> str:
+    """The model's first sentence when an opener was already said: its own 'Sure,' / 'Great!' dropped, the rest kept."""
+    rest = re.sub(r"^(?:sure(?: thing)?|ok(?:ay)?|right|alright|great|perfect|of course|absolutely|certainly|let's see)[,!.]?\s+", "", sentence.strip(), flags=re.I)
+    return _lower_first(rest) if rest != sentence.strip() else sentence
+
+
 _FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info")   # replies that are lists or figures
 _HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
@@ -172,6 +192,7 @@ class AgentEngine:
         self.model_only = False
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
+        self.openers = False                             # start fact replies with a short spoken acknowledgement ("Sure,") that plays at once (voice/kokoro_tts.py)
         self.governor = None                             # QualityGovernor: picks full / prefix / code per turn from the model's live speed (agent/governor.py)
         if self.reply_writer is not None:
             self.reply_writer.extra_check = self._stock_claims
@@ -252,6 +273,12 @@ class AgentEngine:
         if level == "full" and tool in _FACT_TOOLS and prefix:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
+        opener, lead = self._opener(s, tool, result["core"]), ""
+        if opener and level == "full":
+            lead = opener                                       # said on its own while the model writes (see the full branch)
+        elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
+            result["core"] = f"{opener} {_lower_first(result['core'])}"
+            prefix, question = self._split_core(result["core"])
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
         if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word, at every level
@@ -278,6 +305,9 @@ class AgentEngine:
             dbg.risk = result["risk"]
             temperature = self.reply_writer.temperature
             t_write = time.perf_counter()
+            if lead:                                            # said while the model writes; the model's own opener is then dropped
+                spoken.append(lead)
+                yield lead
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
                     self.reply_writer.temperature = 0.2
@@ -285,7 +315,11 @@ class AgentEngine:
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
                     for sentence in self.reply_writer.stream(w):
-                        if not spoken and self.governor is not None:
+                        if lead and len(spoken) == 1:
+                            sentence = _after_opener(sentence)
+                            if not sentence:
+                                continue
+                        if len(spoken) == (1 if lead else 0) and self.governor is not None:
                             self.governor.record_full((time.perf_counter() - t_write) * 1000)
                         spoken.append(sentence)
                         yield sentence
@@ -293,9 +327,13 @@ class AgentEngine:
                 dbg.lead_ms = info.get("first_ms", 0.0)
                 if info.get("stopped"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
-                if spoken:
+                if len(spoken) > (1 if lead else 0):
                     break
             self.reply_writer.temperature = temperature
+            if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
+                spoken.append(_lower_first(result["core"]))
+                dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
+                yield spoken[-1]
             if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
@@ -321,6 +359,19 @@ class AgentEngine:
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + 2, max_words=90)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         yield TurnResult(reply, dbg, s.ended)
+
+    def _opener(self, s: Session, tool: str, core: str) -> str:
+        """A short acknowledgement before a factual answer, when the answer does not already start with one. It is rendered in advance by
+        the voice, so it plays the moment the turn ends while the rest of the reply is still being made."""
+        if not self.openers or s.ended or tool not in _FACT_TOOLS + ("get_car",) or not core or _HAS_OPENER.match(core):
+            return ""
+        first = re.split(r"(?<=[.!?])\s", core, maxsplit=1)[0]
+        negative = bool(_NEGATIVE.search(first))
+        for _ in range(3):                                          # not 'So, our prices are fixed, so ...': no word said twice
+            o = W.opener(s, negative=negative)
+            if not set(o.lower().strip(",.").split()) & set(first.lower().replace(",", "").split()[:8]):
+                return o
+        return ""
 
     def handle(self, s: Session, text: str) -> TurnResult:
         out = list(self.handle_stream(s, text))
@@ -474,6 +525,10 @@ class AgentEngine:
                 hits = list(self.svc.inventory.search(SearchFilters(make=named0.get("make"), model=named0["model"]), 2))
                 if len(hits) == 1 and hits[0].stock_id != s.car:
                     return {"tool": "get_car", "car_id": hits[0].stock_id, "via": "rules"}   # "BMW X5", "tell me about the Land Cruiser"
+        if not booking_flow and s.car and HAGGLE.search(joined) and not _CHEAPER.search(joined) \
+                and not set(ex.search_filters(text, self.svc.inventory.vocabulary()) or {}) - {"max_price", "min_price"} \
+                and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make"):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "can you do 150,000?" is an offer on this car, not a new budget
         about_it = s.car and re.search(r"\b(?:it|its|it's|this one|that one|this car|that car)\b", joined)
         if not booking_flow and not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(joined) or _LOW_KM.search(joined)) \
                 and not _OTHER_RANGE.search(joined) and not A.superlative_topic(joined):
@@ -922,10 +977,10 @@ class AgentEngine:
         dbg.tools.append(f"check_slots({car.stock_id}, {w.day}) -> {len(free)} free")
         if not free:
             alts = list(self.svc.slots.alternatives(car, combine(w.day, datetime.min.time(), tz)))[:2]
-            return {"core": f"We have no free slots then. How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
+            return {"core": f"{W.checking(s)} We have no free slots then. How about {self._slot_text(alts, now)}?", "risk": "high", "awaiting": True,
                     "facts": [f"No free slots on {w.day:%A}.", f"Next free: {self._slot_text(alts, now)}."]}
         pick = [free[0], free[len(free) // 2]] if len(free) > 1 else [free[0]]
-        return {"core": f"I can do {self._slot_text(pick, now)}. Which works better for you?", "risk": "high", "awaiting": True,
+        return {"core": f"{W.checking(s)} I can do {self._slot_text(pick, now)}. Which works better for you?", "risk": "high", "awaiting": True,
                 "facts": [f"Free slots on {w.day:%A}: {self._slot_text(pick, now)} (and others)."]}
 
     def _t_prepare_booking(self, s, args, text, dbg) -> dict:
@@ -996,7 +1051,7 @@ class AgentEngine:
                 if pick:
                     s.offered_slots, s.slot_day, s.state = pick, day, State.SLOT
                     times = " or ".join(T.clock_part(x) for x in pick)
-                    return {"core": f"{T.cap(T.day_name(day, now))} I can do {times}. Which suits you better?", "risk": "high", "awaiting": True,
+                    return {"core": f"{W.checking(s)} {T.cap(T.day_name(day, now))} I can do {times}. Which suits you better?", "risk": "high", "awaiting": True,
                             "facts": [f"The customer gave a day but no time. Free on {day:%A}: {times} (and others)."]}
             else:
                 problems.append("the day and time were not understood")

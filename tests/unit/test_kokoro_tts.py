@@ -7,3 +7,12 @@ def test_the_first_piece_is_short_and_nothing_is_lost():
     pieces = first_piece_split(text)
     assert len(pieces[0].split()) <= 7 and " ".join(pieces) == text
     assert first_piece_split("Want to book a test drive?") == ["Want to book a test drive?"]
+
+
+def test_an_opener_is_its_own_piece_and_the_next_one_is_short():
+    assert first_piece_split("Sure, we've got 4 BMWs in at the moment.") == ["Sure,", "we've got 4 BMWs in at the moment."]
+    text = "Right, it's the 2021 Toyota RAV4 in white, with 33,000 kilometres on it, at 98,500 dirhams."
+    pieces = first_piece_split(text)
+    assert pieces[0] == "Right," and len(pieces[1].split()) <= 8 and " ".join(pieces) == text
+    assert first_piece_split("Of course. What day and time suit you?") == ["Of course.", "What day and time suit you?"]
+    assert first_piece_split("Okay.") == ["Okay."]

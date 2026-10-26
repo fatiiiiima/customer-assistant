@@ -23,6 +23,7 @@ from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
+from ..agent.wording import OPENERS
 
 STT_RATE = 16000
 
@@ -64,7 +65,10 @@ def common_phrases(cfg: Config) -> list[str]:
             "Could you tell me your budget or a make?", "What budget do you have in mind, or is there a model you like?",
             "Sorry, I didn't catch that. Could you say it again?", "Thank you for calling AGMC. Goodbye!", "You're welcome!",
             "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
-            "No problem at all, take your time.", "Our prices are fixed,"]
+            "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
+            "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
+            "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
+            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,", "Let me check.", "Let me see.", "Let me have a look."]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
