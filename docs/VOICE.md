@@ -248,3 +248,26 @@ Not built (owner decisions needed): reserving with the AED 3,000 deposit (money)
 Note on test numbers from 23 Oct 2026 on: the agent's voice is Joe, so the synthetic test caller is Amy (it used to be Joe). Whisper hears the
 two voices differently (e.g. Amy's "any budget" -> "AE Budget") and Smart Turn waits longer on some of Amy's lines, so end-to-end numbers
 before and after that date are not directly comparable.
+
+## Language model comparison for the agent (26 Oct 2026, AC power, scripts/compare_agent_models.py)
+
+Same 17 turns, same code and data, only the model changes (Mistral at the owner's request; Apache-2.0, OpenVINO int4 build):
+
+| Model | Right action (model-decided turns) | Turn median | Worst |
+|---|---|---|---|
+| Qwen3-4B-Instruct-2507 (in use) | 4/4 | 0.62 s | 2.9 s |
+| Qwen3-8B | 4/4 | 0.84 s | 5.2 s |
+| Mistral-7B-Instruct-v0.3 | 3/4 | 0.91 s | 5.1 s |
+
+Mistral was slower and chose wrong actions ("is it reliable?" -> asked for a day). The 8B writes slightly nicer sentences but is slower.
+Kept: Qwen3-4B. Most turns are now decided and worded by code from the site's data, so the model's share of each turn is small.
+
+## Speech recognition on this laptop's three devices (owner's 24 recordings, key words right)
+
+| Recognizer | CPU | GPU | NPU |
+|---|---|---|---|
+| Whisper base (in use) | 20/24, 0.23 s | - | - |
+| Whisper small.en | 21/24, 0.73 s | 21/24, 0.17 s | cannot take the hint (14/24 without it), 0.31 s |
+
+The hint now ends with what the agent just said: on 48 synthetic clips after a Toyota list, 44/48 -> 47/48 (both recognizers); "the RAV4"
+stopped being heard as "RAV E4". A car that sounds like one just listed is checked ("did you mean the RAV4 or the Audi A4?").

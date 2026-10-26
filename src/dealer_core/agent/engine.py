@@ -64,7 +64,10 @@ _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|vi
 _CHEAPER = re.compile(r"\b(?:something|anything|any|options?|cars?|models?)\b.*\b(?:cheaper|less expensive|lower price)\b|"
                       r"\b(?:cheaper|less expensive) (?:ones?|options?|cars?|models?)\b|^(?:a )?cheaper(?: one)?$")
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
-_OPINION = re.compile(r"\b(?:reliable|reliability|any good(?! for)|good car(?! for)|good choice|worth it|worth buying|would you recommend|do you recommend|good buy|dependable)\b")
+_NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
+                         r"no thanks|no thank you|not right now|i'm just looking|just looking|just browsing)\b")
+_FAMILY = re.compile(r"\b(?:family|families|kids|children|child seats?|school run)\b")
+_OPINION = re.compile(r"\b(?:reliable|reliability|good (?:family )?car for (?:a )?famil\w+|good for (?:a )?famil\w+|(?:a )?good family car|family car|any good(?! for)|good car(?! for)|good choice|worth it|worth buying|would you recommend|do you recommend|good buy|dependable)\b")
 _SPORTY = re.compile(r"\b(?:sporty|sports car|sport car|fast|quick|performance|powerful)\b")
 _SEATS = re.compile(r"\b(seven|eight|7|8)[- ]?seat(?:s|er)?\b|\bthird row\b|\bbig family\b")
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotiat\w*|bargain|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
@@ -385,6 +388,10 @@ class AgentEngine:
             return {"tool": "get_car", "car_id": picked, "via": "rules"}
         if _GREETING.fullmatch(joined):
             return {"tool": "none", "via": "rules"}
+        if _NEVER_MIND.search(joined) and len(words) <= 10:
+            if booking_flow:
+                return {"tool": "cancel_draft", "via": "rules"}
+            return {"tool": "none", "via": "rules"}                              # "never mind, maybe later": no pressure, nothing to change
         if A.superlative_topic(joined) and (s.shown or s.car):
             return {"tool": "best_of", "via": "rules"}                           # "which one is the fastest / cheapest / newest?": from the data
         if _REPEAT.search(joined) and len(words) <= 8:
@@ -512,6 +519,9 @@ class AgentEngine:
         question = "What are you looking for today?" if not s.car and not s.shown else "Is there anything else I can help with?"
         if _GREETING.fullmatch(" ".join(ex.tokens_of(text))):
             return {"core": f"Hi! {question}", "facts": ["The customer said hello."], "awaiting": True}
+        if _NEVER_MIND.search(" ".join(ex.tokens_of(text))):
+            return {"core": "No problem at all, take your time. Is there anything else I can help with?", "facts": ["The customer is not ready; no pressure."],
+                    "awaiting": False}
         if _THANKS.fullmatch(" ".join(ex.tokens_of(text))):
             return {"core": f"You're welcome! {question}", "facts": ["The customer said thank you. Say you're welcome and ask if there is anything else."], "awaiting": False}
         context = []
@@ -641,6 +651,9 @@ class AgentEngine:
             if part:
                 return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
             d = self.svc.site.cars.get(car.stock_id)
+            if d is not None and _FAMILY.search(words):                  # "is it a good family car?": what a family would ask about
+                said = [f"It seats {d.seats}, with a {d.boot_litres}-litre boot, and it's {d.accident} with a {d.service}."]
+                return {"core": " ".join(said) + " " + ask, "facts": facts, "awaiting": True}
             if d is not None:                                            # "is it reliable?", "is it any good?": the blurb and the inspection
                 said = A.detail_answer(car, d, "tell me more") or []
                 said.append(f"It's {d.accident} with a {d.service}, and it passed {d.inspection} of our 150 checks.")
@@ -842,6 +855,10 @@ class AgentEngine:
     def _t_cancel_draft(self, s, args, text, dbg) -> dict:
         s.draft_slot = s.draft_name = s.draft_phone = None
         s.read_back = False
+        if _NEVER_MIND.search(" ".join(ex.tokens_of(text))):
+            s.state = State.ANSWERING
+            return {"core": "No problem, I won't book anything. Is there anything else I can help with?", "facts": ["The booking was dropped; nothing is booked."],
+                    "awaiting": False}
         return {"core": "No problem. What would you like to change?", "facts": ["The booking draft was cleared; nothing is booked."], "awaiting": True}
 
     # ---- bookings the caller already has --------------------------------------------------------------------------------------
