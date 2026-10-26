@@ -63,8 +63,9 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
 
     @api.get("/health")
     async def health() -> dict:
+        gov = getattr(state.app.engine, "governor", None)
         return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "served": state.served, "refused": state.refused,
-                "uptime_s": round(time.monotonic() - state.started)}
+                "uptime_s": round(time.monotonic() - state.started), "quality": gov.snapshot() if gov is not None else None}
 
     @api.websocket("/voice")
     async def voice(ws: WebSocket) -> None:

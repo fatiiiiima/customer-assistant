@@ -12,6 +12,8 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--max-calls", type=int, default=2, help="simultaneous calls; more are told 'busy' (the page falls back to text chat)")
     ap.add_argument("--origin", action="append", help="a page origin allowed to connect (repeatable); default http://localhost:8080")
+    ap.add_argument("--quality", choices=["auto", "full", "prefix", "code"], default=None,
+                    help="agent: auto picks per turn from the model's speed (default); full / prefix / code force one level")
     ap.add_argument("--backend", default="openvino_gpu", help="llm backend from config; the voice path uses openvino_gpu (the iGPU)")
     ap.add_argument("--mute-while-speaking", action="store_true", help="ignore the microphone while the agent talks (if the agent hears itself on laptop speakers; it can clip a fast reply, so it is off by default and the browser cancels echo)")
     ap.add_argument("--hands-free", action="store_true", help="default to an open microphone for the whole call (the page can still ask for tap-to-talk); default is tap-to-talk")
@@ -33,7 +35,8 @@ def main() -> int:
 
     data_js = a.site / "data.js"
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
-    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None)
+    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
+                    quality=a.quality)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
     print("Loading speech models...", flush=True)

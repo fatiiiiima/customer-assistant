@@ -89,7 +89,7 @@ CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|p
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
-TOOLS = ("search_cars", "browse_makes", "fix_booking", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "browse_makes", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
@@ -115,6 +115,11 @@ none             greeting, thanks, small talk, anything that needs no lookup.
 The customer's words come from speech recognition and can be misspelled. The stock id must come from CODE HINT, CAR IN FOCUS or LAST SHOWN ("it", "this one",
 "the second one" mean a car from there). Prices are fixed: nothing to negotiate.
 """
+
+
+@__import__("contextlib").contextmanager
+def _nothing():
+    yield
 
 
 def _clauses(text: str) -> list[str]:
@@ -160,6 +165,8 @@ class AgentEngine:
         self.model_only = False
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
+        self.governor = None                             # QualityGovernor: picks full / prefix / code per turn from the model's live speed (agent/governor.py)
+        self.last_level = ""
         self.prefix_stats: dict = {}
         self.stream_high_risk = True
         self.nlu = None
@@ -208,7 +215,13 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        decision = self._fast_decide(s, text) or self._decide(s, text)
+        decision = self._fast_decide(s, text)
+        if decision is None:
+            if self.governor is not None:
+                with self.governor.using_model():
+                    decision = self._decide(s, text)
+            else:
+                decision = self._decide(s, text)
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
             tool = "none"
@@ -226,12 +239,24 @@ class AgentEngine:
         dbg.state_after = s.state.value
         spoken: list[str] = []
         prefix, question = self._split_core(result["core"])
-        if self.prefix_mode and not s.ended and tool in EXACT_TOOLS:
+        level = self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
+        self.last_level = level
+        dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
+        if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
+            for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word, at every level
+                spoken.append(part)
+                yield part
+            self.prefix_stats = {"continuation": "exact-wording"}
+        elif level == "code" and not s.ended:
+            for part in _clauses(result["core"]):             # the model is overloaded or down: the code's own wording, at once
+                spoken.append(part)
+                yield part
+        elif self.prefix_mode and not s.ended and tool in EXACT_TOOLS:
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word; the model only chose the tool
                 spoken.append(part)
                 yield part
             self.prefix_stats = {"continuation": "exact-wording"}
-        elif self.prefix_mode and self.reply_writer is not None and not s.ended and prefix:
+        elif level == "prefix" and self.reply_writer is not None and not s.ended and prefix:
             dbg.risk = result["risk"]
             for sentence in self._prefix_reply(s, text, result, prefix, question, dbg):
                 spoken.append(sentence)
@@ -241,14 +266,18 @@ class AgentEngine:
             w = WriterInput(caller=text, core=result["core"], risk=result["risk"], history=list(s.history), facts=facts, awaiting=result["awaiting"])
             dbg.risk = result["risk"]
             temperature = self.reply_writer.temperature
+            t_write = time.perf_counter()
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
                     self.reply_writer.temperature = 0.2
                     why = self.reply_writer.last_stream.get("stopped", "")
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
-                for sentence in self.reply_writer.stream(w):
-                    spoken.append(sentence)
-                    yield sentence
+                with (self.governor.using_model() if self.governor is not None else _nothing()):
+                    for sentence in self.reply_writer.stream(w):
+                        if not spoken and self.governor is not None:
+                            self.governor.record_full((time.perf_counter() - t_write) * 1000)
+                        spoken.append(sentence)
+                        yield sentence
                 info = self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
                 if info.get("stopped"):
@@ -256,6 +285,11 @@ class AgentEngine:
                 if spoken:
                     break
             self.reply_writer.temperature = temperature
+            if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
+                _, core_q = self._split_core(result["core"])
+                close = core_q or W.anything_else(s)
+                spoken.append(close)
+                yield close
             if spoken:
                 dbg.draft = " ".join(spoken)
                 dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), result["core"].lower()).ratio(), 2)
@@ -458,6 +492,11 @@ class AgentEngine:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
         if _THANKS.fullmatch(joined):
             return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
+        if not s.car and len(s.shown) >= 2 and not booking_flow and _PLAIN_YES.fullmatch(joined) and re.search(r"\bwhich\b", q):
+            return {"tool": "which_car", "via": "rules"}                          # "yes" to "which one would you like?"
+        if not s.car and s.shown and not booking_flow and (_BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(),
+                self.svc.slots.tz(self.svc.cfg.branches[0].id)).found) and re.search(r"\b(?:book|test drive|see|come|visit|tomorrow|today|am|pm|morning|afternoon|evening|day)\b", joined):
+            return {"tool": "prepare_booking", "via": "rules"}                    # a day or a booking with no car chosen: prepare_booking asks which car
         if not booking_flow and (_CHEAPER.search(joined) or ((_SPORTY.search(joined) or _SEATS.search(joined)) and not s.car)):
             return {"tool": "search_cars", "via": "rules"}                       # "something cheaper", "anything with seven seats", "something sporty"
         if not booking_flow and s.car and _BOOKING_CUE.search(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
@@ -988,6 +1027,11 @@ class AgentEngine:
         s.draft_phone = None
         return {"core": "I couldn't use that phone number. Could you give me your mobile number again?", "risk": "high", "awaiting": True,
                 "facts": [f"The booking was not made ({out.kind.value}). Ask for the mobile number again."]}
+
+    def _t_which_car(self, s, args, text, dbg) -> dict:
+        names = [T.short_name(c) for c in s.shown[:3]]
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or the " + names[-1]
+        return {"core": f"Which one: the {listed}?", "facts": [f"The customer said yes but has not said which car: {listed}."], "awaiting": True}
 
     def _t_fix_booking(self, s, args, text, dbg) -> dict:
         """'No' at the read-back: keep what was right, take the corrected detail if it was said, and read back again (or ask what to change)."""
