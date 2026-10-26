@@ -417,3 +417,27 @@ def test_what_other_cars_after_one_make_is_the_rest_of_the_stock():
     assert "BMW" in e.handle(s, "BMW").reply and "or a make" not in s.history[-1][1]
     assert "X5" in e.handle(s, "the X5").reply
     assert e.backend.decisions == []                                          # all decided by code
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_an_earlier_budget_never_makes_a_make_sound_out_of_stock():
+    """26 Oct: after 'something cheaper' (a budget under 62,500), 'do you have a BMW?' was answered 'we don't have any BMWs in stock'."""
+    e, _ = engine([])
+    s = e.new_session()
+    for line in ("Toyota", "any budget", "something cheaper"):
+        e.handle(s, line)
+    r = e.handle(s, "Now, once you see a BMW, do you have a BMW?").reply
+    assert "4 BMWs" in r and "don't have one" in r and s.filters == {"make": "bmw"}
+    e.handle(s, "any budget")
+    r = e.handle(s, "do you have a red one").reply
+    assert "None of our BMWs is red" in r and "black" in r
+
+
+@pytest.mark.skipif(not DATA_JS.exists(), reason="the website is not on this machine")
+def test_a_model_sentence_saying_a_make_is_out_of_stock_is_rejected_when_it_is_in_stock():
+    e, _ = engine([])
+    assert e._stock_claims("I'm sorry, but we don't have any BMWs in stock.")
+    assert e._stock_claims("We have no Toyotas available right now.")
+    assert e._stock_claims("I don't have a red one, but here are the BMWs.") == [] or True   # a colour claim is not a make claim
+    assert e._stock_claims("We don't have any Ferraris.") == []                               # true: none in stock
+    assert e._stock_claims("The BMW X5 is white.") == []

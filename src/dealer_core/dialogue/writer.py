@@ -420,6 +420,7 @@ class ReplyWriter:
     def __init__(self, backend: LeadInBackend, high_risk: bool = True, temperature: float | None = TEMPERATURE, judge: bool = False,
                  retries: int = RETRIES, max_tokens: int = WRITE_TOKENS, deadline_s: float | None = None, max_words: int = 0) -> None:
         self.backend, self.high_risk, self.temperature, self.judge = backend, high_risk, temperature, judge
+        self.extra_check = None                          # (sentence) -> list of problems: checks that need the live stock (the agent sets it)
         self.model_only = False                    # test mode: never add the system's own facts or question to the model's words
         self.retries, self.max_tokens = retries, max_tokens
         self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
@@ -527,7 +528,7 @@ class ReplyWriter:
                 sentence = sentence[:1].lower() + sentence[1:]                    # the rest of a sentence started on its first clause keeps its lower case
             if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
-            bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text)
+            bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text) + (self.extra_check(sentence) if self.extra_check else [])
             if bad:
                 stopped = "; ".join(bad)
                 return None

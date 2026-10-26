@@ -73,6 +73,8 @@ _WHAT_STOCK = re.compile(r"\b(?:i need a car|i'm looking for a car|looking for a
 _FUEL = re.compile(r"\b(electric|ev|hybrid|petrol|diesel|plug in hybrid)\b")
 _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) (?:kilomet\w*|km|miles)|barely (?:used|driven))\b")
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")
+_NONE_CLAIM = re.compile(r"\b(?:don't|do not|doesn't|no longer|not) (?:have|carry|stock|sell)\b|\bno \w+ (?:in stock|available)\b|"
+                         r"\bout of stock\b|\bnone (?:in stock|available|left)\b|\bsold out\b")
 _HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
 _NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
@@ -115,6 +117,10 @@ none             greeting, thanks, small talk, anything that needs no lookup.
 The customer's words come from speech recognition and can be misspelled. The stock id must come from CODE HINT, CAR IN FOCUS or LAST SHOWN ("it", "this one",
 "the second one" mean a car from there). Prices are fixed: nothing to negotiate.
 """
+
+
+def plural_make(name: str) -> str:
+    return name if name.endswith("s") else name + "s"
 
 
 @__import__("contextlib").contextmanager
@@ -166,6 +172,8 @@ class AgentEngine:
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.governor = None                             # QualityGovernor: picks full / prefix / code per turn from the model's live speed (agent/governor.py)
+        if self.reply_writer is not None:
+            self.reply_writer.extra_check = self._stock_claims
         self.last_level = ""
         self.prefix_stats: dict = {}
         self.stream_high_risk = True
@@ -757,8 +765,42 @@ class AgentEngine:
         if not res.cars and ex.wants_others(text) and f.get("make"):
             return self._t_browse_makes(s, args, text, dbg)
         if not res.cars:
-            return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?",
-                    "facts": [f"Search for {wanted}: no cars in stock match."], "awaiting": True}
+            # Nothing matches EVERYTHING asked so far. If a filter from earlier in the call is what empties it (a budget from "something
+            # cheaper", then "do you have a BMW?"), look again with only what was just asked, and say both: never "we have no BMWs" when we do.
+            said_now = {k: v for k, v in ex.search_filters(text, self.svc.inventory.vocabulary()).items() if v not in (None, "")}
+            if make:
+                said_now["make"] = make
+            carried = {k: v for k, v in f.items() if k not in said_now and k in ("max_price", "min_price", "year_min", "max_km", "color", "body_type", "model")}
+            if said_now and carried:
+                try:
+                    wider = self.svc.search_cars(SearchFilters(**{k: (BodyType(v) if k == "body_type" else v) for k, v in said_now.items()
+                                                                if k in ("make", "model", "color", "max_price", "year_min", "max_km", "body_type")}))
+                except ValueError:
+                    wider = None
+                if wider is not None and wider.cars:
+                    s.filters, s.shown, s.car, s.state = dict(said_now), list(wider.cars), (wider.cars[0].stock_id if wider.total == 1 else None), State.ANSWERING
+                    limits = self._filters_said(carried)
+                    what = W.what_they_asked(list(wider.cars), said_now)
+                    lead = f"{T.cap(limits)} I don't have one, but" if limits else "Not with everything you mentioned, but"
+                    if wider.needs_narrowing:
+                        body = f"{lead} there are {wider.total} {what}, from {T.money(min(c.price for c in wider.cars))}. What budget would work for you?"
+                    else:
+                        listed = W.list_line(s, list(wider.cars), wider.total)
+                        body = f"{lead} {listed[0].lower() + listed[1:] if not listed.startswith('I') else listed} Which one would you like to hear more about?"
+                    return {"core": body, "awaiting": True,
+                            "facts": [f"With everything asked ({wanted}) nothing matches. Without the earlier {limits or 'filters'}: {wider.total} {what} in stock.",
+                                      "Do NOT say there are none of them in stock: there are."]}
+            stock_of_make = self.svc.inventory.count(SearchFilters(make=f.get("make"))) if f.get("make") else 0
+            if stock_of_make and f.get("color"):                     # "a red one" when no BMW is red: say what colours the BMWs are
+                colours = sorted({c.color for c in self.svc.inventory.search(SearchFilters(make=f["make"]), 50)})
+                name = next((c.make for c in self.svc.inventory.search(SearchFilters(make=f["make"]), 1)), f["make"].title())
+                said = colours[0] if len(colours) == 1 else ", ".join(colours[:-1]) + " and " + colours[-1]
+                s.filters = {k: v for k, v in f.items() if k != "color"}
+                return {"core": f"None of our {plural_make(name)} is {f['color']}: they're {said}. Would any of those colours work for you?", "awaiting": True,
+                        "facts": [f"{name} cars in stock come in {said}; none in {f['color']}."]}
+            return {"core": "I don't have anything that matches that. Would you like to try another make or type of car?", "awaiting": True,
+                    "facts": [f"Search for {wanted}: no cars in stock match ALL of it."] +
+                             ([f"There ARE {stock_of_make} {f['make']} cars in stock; only this combination has none. Do not say there are none."] if stock_of_make else [])}
         s.state = State.ANSWERING
         s.shown = list(res.cars)
         s.car = res.cars[0].stock_id if res.total == 1 else None
@@ -1027,6 +1069,35 @@ class AgentEngine:
         s.draft_phone = None
         return {"core": "I couldn't use that phone number. Could you give me your mobile number again?", "risk": "high", "awaiting": True,
                 "facts": [f"The booking was not made ({out.kind.value}). Ask for the mobile number again."]}
+
+    def _stock_claims(self, sentence: str) -> list[str]:
+        """A model sentence saying a make or model is not in stock, when it is (26 Oct: "we don't have any BMWs" with four BMWs on sale)."""
+        low = sentence.lower()
+        if not _NONE_CLAIM.search(low):
+            return []
+        toks = ex.tokens_of(sentence)
+        found = ex.find_vehicle(toks, self.svc.inventory.vocabulary()) or {}
+        if not found.get("make"):                                       # "BMWs", "Toyotas"
+            found = ex.find_vehicle([t[:-1] if t.endswith("s") and len(t) > 3 else t for t in toks], self.svc.inventory.vocabulary()) or {}
+        if found.get("make") and self.svc.inventory.count(SearchFilters(make=found["make"], model=found.get("model"))) > 0:
+            return [f"says there are no {found.get('model') or found['make']} cars, but there are"]
+        return []
+
+    @staticmethod
+    def _filters_said(f: dict) -> str:
+        """'under 62,499 dirhams', 'from 2021', 'white': the filters from earlier in the call, said the way a person would."""
+        parts = []
+        if f.get("max_price"):
+            parts.append(f"under {T.money(int(f['max_price']) + 1 if int(f['max_price']) % 500 == 499 else int(f['max_price']))}")
+        if f.get("year_min"):
+            parts.append(f"from {f['year_min']} on")
+        if f.get("max_km"):
+            parts.append(f"under {int(f['max_km']):,} kilometres")
+        if f.get("color"):
+            parts.append(f"in {f['color']}")
+        if f.get("body_type"):
+            parts.append(f"as {'an' if str(f['body_type'])[:1] in 'aeiou' else 'a'} {str(f['body_type']).upper() if f['body_type'] == 'suv' else f['body_type']}")
+        return " and ".join(parts)
 
     def _which_car_to_drive(self, s: Session) -> str:
         """Which car, naming the ones just discussed, so the caller can simply say one."""
