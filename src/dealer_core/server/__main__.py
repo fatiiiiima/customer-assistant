@@ -57,6 +57,9 @@ def main() -> int:
         state.calls, state.registry = CallStore(store), WorkerRegistry(store)
         state.worker_id = a.worker_id or f"{a.host}:{a.port}"
         state.public_url = a.public_url or f"ws://{a.host}:{a.port}/voice"
+    from .metrics import Metrics
+
+    state.metrics = Metrics()
     origins = a.origin or ["http://localhost:8080", "http://127.0.0.1:8080"]
     print(f"Voice server ready on ws://{a.host}:{a.port}/voice  (up to {a.max_calls} calls; pages allowed: {', '.join(origins)})", flush=True)
     uvicorn.run(create_server(state, origins), host=a.host, port=a.port, log_level="warning")

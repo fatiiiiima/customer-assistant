@@ -50,6 +50,7 @@ class ServerState:
     registry: object = None               # shared.state.WorkerRegistry: this worker's address and load, for the router
     worker_id: str = ""
     public_url: str = ""                  # the address the router hands to pages for this worker
+    metrics: object = None                # server.metrics.Metrics (GET /metrics)
 
 
 def create_server(state: ServerState, allowed_origins: list[str] | None = None) -> FastAPI:
@@ -84,6 +85,16 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
 
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=max(32, state.max_calls * 4), thread_name_prefix="call"))
 
+    @api.get("/metrics")
+    async def metrics():
+        from fastapi.responses import Response
+
+        if state.metrics is None:
+            return Response("# metrics off\n", media_type="text/plain")
+        state.metrics.refresh(state.active, getattr(state.app.engine, "governor", None))
+        body, kind = state.metrics.render()
+        return Response(body, media_type=kind)
+
     @api.get("/health")
     async def health() -> dict:
         gov = getattr(state.app.engine, "governor", None)
@@ -99,11 +110,15 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         await ws.accept()
         if state.active >= state.max_calls:
             state.refused += 1
+            if state.metrics is not None:
+                state.metrics.call("refused")
             await ws.send_text(json.dumps({"type": "busy"}))
             await ws.close(code=1013)
             return
         state.active += 1
         state.served += 1
+        if state.metrics is not None:
+            state.metrics.call("served")
         try:
             await run_call(state, ws)
         except Exception as e:                                  # never let one call take the server down
@@ -198,7 +213,12 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
             emit({"type": "booking", "car_id": b.stock_id, "name": b.customer_name, "phone": b.customer_phone,
                   "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
 
-    clock = TurnClock(state.stop_secs, lambda total, parts_: emit({"type": "timing", "seconds": round(total, 2)}))
+    def timed(total, parts_) -> None:
+        emit({"type": "timing", "seconds": round(total, 2)})
+        if state.metrics is not None:
+            state.metrics.reply_time(total)
+
+    clock = TurnClock(state.stop_secs, timed)
     probes = {"vad": StatusLine(set(), clock=clock, stage="vad"), "stt": StatusLine(set(), clock=clock, stage="stt"),
               "brain": StatusLine(set(), clock=clock, stage="brain")}
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(
