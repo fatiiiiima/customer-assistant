@@ -64,6 +64,7 @@ class PgDb:
         self._pool: queue.Queue = queue.Queue()
         self._size, self._made, self._lock = size, 0, threading.Lock()
         with self.tx() as c:
+            c.run("SELECT pg_advisory_xact_lock(424201)")         # workers starting together create the tables one at a time
             for stmt in SCHEMA:
                 c.run(stmt)
 

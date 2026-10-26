@@ -83,6 +83,7 @@ class PgStore(StateStore):
 
         self.db = PgDb(url, size=4)
         with self.db.tx() as c:
+            c.run("SELECT pg_advisory_xact_lock(424202)")
             c.run("CREATE UNLOGGED TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at TIMESTAMPTZ)")
 
     def get(self, key):

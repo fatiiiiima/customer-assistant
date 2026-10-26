@@ -114,3 +114,24 @@ def test_a_whole_booking_call_through_the_app_lands_in_postgres(pg_url):
     assert s.booking is not None
     e2, app2 = worker()                                                      # another worker, its own connections
     assert app2.service.bookings.find_active("+971501112222", s.booking.stock_id) is not None
+
+
+def test_workers_starting_at_the_same_moment_all_get_their_tables(pg_url):
+    """12 Oct-style start-up race: three workers creating the schema at once must not fail (it did, before the advisory lock)."""
+    clean = PgDb(pg_url)
+    with clean.tx() as c:
+        c.run("DROP TABLE IF EXISTS bookings")
+        c.run("DROP TABLE IF EXISTS cars")
+    errors, barrier = [], threading.Barrier(6)
+
+    def start():
+        barrier.wait()
+        try:
+            PgDb(pg_url, size=1)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=start) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []
