@@ -110,7 +110,7 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     first = text.split(" ", 1)[0]
     bare = first.strip(",.!?;:")
     word = bare.lower()
-    if not bare[:1].isupper() or sum(ch.isupper() for ch in bare) >= 2 or word in _KEEP_CAPS or word in proper or word.split("'")[0] in proper:
+    if not bare[:1].isupper() or sum(ch.isupper() for ch in bare) >= 2 or any(ch.isdigit() for ch in bare) or word in _KEEP_CAPS or word in proper or word.split("'")[0] in proper:
         return text
     return text[0].lower() + text[1:]
 
@@ -456,6 +456,14 @@ class AgentEngine:
             self._names = names
         return self._names | set((s.draft_name or "").lower().split())
 
+    def _names_only_this_car(self, s: Session, words: list[str]) -> bool:
+        """No car is named, or only the one in focus ("tell me more about the Land Rover" while discussing the Range Rover Sport)."""
+        named = ex.find_vehicle(words, self.svc.inventory.vocabulary())
+        car = self.svc.get_car(s.car) if s.car else None
+        if not named.get("make"):
+            return True
+        return car is not None and named["make"] == car.make.lower() and named.get("model") in (None, car.model.lower())
+
     @staticmethod
     def _unfinished(s: Session, words: list[str]) -> bool:
         """The turn stops mid-phrase: "i'm looking for a", "show me the", "something under". Not while a booking detail is being given
@@ -639,6 +647,8 @@ class AgentEngine:
             return {"tool": "search_cars", "via": "rules"}                       # "something cheaper": a new search, before "the cheaper one" (a pick)
         if not booking_flow and s.car and _OPINION.search(joined):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "is it reliable?" about the car just described
+        if not booking_flow and s.car and "about" in A.topics_in(joined) and self._names_only_this_car(s, words):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "anything else about the car I should know?" / "what else should I know about it?"
         picked = ex.selection(text, s.shown)
         if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
             return {"tool": "get_car", "car_id": picked, "via": "rules"}

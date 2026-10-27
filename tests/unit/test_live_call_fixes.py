@@ -168,3 +168,45 @@ def test_an_opener_then_the_models_sentence_reads_as_one_sentence():
     said(e, s, "do you have any SUVs")
     out = list(e.handle_stream(s, "the Land Cruiser"))[:-1]
     assert out[0].endswith(",") and out[1].startswith("the 2021 Toyota Land Cruiser"), out
+
+
+# ------------------------------------------------------------------------------------------------ 6. "anything else about the car?" taken as "book it"
+def site_details(stock_id: str, blurb: str):
+    from dealer_core.site.details import CarDetails
+
+    return CarDetails(stock_id=stock_id, full_model="Land Cruiser GXR", colour_name="Pearl White", seats=7, power_hp=275, torque_nm=439,
+                      engine="4.0L V6", drive="4WD", accel_0_100=8.5, top_speed=180, consumption="12.5 L/100km", boot_litres=909, interior="Beige leather",
+                      owners=1, features=("Reverse camera", "Sunroof"), blurb=blurb, transmission="automatic", doors=5, spec="GCC specs",
+                      accident="accident-free", service="full dealer service history", warranty="12 months", inspection=150)
+
+
+def test_more_about_the_car_in_focus_is_answered_by_code_from_its_details():
+    for line in ("Is there anything else about the car that you'll know?", "Is there anything else about the car that I need to know?",
+                 "what else should I know about it", "tell me more about it", "anything else I should know", "I'd like to know more"):
+        e, b = agent(None)
+        e.svc.site.cars["S1042"] = site_details("S1042", "A desert-proof legend with proper go-anywhere presence")
+        s = e.new_session()
+        said(e, s, "tell me about the Land Cruiser")
+        asked = len(b.prompts)
+        r = said(e, s, line)
+        assert r.debug.intent == "get_car" and len(b.prompts) == asked and s.car == "S1042", line
+        assert "It's a desert-proof legend" in r.reply and "day" not in r.reply.lower(), (line, r.reply)
+
+
+def test_what_else_without_a_car_in_focus_is_still_the_rest_of_the_stock():
+    e, _ = agent(None)
+    s = e.new_session()
+    assert said(e, s, "what else do you have").debug.intent == "browse_makes"
+    said(e, s, "tell me about the Land Cruiser")
+    assert said(e, s, "tell me more about the Nissan Patrol").debug.intent != "get_car" or s.car != "S1042"   # another car: not this one
+
+
+def test_a_website_description_is_said_as_a_sentence():
+    from dealer_core.agent.answers import blurb_sentence
+
+    assert blurb_sentence("A thunderous V8 super-SUV with proper Range Rover presence.") == "It's a thunderous V8 super-SUV with proper Range Rover presence."
+    assert blurb_sentence("Sharp styling and a punchy turbo engine in an affordable, reliable package") == \
+        "It offers sharp styling and a punchy turbo engine in an affordable, reliable package."
+    assert blurb_sentence("V8 power and seven seats") == "It offers V8 power and seven seats."
+    assert blurb_sentence("Sharp looks and a big boot") == "It offers sharp looks and a big boot."
+    assert blurb_sentence("This Patrol is built for the dunes.") == "This Patrol is built for the dunes."          # already a sentence
