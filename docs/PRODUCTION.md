@@ -204,3 +204,47 @@ in-process OpenVINO model: it compiles a grammar per list (seconds) and the list
 * The intent call (state-machine engine) still sends `guided_json` next to `response_format`. vLLM 0.12+ no longer reads `guided_json`, but
   its request models accept unknown top-level fields, so `response_format` should carry the schema: confirm on the pinned version with
   the capacity probe, and drop `guided_json` once the local model server reads `structured_outputs`.
+
+## 8. A mechanism that keeps answers fast at 500+ callers on hardware nobody has specified (27 Oct)
+
+The answer time cannot be fixed by choosing hardware we do not know. It is held by the system itself: under load it gives up, in this order,
+**workers** (it adds them), **wording** (code says the facts, then answers alone), and only last **new callers** (busy -> text chat). It
+never gives up the answer time.
+
+| Part | What it does | Where |
+|---|---|---|
+| Answer time measured | per turn, end of speech -> the answer itself starts (a "Let me check." said first does not count, so it cannot hide a slow model) | `voice/status.py` TurnClock `on_answer`, metric `voice_answer_seconds` |
+| Measured call cap | each worker's cap follows its own 90th percentile: -25% when above 1 s, +1 when under 0.9 s and full. A cut that does not make replies faster is undone (the slowness is not this worker's load) | `server/admission.py`, `voice.admission`, `voice_call_cap` |
+| Model load shedding | when the model's decision time passes 450 ms, a growing share of turns (up to 90%) skip the model: the code decides and speaks. The rest keep measuring it, so it stops by itself when the model recovers | `agent/governor.py` `model_allowed`, `dialogue.model_shed_after_ms` |
+| Decision deadline | the model's decision must come within 1.2 s (was 5 s), else the code decides from the words (a search, the car being discussed, or a guiding question) | `voice.decide_deadline_ms`, `agent/engine.py` `_code_decision` |
+| Autoscaling on demand | workers are added on (calls in progress + callers just turned away) / measured caps, at 70%; doubles at most every 15 s, shrinks slowly | `deploy/k8s/voice.yaml` HPA, `deploy/prometheus-adapter.yaml`, router `/metrics` |
+| Alerts | answers slower than 1 s, callers turned away, more than 20% of turns without the model, caps shrinking | `deploy/alerts.yml` |
+
+Already there before: the quality governor (full / prefix / code), the router with "busy", stateless workers with shared call state, failover.
+
+### Proof without the hardware: a 500-caller simulation (`scripts/simulate_scale.py`)
+
+The real router, governor, call cap and shedding run against stand-in model / recognizer / worker-CPU servers whose speed and capacity are set
+per scenario (past capacity, every request slows in proportion). 10 simulated minutes, 500 callers ramped in over 90 s, measured after 2 min,
+same result every run (`src/dealer_core/sim/scale.py`). "Off" = the code before this section (fixed cap, 5 s deadline, no shedding,
+autoscaling on calls in progress only).
+
+| Scenario | Protection | Busy | Answer p50 | Answer p90 | Answer p99 | Answers > 2 s | Model full / prefix / code |
+|---|---|---|---|---|---|---|---|
+| fast GPUs | off / on | 0% / 0% | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.98 / 0.99 s | 0% / 0% | 100/0/0 |
+| slow GPU | off / on | 0% / 0% | 0.45 / 0.45 s | 0.84 / 0.83 s | 1.89 / 1.92 s | 0.6% / 0.7% | 11/89/0 |
+| weak worker CPUs | off / on | 0% / 0% | 0.62 / 0.56 s | 1.02 / 0.95 s | 1.19 / 1.19 s | 0% / 0% | 100/0/0 |
+| 95% of GPU capacity lost at 5 min | off / on | 0% / 0% | 0.45 / 0.45 s | **4.15 / 0.95 s** | **12.9 / 2.4 s** | **22.5% / 1.4%** | 48/49/3 -> 44/42/14 (14% shed) |
+| cold start: 8 workers when 500 arrive | off / on | **21.3% / 0%** | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.99 / 0.99 s | 0% / 0% | 100/0/0 |
+| spike 500 -> 800 at 5 min | off / on | 5.6% / 5.6% | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.99 / 0.99 s | 0% / 0% | 100/0/0 |
+
+During the GPU failure itself (minutes 5-10) the 90th percentile is 4-5 s without protection and 1.0-1.1 s with it: the model can serve
+only part of the turns, so the rest are answered by code, at once. The spike's 5.6% busy is the autoscaler's ceiling (60 workers) and its
+start-up time (45 s); answers stay fast for everyone who is let in.
+
+What it shows: the mechanisms hold the answer time, and say what they gave up. What it does not show: whether a particular GPU is fast enough,
+real audio, real networks. Those are for the capacity probe and the load test on the company's hardware; the simulation's stand-in speeds can
+then be set to the probe's numbers.
+
+Seen in the simulation and left as is: in a GPU failure the autoscaler adds workers (up to its maximum) although the model is the bottleneck;
+harmless (the caps and shedding hold the answer time) but it costs CPU nodes. The alert `ModelOverloadedShedding` says what is really needed: GPU.

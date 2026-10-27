@@ -1,0 +1,20 @@
+# Alerts on the signals the latency mechanisms use (docs/PRODUCTION.md section 8). Loaded by deploy/prometheus.yml.
+groups:
+  - name: voice-latency
+    rules:
+      - alert: AnswersSlowerThanTarget            # the answer itself (not a "Let me check." said first), 90th percentile, all workers
+        expr: histogram_quantile(0.9, sum(rate(voice_answer_seconds_bucket[5m])) by (le)) > 1.0
+        for: 5m
+        annotations: { summary: "90% of answers should start within 1 s; they do not. Check model shedding and the caps below." }
+      - alert: CallersTurnedAway                   # every worker full: callers go to text chat
+        expr: sum(voice_router_turned_away_30s) > 0
+        for: 2m
+        annotations: { summary: "Callers are told busy. The autoscaler should be adding workers; if it is at maxReplicas, raise it." }
+      - alert: ModelOverloadedShedding              # turns skipping the model: replies are code-written, still fast, less conversational
+        expr: sum(rate(voice_turn_level_total{level="code"}[5m])) / clamp_min(sum(rate(voice_turn_level_total[5m])), 1e-9) > 0.2
+        for: 5m
+        annotations: { summary: "More than 20% of turns are answered without the model: the model servers are overwhelmed or failing. Add GPU capacity." }
+      - alert: WorkerCapsShrinking                  # the measured caps fall: workers are slow because of their own load
+        expr: sum(voice_call_cap) < 0.6 * count(voice_call_cap) * 16
+        for: 10m
+        annotations: { summary: "Workers take far fewer calls than their ceiling to stay fast: worker CPUs are too weak or overloaded." }

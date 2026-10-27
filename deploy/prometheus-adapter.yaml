@@ -1,0 +1,11 @@
+# Rules for the Prometheus adapter (kubernetes-sigs/prometheus-adapter, Apache-2.0) so the HPA in k8s/voice.yaml can scale the voice workers
+# on demand. Install the adapter with these rules (Helm: --set-file rules.custom=... or put them under `rules.external` in its values).
+#
+# voice_demand_ratio = (calls in progress + callers turned away in the last 30 s) / the calls the workers take right now (their measured caps).
+#   0.7 = the target: workers are added above it, removed (slowly) below it.
+rules:
+  external:
+    - seriesQuery: 'voice_call_cap'
+      resources: { overrides: { namespace: { resource: namespace } } }
+      name: { as: voice_demand_ratio }
+      metricsQuery: '(sum(voice_calls_active) + sum(voice_router_turned_away_30s or vector(0))) / clamp_min(sum(voice_call_cap), 1)'

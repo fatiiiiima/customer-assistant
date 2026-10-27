@@ -11,9 +11,16 @@ stepped down it still tries `full` now and then (when the model is not busy), so
 
 This is what lets the same code run on any machine: on a fast GPU nearly every turn is `full`; on a laptop or at peak load turns become
 `prefix`, and only an overloaded or failing model pushes them to `code`. Nothing waits on a slow model to finish before speaking.
+
+Load shedding (`shed_after_ms`): the levels only change how the reply is WRITTEN; a turn the code cannot route still asks the model which action
+to take. When the model server is overwhelmed (a GPU fails, a traffic spike) those decisions queue behind each other and every caller waits.
+So once the measured decision time passes `shed_after_ms`, a growing share of turns (up to 90%) skip the model altogether and the code decides
+and speaks (`model_allowed`). The model's queue drains; the turns that still go to it keep measuring it, so the share falls back to zero as
+soon as it recovers.
 """
 from __future__ import annotations
 
+import random
 import threading
 import time
 from contextlib import contextmanager
@@ -26,11 +33,12 @@ class GovernorStats:
     full_first_ms: float | None = None          # moving average, full mode, model's first sentence
     decide_ms: float | None = None              # moving average, the model's tool decision (the turns code could not route)
     in_flight: int = 0
+    shed: int = 0                               # turns that skipped the model because it was overwhelmed
 
 
 class QualityGovernor:
     def __init__(self, mode: str = "auto", budget_ms: float = 700.0, max_in_flight_full: int = 0, max_in_flight_model: int = 0,
-                 explore_every: int = 8, alpha: float = 0.3) -> None:
+                 explore_every: int = 8, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None) -> None:
         self.mode = mode                         # auto | full | prefix | code
         self.budget_ms = budget_ms
         self.max_full = max_in_flight_full       # 0 = no cap of its own (the latency estimate decides)
@@ -40,6 +48,8 @@ class QualityGovernor:
         self.stats = GovernorStats()
         self._lock = threading.Lock()
         self._since_full = 0
+        self.shed_after_ms = shed_after_ms        # 0 = never shed
+        self._rng = rng or random.Random()
 
     def choose(self) -> str:
         """The level for the next turn."""
@@ -73,6 +83,19 @@ class QualityGovernor:
                 return False
             return self.stats.full_first_ms is None or self.stats.full_first_ms <= 2 * self.budget_ms
 
+    def model_allowed(self) -> bool:
+        """May this turn ask the model at all? No for a share of turns that grows with how far the decision time is past `shed_after_ms`
+        (twice it: 90% shed). The rest keep measuring the model, so shedding stops by itself when it recovers."""
+        with self._lock:
+            if not self.shed_after_ms or self.stats.decide_ms is None:
+                return True
+            share = min(0.9, max(0.0, (self.stats.decide_ms - self.shed_after_ms) / self.shed_after_ms))
+            if self._rng.random() < share:
+                self.stats.shed += 1
+                self.stats.turns["code"] += 1
+                return False
+            return True
+
     def record_decide(self, ms: float) -> None:
         """How long the model took to name the tool (said before any reply can start on turns the code could not route)."""
         with self._lock:
@@ -102,5 +125,5 @@ class QualityGovernor:
     def snapshot(self) -> dict:
         with self._lock:
             return {"mode": self.mode, "budget_ms": self.budget_ms, "full_first_ms": round(self.stats.full_first_ms or 0),
-                    "decide_ms": round(self.stats.decide_ms or 0), "in_flight": self.stats.in_flight,
+                    "decide_ms": round(self.stats.decide_ms or 0), "in_flight": self.stats.in_flight, "shed": self.stats.shed,
                     "turns": dict(self.stats.turns), "at": time.time()}

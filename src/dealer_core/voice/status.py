@@ -10,20 +10,33 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 class TurnClock:
     """Times a turn from what the pipeline sees: when the caller stopped, when the words were understood, when the first reply sentence was ready,
-    and when the first sound started. Reports once per turn through `on_timing(total_seconds, parts)`."""
+    and when the first sound started. Reports once per turn through `on_timing(total_seconds, parts)`.
 
-    def __init__(self, stop_secs: float, on_timing, clock=time.monotonic) -> None:
+    `on_answer(seconds)` (optional) is told once per turn when the ANSWER started: the same clock, but a filler said first ("Let me check.",
+    "Sure,": `fillers`) does not count, so a slow model is not hidden behind a quick filler. The worker's call cap follows this one."""
+
+    def __init__(self, stop_secs: float, on_timing, clock=time.monotonic, on_answer=None, fillers: frozenset[str] = frozenset()) -> None:
         self.stop_secs, self.on_timing, self._now = stop_secs, on_timing, clock
+        self.on_answer, self.fillers = on_answer, fillers
         self.t_stop = self.t_stt = self.t_sentence = None
+        self._turn: dict | None = None                                 # this turn's answer timing: base, filler first, answer ready, voice delay
 
     def see(self, frame: Frame, stage: str) -> None:
         now = self._now()
         if stage == "vad" and isinstance(frame, VADUserStoppedSpeakingFrame):
             self.t_stop, self.t_stt, self.t_sentence = now, None, None
+            self._turn = {"base": now - self.stop_secs, "filler_first": None, "answer": None, "voice": None}
         elif stage == "stt" and isinstance(frame, TranscriptionFrame):
             self.t_stt = now
-        elif stage == "brain" and isinstance(frame, TTSSpeakFrame) and self.t_sentence is None:
-            self.t_sentence = now
+        elif stage == "brain" and isinstance(frame, TTSSpeakFrame):
+            filler = frame.text.strip() in self.fillers
+            if self.t_sentence is None:
+                self.t_sentence = now
+                if self._turn is not None:
+                    self._turn["filler_first"] = filler
+            if not filler and self._turn is not None and self._turn["answer"] is None:
+                self._turn["answer"] = now
+                self._report_answer()
         elif isinstance(frame, BotStartedSpeakingFrame) and self.t_stop is not None:
             parts = {"waiting for you to finish": self.stop_secs}
             if self.t_stt is not None:
@@ -33,7 +46,20 @@ class TurnClock:
                     parts["voice"] = now - self.t_sentence
             total = now - (self.t_stop - self.stop_secs)               # from the real end of the caller's speech
             self.t_stop = None                                         # one report per turn
+            if self._turn is not None and self.t_sentence is not None:
+                self._turn["voice"] = now - self.t_sentence           # how long the voice took to start the first sentence
+                if not self._turn["filler_first"]:
+                    self._turn["answer"] = self._turn["answer"] or self.t_sentence
+                self._report_answer()
             self.on_timing(total, parts)
+
+    def _report_answer(self) -> None:
+        """Once per turn, when both the answer's readiness and the voice's start-up time are known."""
+        t = self._turn
+        if t is None or t["answer"] is None or t["voice"] is None or self.on_answer is None:
+            return
+        self._turn = None
+        self.on_answer(t["answer"] - t["base"] + t["voice"])
 
 
 class StatusLine(FrameProcessor):

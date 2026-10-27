@@ -105,9 +105,14 @@ spec:
   scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: voice-worker }
   minReplicas: 8
   maxReplicas: 48
-  metrics:                                           # keep workers ~70% full on average (needs the Prometheus adapter)
-    - type: Pods
-      pods: { metric: { name: voice_calls_active }, target: { type: AverageValue, averageValue: "11" } }
+  metrics:
+    # Scale on DEMAND at 70% of the measured capacity: (calls in progress + callers the router just turned away) / the workers' caps.
+    # Turned-away callers are invisible to the workers; caps shrink when replies get slow (server/admission.py). Rule: deploy/prometheus-adapter.yaml
+    - type: External
+      external: { metric: { name: voice_demand_ratio }, target: { type: Value, value: "0.7" } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Percent, value: 100, periodSeconds: 15 }] }     # double at most every 15 s
+    scaleDown: { stabilizationWindowSeconds: 300, policies: [{ type: Pods, value: 2, periodSeconds: 60 }] }    # shrink slowly (calls last minutes)
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -116,7 +121,9 @@ spec:
   replicas: 2
   selector: { matchLabels: { app: voice-router } }
   template:
-    metadata: { labels: { app: voice-router } }
+    metadata:
+      labels: { app: voice-router }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8760", prometheus.io/path: /metrics }
     spec:
       containers:
         - name: router

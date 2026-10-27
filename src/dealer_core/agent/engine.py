@@ -334,6 +334,10 @@ class AgentEngine:
                 decision = None
             if decision is not None:
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "decision made during the hold"
+        no_model = False
+        if decision is None and self.governor is not None and not self.governor.model_allowed():
+            decision, no_model = self._code_decision(s, text), True             # the model is overwhelmed: the code decides and speaks
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "model overloaded: shed, decided by code"
         if decision is None:
             bridge = self._bridge(s, text)
             if bridge:                                                     # the caller hears this while the model decides (and writes)
@@ -345,6 +349,9 @@ class AgentEngine:
                 self.governor.record_decide((time.perf_counter() - t_decide) * 1000)
             else:
                 decision = self._decide(s, text)
+            if decision.get("error"):                                      # no decision within the deadline: the code decides, nothing waits longer
+                decision, no_model = self._code_decision(s, text), True
+                dbg.note = (dbg.note + "; " if dbg.note else "") + "model too slow: decided by code"
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
             tool = "none"
@@ -359,6 +366,9 @@ class AgentEngine:
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
+        if decision.get("fallback"):                                       # the code could not tell what was asked and the model was not asked
+            result["core"] = W.pick(s, "overload", ["Sorry, I didn't quite get that. Are you after a particular make, type of car or budget?",
+                                                    "Could you tell me a bit more: a make, a type of car, or a budget?"])
         dbg.state_after = s.state.value
         spoken: list[str] = [bridge] if bridge else []
         if bridge:                                                       # "Let me check. Sure! What day ..." -> "Let me check. What day ..."
@@ -366,7 +376,7 @@ class AgentEngine:
             result["core"] = result["core"][:1].upper() + result["core"][1:]
             dbg.note = (dbg.note + "; " if dbg.note else "") + "bridge said while the model decided"
         prefix, question = self._split_core(result["core"])
-        level = self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
+        level = "code" if no_model else self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
         if level == "full" and tool in _FACT_TOOLS and prefix:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
@@ -597,6 +607,16 @@ class AgentEngine:
         yield question                                         # never end on a statement: the caller must know what is being asked
 
     # ------------------------------------------------------------------------------------------------ the decision
+    def _code_decision(self, s: Session, text: str) -> dict:
+        """The action when the model is not asked (overloaded or too slow): a search if the words say what to look for, the car being discussed
+        if there is one, otherwise a guiding question."""
+        words = " ".join(ex.tokens_of(text))
+        if ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words):
+            return {"tool": "search_cars", "via": "rules"}
+        if s.car:
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}
+        return {"tool": "none", "via": "rules", "fallback": True}
+
     def _code_hint(self, text: str) -> tuple[dict, list[str]]:
         """The make / model the customer's words match (spelling-tolerant), and up to 5 stock ids of it."""
         found = ex.find_vehicle(ex.tokens_of(text), self.svc.inventory.vocabulary())

@@ -3,7 +3,8 @@
 Shared by every call (loaded once): the language model (one lane: requests queue), Whisper, Piper (each behind a lock), the inventory and the bookings.
 Private to each call: the Session (history, car in focus, booking draft), the pipeline, the VAD.
 
-A connection cap protects the machine: past `max_calls` a new caller is told "busy" and the socket closes (the page falls back to text chat).
+A connection cap protects the machine: past it a new caller is told "busy" and the socket closes (the page falls back to text chat). With an
+`admission` controller (server/admission.py) the cap is measured, not fixed: it follows the worker's recent reply times, up to `max_calls`.
 """
 from __future__ import annotations
 
@@ -27,6 +28,12 @@ from ..voice.micgate import MicGate
 from ..voice.pipeline import STT_RATE, VoiceParts, build_pipeline
 from ..voice.status import StatusLine, TurnClock
 from .protocol import PortalSerializer
+
+# Said before the answer while it is being prepared: a quick first sound, not the answer (voice/status.py TurnClock.on_answer).
+from ..agent.engine import BRIDGES as _BRIDGES
+from ..agent.wording import OPENERS as _OPENERS
+
+FILLERS = frozenset([*_BRIDGES, *_OPENERS, "Let me check.", "Let me see.", "Let me have a look."])
 
 
 @dataclass
@@ -52,6 +59,11 @@ class ServerState:
     public_url: str = ""                  # the address the router hands to pages for this worker
     metrics: object = None                # server.metrics.Metrics (GET /metrics)
     load_changed: object = None           # asyncio.Event: a call started or ended, so the router hears about it now, not in up to 2 s
+    admission: object = None              # server.admission.AdmissionController: the call cap, from the measured reply times
+
+    def cap(self) -> int:
+        """How many calls this worker takes right now."""
+        return self.admission.adjust(self.active) if self.admission is not None else self.max_calls
 
 
 def create_server(state: ServerState, allowed_origins: list[str] | None = None) -> FastAPI:
@@ -71,8 +83,10 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
             thread: a slow database must never stall the event loop that carries every call's audio."""
             while True:
                 gov = getattr(state.app.engine, "governor", None)
-                await asyncio.to_thread(state.registry.beat, state.worker_id, state.public_url, state.active, state.max_calls,
-                                        {"quality": gov.snapshot()["turns"] if gov is not None else {}})
+                extra = {"quality": gov.snapshot()["turns"] if gov is not None else {}, "ceiling": state.max_calls}
+                if state.admission is not None:
+                    extra["p90_ms"] = state.admission.snapshot()["p90_ms"]
+                await asyncio.to_thread(state.registry.beat, state.worker_id, state.public_url, state.active, state.cap(), extra)
                 state.load_changed.clear()
                 try:
                     await asyncio.wait_for(state.load_changed.wait(), timeout=2.0)
@@ -101,15 +115,16 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
 
         if state.metrics is None:
             return Response("# metrics off\n", media_type="text/plain")
-        state.metrics.refresh(state.active, getattr(state.app.engine, "governor", None))
+        state.metrics.refresh(state.active, getattr(state.app.engine, "governor", None), state.admission, state.cap())
         body, kind = state.metrics.render()
         return Response(body, media_type=kind)
 
     @api.get("/health")
     async def health() -> dict:
         gov = getattr(state.app.engine, "governor", None)
-        return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "served": state.served, "refused": state.refused,
-                "uptime_s": round(time.monotonic() - state.started), "quality": gov.snapshot() if gov is not None else None}
+        return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "cap": state.cap(), "served": state.served, "refused": state.refused,
+                "uptime_s": round(time.monotonic() - state.started), "quality": gov.snapshot() if gov is not None else None,
+                "admission": state.admission.snapshot() if state.admission is not None else None}
 
     @api.websocket("/voice")
     async def voice(ws: WebSocket) -> None:
@@ -118,7 +133,7 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
             await ws.close(code=1008)
             return
         await ws.accept()
-        if state.active >= state.max_calls:
+        if state.active >= state.cap():
             state.refused += 1
             if state.metrics is not None:
                 state.metrics.call("refused")
@@ -237,7 +252,13 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         if state.metrics is not None:
             state.metrics.reply_time(total)
 
-    clock = TurnClock(state.stop_secs, timed)
+    def answered(seconds: float) -> None:                     # the answer itself, not a "Let me check." said first: what the call cap follows
+        if state.admission is not None:
+            state.admission.record(seconds)
+        if state.metrics is not None:
+            state.metrics.answer_time(seconds)
+
+    clock = TurnClock(state.stop_secs, timed, on_answer=answered, fillers=FILLERS)
     probes = {"vad": StatusLine(set(), clock=clock, stage="vad"), "stt": StatusLine(set(), clock=clock, stage="stt"),
               "brain": StatusLine(set(), clock=clock, stage="brain")}
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(
