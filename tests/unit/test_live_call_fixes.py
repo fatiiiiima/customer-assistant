@@ -210,3 +210,50 @@ def test_a_website_description_is_said_as_a_sentence():
     assert blurb_sentence("V8 power and seven seats") == "It offers V8 power and seven seats."
     assert blurb_sentence("Sharp looks and a big boot") == "It offers sharp looks and a big boot."
     assert blurb_sentence("This Patrol is built for the dunes.") == "This Patrol is built for the dunes."          # already a sentence
+
+
+# ------------------------------------------------------------------------------------------------ 7. follow-ups that widen or point back
+def test_the_call_widening_from_toyota_to_any_red_car():
+    e, b = agent(None)
+    s = e.new_session()
+    said(e, s, "Toyota.")
+    r = said(e, s, "I want a red Toyota.")                                       # a red Toyota insisted on: say what colours the Toyotas are
+    assert "None of our Toyotas is red" in r.reply
+    asked = len(b.prompts)
+    r = said(e, s, "Do you have any red cars?")                                  # any make now
+    assert "Toyota" not in r.reply and "Altima" in r.reply and "Mustang" in r.reply and s.filters == {"color": "red"}
+    r = said(e, s, "Do you have any other red cars?")                            # a search for red, not a list of makes
+    assert r.debug.intent == "search_cars" and r.reply.startswith("Those are all the red cars I have right now")
+    assert len(b.prompts) == asked                                               # all by code
+
+
+def test_an_earlier_make_is_dropped_only_when_nothing_matches_and_it_is_said():
+    e, _ = agent(None)
+    s = e.new_session()
+    said(e, s, "Toyota.")
+    r = said(e, s, "do you have something in red?")
+    assert r.reply.startswith("I don't have a red Toyota, but") and "Altima" in r.reply
+    e2, _ = agent(None)
+    s2 = e2.new_session()
+    said(e2, s2, "Toyota.")
+    r = said(e2, s2, "do you have something in white?")                         # white Toyotas exist: the make stays
+    assert s2.filters.get("make") == "toyota" and all(c.make == "Toyota" for c in s2.shown)
+
+
+def test_which_ones_after_a_count_reads_the_list_out():
+    for line in ("which ones?", "what are they", "name them", "Which one of those are there?", "which ones are there"):
+        e, b = agent(None)
+        s = e.new_session()
+        said(e, s, "do you have any SUVs")
+        assert s.narrow_asks > 0
+        asked = len(b.prompts)
+        r = said(e, s, line)
+        assert r.debug.intent == "search_cars" and len(b.prompts) == asked and len(s.shown) >= 2, line
+        assert all(c.model in r.reply or c.model.split()[0] in r.reply for c in s.shown[:2]), (line, r.reply)
+
+
+def test_what_other_cars_do_you_have_still_lists_the_other_makes():
+    e, _ = agent(None)
+    s = e.new_session()
+    said(e, s, "Toyota.")
+    assert said(e, s, "what other cars do you have").debug.intent == "browse_makes"

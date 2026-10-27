@@ -63,6 +63,13 @@ _LOOKING = re.compile(r"\b(?:looking for|look for|do you have|have you got|any|s
 _COLOUR_Q = re.compile(r"\b(?:what|which) colou?rs?\b|\bcolou?rs? (?:are|is|do|does|have|come|available|options?)\b|\b(?:available|other) colou?rs\b|"
                        r"\bin (?:what|which) colou?r\b|\bcolou?r (?:options|choices)\b")
 _PLURAL_REF = re.compile(r"\b(?:they|these|those|them|both|each|the cars|these cars|those cars|the ones|all of them)\b")
+# "any red cars", "other SUVs from any brand", "doesn't have to be a Toyota": the caller widens the search beyond the make asked for earlier.
+_ANY_CARS = re.compile(r"\b(?:any|other|all|different|some)\b(?: \w+){0,2} (?:cars|vehicles|makes|brands)\b|\bany (?:make|brand)\b|"
+                       r"\b(?:doesn't|does not|don't|do not) (?:have to|need to) be\b|\bnot (?:just|only) (?:a |an )?\w+s?\b")
+# "which ones?", "what are they?", "name them" right after a count: read the list out.
+_WHICH_ONES = re.compile(r"(?:so |and |ok(?:ay)? |yeah )?(?:which ones?(?: of (?:those|them|these))?(?: (?:are|is) (?:they|there|those|available|it))?|"
+                         r"which (?:are|ones are) (?:they|those|there)|what are (?:they|those|them|the cars)|(?:name|list|read) them(?: out)?(?: for me)?|"
+                         r"tell me (?:which ones|them|what they are)|which cars(?: are they)?)(?: then)?")
 _STOCK_REF = re.compile(r"\b(?:do you have|have you got|you got|in stock|different|other|all your|your cars)\b")
 _SINGULAR_REF = re.compile(r"\b(?:it|its|it's|this one|that one|this car|that car)\b")
 # A turn cut off mid-phrase (the end-of-turn detector fired during a pause, or the recognizer lost the end): ends on a word that cannot end a
@@ -663,10 +670,13 @@ class AgentEngine:
             return {"tool": "search_cars", "via": "rules"}                        # "Toyota" / "maybe a Toyota": that make
         if _GREETING.fullmatch(joined):
             return {"tool": "none", "via": "rules"}
+        if not booking_flow and (s.narrow_asks > 0 or s.shown) and s.filters and not s.car and _WHICH_ONES.fullmatch(joined):
+            return {"tool": "search_cars", "via": "rules"}                       # "which ones?" after "There are 8 SUVs ..." (or a list): read them out
         if not booking_flow and s.makes_said and _REST.search(joined):
             return {"tool": "browse_makes", "via": "rules"}                       # "what are the 9 other makes?"
         if not booking_flow and _OTHER_RANGE.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make") \
-                and not re.search(r"\b(?:cheaper|bigger|smaller|similar|like (?:it|this|that))\b", joined):
+                and not re.search(r"\b(?:cheaper|bigger|smaller|similar|like (?:it|this|that))\b", joined) \
+                and not set(ex.search_filters(text, self.svc.inventory.vocabulary())) - {"make", "model"}:   # "any other red cars?" is a search for red
             return {"tool": "browse_makes", "via": "rules"}                       # "what other car models do you have?": the rest of the stock, not more of one make
         if _BYE.search(joined) and len(words) <= 8 and not booking_flow:
             return {"tool": "end_call", "via": "rules"}
@@ -683,8 +693,9 @@ class AgentEngine:
                 and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make"):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "can you do 150,000?" is an offer on this car, not a new budget
         about_it = s.car and re.search(r"\b(?:it|its|it's|this one|that one|this car|that car)\b", joined)
+        searchable = set(ex.search_filters(text, self.svc.inventory.vocabulary())) - {"make", "model"}
         if not booking_flow and not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(joined) or _LOW_KM.search(joined)) \
-                and not _OTHER_RANGE.search(joined) and not A.superlative_topic(joined):
+                and (not _OTHER_RANGE.search(joined) or searchable) and not A.superlative_topic(joined):
             return {"tool": "search_cars", "via": "rules"}                       # "an SUV under 100k", "a white one", "anything electric"
         if not booking_flow and (_FINANCE.search(joined) or (not s.car and _OPINION.search(joined) and not _FAMILY.search(joined))):
             return {"tool": "none", "via": "rules"}                              # finance, "something reliable": answered by code in _t_none
@@ -910,6 +921,10 @@ class AgentEngine:
         vocab = self.svc.inventory.vocabulary()
         f = dict(s.filters)
         make = str(args.get("make") or "").strip().lower()
+        if not make and not args.get("model") and _ANY_CARS.search(" ".join(ex.tokens_of(text))) and \
+                not ex.find_vehicle(ex.tokens_of(text), vocab).get("make"):
+            f.pop("make", None)                                          # "do you have any red cars?" after Toyotas: any make now
+            f.pop("model", None)
         model = str(args.get("model") or "").strip().lower()
         if model and not make:
             make = next((mk for mk, ms in vocab.items() if model in ms), "")
@@ -989,13 +1004,20 @@ class AgentEngine:
                     "facts": ["Nothing in stock is cheaper."], "awaiting": True}
         if not res.cars and ex.wants_others(text) and f.get("make"):
             return self._t_browse_makes(s, args, text, dbg)
+        if not res.cars and ex.wants_others(text) and len(s.shown) >= 1 and f:          # "any other red cars?" after every red one was read out
+            what = W.what_they_asked(list(s.shown), f)
+            names = [f"the {T.short_name(c)}" for c in s.shown]
+            listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            only = f"That's the only one of our {what} right now: {listed}." if len(names) == 1 else f"Those are all the {what} I have right now: {listed}."
+            return {"core": f"{only} {'Would you like to hear more about it?' if len(names) == 1 else 'Which one would you like to hear more about?'}",
+                    "facts": [f"Search for {wanted}: no others beyond the {len(names)} already read out."], "awaiting": True}
         if not res.cars:
             # Nothing matches EVERYTHING asked so far. If a filter from earlier in the call is what empties it (a budget from "something
             # cheaper", then "do you have a BMW?"), look again with only what was just asked, and say both: never "we have no BMWs" when we do.
             said_now = {k: v for k, v in ex.search_filters(text, self.svc.inventory.vocabulary()).items() if v not in (None, "")}
             if make:
                 said_now["make"] = make
-            carried = {k: v for k, v in f.items() if k not in said_now and k in ("max_price", "min_price", "year_min", "max_km", "color", "body_type", "model")}
+            carried = {k: v for k, v in f.items() if k not in said_now and k in ("make", "max_price", "min_price", "year_min", "max_km", "color", "body_type", "model")}
             if said_now and carried:
                 try:
                     wider = self.svc.search_cars(SearchFilters(**{k: (BodyType(v) if k == "body_type" else v) for k, v in said_now.items()
@@ -1007,6 +1029,11 @@ class AgentEngine:
                     limits = self._filters_said(carried)
                     what = W.what_they_asked(list(wider.cars), said_now)
                     lead = f"{T.cap(limits)} I don't have one, but" if limits else "Not with everything you mentioned, but"
+                    if set(carried) == {"make"} and set(said_now) <= {"color", "body_type"}:     # "I don't have a red Toyota, but ..."
+                        name = next((c.make for c in self.svc.inventory.search(SearchFilters(make=carried["make"]), 1)), str(carried["make"]).title())
+                        body = str(said_now.get("body_type") or "")
+                        thing = " ".join(x for x in (said_now.get("color"), name, body.upper() if body == "suv" else body) if x)
+                        lead = f"I don't have {'an' if thing[:1].lower() in 'aeiou' else 'a'} {thing}, but"
                     if wider.needs_narrowing:
                         body = f"{lead} there are {wider.total} {what}, from {T.money(min(c.price for c in wider.cars))}. What budget would work for you?"
                     else:
@@ -1312,6 +1339,9 @@ class AgentEngine:
     def _filters_said(f: dict) -> str:
         """'under 62,499 dirhams', 'from 2021', 'white': the filters from earlier in the call, said the way a person would."""
         parts = []
+        if f.get("make"):
+            make = str(f["make"])
+            parts.append(f"as {'an' if make[:1] in 'aeiou' else 'a'} {make.title() if len(make) > 3 else make.upper()}")
         if f.get("max_price"):
             parts.append(f"under {T.money(int(f['max_price']) + 1 if int(f['max_price']) % 500 == 499 else int(f['max_price']))}")
         if f.get("year_min"):
