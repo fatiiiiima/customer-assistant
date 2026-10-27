@@ -47,6 +47,11 @@ voice = [
 record = [
     "sounddevice>=0.5.6",
 ]
+# Several workers + the router on one machine (scripts/run_cluster.py), and PostgreSQL for bookings and shared call state
+cluster = [
+    "pg8000",             # BSD-3; PostgreSQL driver (repos/pg_store.py, shared/state.py PgStore)
+    "pgserver",           # Apache-2.0; a local PostgreSQL, started by run_cluster.py and the PostgreSQL tests
+]
 
 [dependency-groups]
 dev = [

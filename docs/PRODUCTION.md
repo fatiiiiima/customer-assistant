@@ -78,7 +78,7 @@ model-written replies for naturalness, so model, prompt and level choices are ma
 | Worker registry + router | workers report load every 2 s; the router gives each new call the least busy worker, 503 "busy" when all are full | `python -m dealer_core.gateway` |
 | Page | asks the router for a worker (`CONFIG.voiceGateway`), sends a call id, reconnects once if its worker drops | `bmw-portal/site/voice.js` |
 | Metrics | calls, reply-time histogram, quality-level mix, model load at `/metrics` | `server/metrics.py`, `deploy/prometheus.yml` |
-| One-machine cluster | database + model server + N workers + router, restarts a worker that dies | `scripts/run_cluster.py --workers 3` |
+| One-machine cluster | database + model + N workers + router, restarts a worker that dies; the model is the OpenVINO server on Intel, Ollama on Apple chips (`--backend`); needs the `cluster` extra | `scripts/run_cluster.py --workers 3` (`--dry-run` to see the plan) |
 | Deployment | container image, one-GPU-machine compose file, Kubernetes for 500 callers (workers autoscaled on active calls, 2 vLLM replicas) | `deploy/` |
 
 Tested here: every booking test on a real PostgreSQL 16 (pgserver), a 16-caller race for one slot across 4 workers (exactly one
