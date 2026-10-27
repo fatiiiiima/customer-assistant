@@ -16,6 +16,7 @@ Built for bursts (hundreds of callers arriving within seconds):
 
   GET /assign    {"url": "ws://.../voice", "worker": "..."}  or 503 {"busy": true}
   GET /workers   every live worker and its load (for dashboards)
+  GET /metrics   for the autoscaler: callers turned away in the last 30 s (demand the workers' own numbers cannot show)
   GET /health
 """
 from __future__ import annotations
@@ -75,6 +76,7 @@ def create_gateway(registry, allowed_origins: list[str], refresh_s: float = 0.5,
     api = FastAPI(title="voice router")
     api.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["GET"], allow_headers=["*"])
     stats = {"assigned": 0, "busy": 0, "started": time.time()}
+    turned_away: list[float] = []                               # when each recent "busy" was answered
     view = assigner or Assigner(registry)
     api.state.assigner = view
 
@@ -97,6 +99,8 @@ def create_gateway(registry, allowed_origins: list[str], refresh_s: float = 0.5,
         w = view.pick()
         if w is None:
             stats["busy"] += 1
+            turned_away.append(time.monotonic())
+            del turned_away[:-10000]
             return JSONResponse({"busy": True}, status_code=503)
         stats["assigned"] += 1
         return {"url": w["url"], "worker": w["id"]}
@@ -106,6 +110,22 @@ def create_gateway(registry, allowed_origins: list[str], refresh_s: float = 0.5,
         ws = view.workers
         return {"workers": sorted(ws, key=lambda w: w["id"]), "calls": sum(w.get("active", 0) for w in ws),
                 "capacity": sum(w.get("max", 0) for w in ws)}
+
+    @api.get("/metrics")
+    async def metrics():
+        """Scale on DEMAND, not only on calls in progress: a caller turned away is invisible to the workers. The autoscaler's metric is
+        (sum of voice_calls_active + sum of voice_router_turned_away_30s) / sum of voice_call_cap, at 70% (deploy/k8s/voice.yaml)."""
+        from fastapi.responses import PlainTextResponse
+
+        now = time.monotonic()
+        recent = sum(1 for t in turned_away if t >= now - 30)
+        ws = view.workers
+        lines = ["# TYPE voice_router_turned_away_30s gauge", f"voice_router_turned_away_30s {recent}",
+                 "# TYPE voice_router_busy_total counter", f"voice_router_busy_total {stats['busy']}",
+                 "# TYPE voice_router_assigned_total counter", f"voice_router_assigned_total {stats['assigned']}",
+                 "# TYPE voice_router_capacity gauge", f"voice_router_capacity {sum(w.get('max', 0) for w in ws)}",
+                 "# TYPE voice_router_calls gauge", f"voice_router_calls {sum(w.get('active', 0) for w in ws)}"]
+        return PlainTextResponse("\n".join(lines) + "\n")
 
     @api.get("/health")
     async def health():

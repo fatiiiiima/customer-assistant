@@ -90,6 +90,8 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
+    if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
+        app.engine.decide_deadline_s = cfg.voice.decide_deadline_ms / 1000
     if hasattr(app.engine, "bridge_after_ms"):                # agent engine: "Let me check." while a slow model decides (voice only; text chat does not wait on audio)
         app.engine.bridge_after_ms = cfg.voice.bridge_after_ms
 

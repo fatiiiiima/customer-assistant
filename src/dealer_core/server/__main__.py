@@ -10,7 +10,8 @@ def main() -> int:
     ap.add_argument("--site", type=Path, default=Path(r"C:\dev\bmw-portal\site"), help="the website's site folder (its data.js is the inventory)")
     ap.add_argument("--host", default="127.0.0.1", help="interface to listen on; keep 127.0.0.1 unless the page is served from another machine")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--max-calls", type=int, default=2, help="simultaneous calls; more are told 'busy' (the page falls back to text chat)")
+    ap.add_argument("--max-calls", type=int, default=2, help="the most simultaneous calls (with voice.admission the worker takes fewer while its replies are slow); "
+                                                                 "more are told 'busy' (the page falls back to text chat)")
     ap.add_argument("--origin", action="append", help="a page origin allowed to connect (repeatable); default http://localhost:8080")
     ap.add_argument("--quality", choices=["auto", "full", "prefix", "code"], default=None,
                     help="agent: auto picks per turn from the model's speed (default); full / prefix / code force one level")
@@ -62,6 +63,11 @@ def main() -> int:
         state.worker_id = a.worker_id or f"{a.host}:{a.port}"
         state.public_url = a.public_url or f"ws://{a.host}:{a.port}/voice"
     from .metrics import Metrics
+
+    if cfg.voice.admission:
+        from .admission import AdmissionController
+
+        state.admission = AdmissionController(a.max_calls, target_s=cfg.voice.admission_target_ms / 1000)
 
     state.metrics = Metrics()
     origins = a.origin or ["http://localhost:8080", "http://127.0.0.1:8080"]
