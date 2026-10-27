@@ -34,9 +34,12 @@ PY = str(ROOT / ".venv" / "Scripts" / "python.exe") if os.name == "nt" else sys.
 OLLAMA = "http://127.0.0.1:11434"
 
 
-def wait_http(url: str, timeout_s: float = 300.0) -> bool:
+def wait_http(url: str, timeout_s: float = 300.0, proc: subprocess.Popen | None = None) -> bool:
+    """True once the address answers; False after the timeout, or as soon as `proc` (the process behind it) has exited."""
     t0 = time.time()
     while time.time() - t0 < timeout_s:
+        if proc is not None and proc.poll() is not None:
+            return False
         try:
             with urllib.request.urlopen(url, timeout=2) as r:
                 if r.status == 200:
@@ -44,6 +47,13 @@ def wait_http(url: str, timeout_s: float = 300.0) -> bool:
         except Exception:
             time.sleep(1.5)
     return False
+
+
+def log_tail(path: Path, lines: int = 15) -> str:
+    try:
+        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+    except OSError:
+        return ""
 
 
 def pick_backend(choice: str, machine: str | None = None) -> str:
@@ -132,56 +142,71 @@ def main() -> int:
         out = open(logs / f"{name}.log", "ab")
         procs[name] = (cmd, env, subprocess.Popen(cmd, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, env=env))
 
-    db_url = a.database_url
-    if not db_url:
-        try:
-            import pgserver
-        except ImportError:
-            print("the local PostgreSQL needs the cluster extra: uv sync --python 3.12 --extra voice --extra openvino --extra spike --extra cluster",
-                  flush=True)
-            return 1
-        db_url = pgserver.get_server(str(ROOT / "data" / "pg_cluster"), cleanup_mode="stop").get_uri()
-    print(f"database  {db_url}", flush=True)
-    base_env = {**os.environ, "DATABASE_URL": db_url}
-
-    if backend == "openvino":
-        launch("model", [PY, "-m", "dealer_core.modelserver", "--model", a.model, "--port", "8001"], base_env)
-        if not wait_http("http://127.0.0.1:8001/health"):
-            print("the model server did not start: see logs/cluster/model.log", flush=True)
-            return 1
-        print("model     http://127.0.0.1:8001/v1", flush=True)
-    else:
-        print(f"model     Ollama at {OLLAMA}", flush=True)
-
-    for i in range(a.workers):
-        launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url))
-    for i in range(a.workers):
-        if wait_http(f"http://127.0.0.1:{a.first_port + i}/health"):
-            print(f"worker{i + 1}   ws://127.0.0.1:{a.first_port + i}/voice", flush=True)
-        else:
-            print(f"worker{i + 1} did not start: see logs/cluster/worker{i + 1}.log", flush=True)
-
-    launch("router", [PY, "-m", "dealer_core.gateway", "--state-url", db_url, "--port", "8760"], base_env)
-    wait_http("http://127.0.0.1:8760/health", 60)
-    print(f"router    http://127.0.0.1:8760/assign   ({a.workers} workers x {a.calls_per_worker} calls; live view: http://127.0.0.1:8760/workers)",
-          flush=True)
-    print("ready", flush=True)
-
     stopping = False
 
     def stop(*_):
         nonlocal stopping
         stopping = True
+        raise KeyboardInterrupt                                            # also ends a wait during start-up
 
     signal.signal(signal.SIGINT, stop)
+    if os.name != "nt":
+        signal.signal(signal.SIGTERM, stop)                               # `kill`, or the terminal closing
     try:
+        db_url = a.database_url
+        if not db_url:
+            try:
+                import pgserver
+            except ImportError:
+                print("the local PostgreSQL needs the cluster extra: uv sync --python 3.12 --extra voice --extra openvino --extra spike --extra cluster",
+                      flush=True)
+                return 1
+            db_url = pgserver.get_server(str(ROOT / "data" / "pg_cluster"), cleanup_mode="stop").get_uri()
+        print(f"database  {db_url}", flush=True)
+        base_env = {**os.environ, "DATABASE_URL": db_url}
+
+        if backend == "openvino":
+            launch("model", [PY, "-m", "dealer_core.modelserver", "--model", a.model, "--port", "8001"], base_env)
+            if not wait_http("http://127.0.0.1:8001/health", proc=procs["model"][2]):
+                print("the model server did not start: see logs/cluster/model.log\n" + log_tail(logs / "model.log"), flush=True)
+                return 1
+            print("model     http://127.0.0.1:8001/v1", flush=True)
+        else:
+            print(f"model     Ollama at {OLLAMA}", flush=True)
+
+        for i in range(a.workers):
+            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url))
+        print(f"starting {a.workers} workers (loading the speech models takes a minute or two)...", flush=True)
+        started = 0
+        for i in range(a.workers):
+            name = f"worker{i + 1}"
+            if wait_http(f"http://127.0.0.1:{a.first_port + i}/health", proc=procs[name][2]):
+                print(f"{name}   ws://127.0.0.1:{a.first_port + i}/voice", flush=True)
+                started += 1
+            else:
+                print(f"{name} did not start: logs/cluster/{name}.log ends with:\n{log_tail(logs / f'{name}.log')}", flush=True)
+        if not started:
+            print("no worker started: fix the error above and run this again", flush=True)
+            return 1
+
+        launch("router", [PY, "-m", "dealer_core.gateway", "--state-url", db_url, "--port", "8760"], base_env)
+        if not wait_http("http://127.0.0.1:8760/health", 60, proc=procs["router"][2]):
+            print("the router did not start: logs/cluster/router.log ends with:\n" + log_tail(logs / "router.log"), flush=True)
+            return 1
+        print(f"router    http://127.0.0.1:8760/assign   ({started} workers x {a.calls_per_worker} calls; live view: http://127.0.0.1:8760/workers)",
+              flush=True)
+        print("ready", flush=True)
+
         while not stopping:
             time.sleep(2)
             for name, (cmd, env, p) in list(procs.items()):
                 if p.poll() is not None and not stopping:                  # died: start it again
                     print(f"{name} stopped (exit {p.returncode}); starting it again", flush=True)
                     launch(name, cmd, env)
+    except KeyboardInterrupt:
+        pass
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)                      # a second Ctrl+C must not cut the clean-up short
         for name, (_, _, p) in procs.items():
             if p.poll() is None:
                 if os.name == "nt":

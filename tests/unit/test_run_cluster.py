@@ -37,3 +37,23 @@ def test_a_dry_run_prints_the_plan_and_starts_nothing(tmp_path):
     out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "openvino", "--site", str(tmp_path)],
                          capture_output=True, text=True, timeout=60).stdout
     assert "dealer_core.modelserver" in out and "openvino_server" in out
+
+
+def test_waiting_for_a_worker_stops_as_soon_as_it_has_died():
+    dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
+    dead.wait()
+    t0 = __import__("time").time()
+    assert rc.wait_http("http://127.0.0.1:9/health", timeout_s=30, proc=dead) is False
+    assert __import__("time").time() - t0 < 2                                       # not the 30 s timeout
+
+
+def test_the_database_address_of_a_local_postgresql_on_a_mac_is_its_socket_file():
+    from dealer_core.repos.pg_store import connect_args
+
+    mac = connect_args("postgresql://postgres:@/postgres?host=/Users/f/dev/voice-agent/data/pg_cluster")   # what pgserver gives on a Mac
+    assert mac["unix_sock"] == "/Users/f/dev/voice-agent/data/pg_cluster/.s.PGSQL.5432" and "host" not in mac
+    assert mac["user"] == "postgres" and mac["password"] is None and mac["database"] == "postgres"
+    win = connect_args("postgresql://postgres:@127.0.0.1:5433/postgres")                                   # what pgserver gives on Windows
+    assert win["host"] == "127.0.0.1" and win["port"] == 5433 and "unix_sock" not in win
+    assert connect_args("postgresql://app:p%40ss@db.internal/voice") == {"user": "app", "password": "p@ss", "database": "voice",
+                                                                        "host": "db.internal", "port": 5432}
