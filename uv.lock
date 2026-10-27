@@ -2512,6 +2512,7 @@ name = "voice-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -2559,6 +2560,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", marker = "extra == 'spike'" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jiwer", marker = "extra == 'spike'" },
     { name = "kokoro-onnx", marker = "extra == 'spike'" },
     { name = "numpy", marker = "extra == 'spike'" },
