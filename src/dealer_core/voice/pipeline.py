@@ -47,7 +47,7 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
-        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice)
+        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime)
     else:
         tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies)
     stt.warm_up()
