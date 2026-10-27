@@ -272,7 +272,8 @@ def asks_if_only_one(text: str) -> bool:
 _NAME_CUE = re.compile(r"(?:my name is|the name is|name is|this is|i am|i'm|it is|it's|its|name's|call me|name:)\s+([A-Za-z][A-Za-z' ]*?)"
                        r"(?=\s+(?:and|my|phone|number|mobile|call|reach|you can)\b|[,.;:\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)",
                        re.I)
-_STOP = {"yes", "no", "ok", "okay", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
+_STOP = {"yes", "no", "ok", "okay", "yeah", "yep", "yup", "yea", "ya", "nope", "nah", "alright", "right", "cool", "awesome", "absolutely",
+        "definitely", "certainly", "actually", "sounds", "lovely", "excellent", "exactly", "correct", "hey", "hmm", "er", "erm", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
         "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh",
         # words of a time or day, never of a name: "to PM" (two PM misheard), "tomorrow at", "at two"
         "to", "too", "for", "at", "on", "in", "by", "pm", "p.m", "a.m", "tomorrow", "today", "tonight", "morning", "afternoon", "evening", "noon",

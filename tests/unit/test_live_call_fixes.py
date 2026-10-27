@@ -112,3 +112,28 @@ def test_a_reply_stopped_mid_list_leaves_no_clause_hanging():
     assert not any(x.rstrip().endswith(",") for x in out)
     assert not any("Corolla" in x for x in out)                                 # the unfinished list is not spoken at all
     assert out[-1].endswith("?")
+
+
+# ------------------------------------------------------------------------------------------------ 4. "Yeah" taken as the caller's name
+def test_yes_to_come_and_see_it_is_not_a_name_and_the_name_is_then_asked_for():
+    from dealer_core.nlu import extractors as ex
+
+    assert ex.contact("Yeah, I want to come and see it.").name is None
+    for opener in ("Yeah", "Totally"):                                       # "Totally" is not a stop word: the booking step itself must refuse it
+        e, _ = agent(None)
+        s = e.new_session()
+        said(e, s, "tell me about the Land Cruiser")
+        said(e, s, f"{opener}, I want to come and see it.")
+        said(e, s, "Tomorrow?")
+        r = said(e, s, "2 in the afternoon.")
+        assert s.draft_name is None, opener
+        assert "name" in r.reply.lower(), r.reply                            # so the agent asks for it
+
+
+def test_a_name_without_a_cue_is_still_taken_when_it_was_asked_for_or_comes_with_the_number():
+    e, _ = agent(None)
+    s = e.new_session()
+    said(e, s, "tell me about the Land Cruiser")
+    said(e, s, "I want to come and see it tomorrow at 2 PM")
+    said(e, s, "Fatima, 050 793 2546")
+    assert s.draft_name == "Fatima" and s.read_back

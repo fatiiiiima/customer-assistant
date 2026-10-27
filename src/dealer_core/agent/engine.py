@@ -771,7 +771,10 @@ class AgentEngine:
             cue = re.search(r"\b(?:my name is|this is|i am|i'm|name's|it's)\b", text, re.I)
             when_found = parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found
             args["phone"] = ct.phone
-            args["name"] = ct.name if (cue or not when_found) else None       # "tomorrow at four" must not become a name
+            asked_name = s.state is State.CONTACT or bool(re.search(r"\b(?:name|who should i put)\b", expected.last_question(s.last_agent()), re.I))
+            # Without "my name is", the leading words are a name only when a name was asked for or a number comes with them
+            # ("Mohammed, 050 ..."): "Yeah, I want to come and see it" after "Want to come and see it?" is not a name.
+            args["name"] = ct.name if (cue or ((asked_name or ct.phone) and not when_found)) else None   # "tomorrow at four" is never a name
             args["when"] = text
         return args
 
