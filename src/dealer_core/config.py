@@ -97,6 +97,7 @@ class LlmCfg(_Strict):
 
 class TtsCfg(_Strict):
     backend: Literal["piper", "kokoro"] = "kokoro"
+    kokoro_runtime: Literal["auto", "openvino", "onnxruntime"] = "auto"   # auto: OpenVINO on Intel / AMD, ONNX Runtime on Apple chips (OpenVINO distorts the voice there)
     kokoro_voice: str = "sarah"         # kokoro backend: sarah / heart / bella / emma (female), michael / adam / puck / eric / liam / onyx (US male), fenrir, george / lewis (UK male)
     voice: str | None = "joe"           # Piper voice folder name (see voice/tts.py VOICES). Owner choice: Joe (CC0)
     speaker: int = 0                    # speaker id inside a multi-speaker voice (libritts_r has many; amy has one)

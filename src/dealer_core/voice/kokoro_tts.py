@@ -11,6 +11,7 @@ Phonemes come from kokoro-onnx (espeak-ng, the same GPL-3 data Piper uses: the s
 """
 from __future__ import annotations
 
+import platform
 import queue
 import re
 import threading
@@ -56,6 +57,15 @@ class _OVSession:
         return [_Named("audio", "tensor(float)")]
 
 
+def kokoro_runtime(setting: str = "auto", machine: str | None = None) -> str:
+    """Which engine runs the Kokoro model. OpenVINO is ~30% faster on Intel / AMD processors, but on Apple chips (arm64) it produces
+    distorted audio from this model (heard on a MacBook, 27 Oct 2026), so "auto" uses ONNX Runtime, Kokoro's own engine, there."""
+    if setting in ("openvino", "onnxruntime"):
+        return setting
+    m = (machine if machine is not None else platform.machine()).lower()
+    return "openvino" if m in ("x86_64", "amd64", "x86", "i386", "i686") else "onnxruntime"
+
+
 class _Named:
     def __init__(self, name: str, kind: str) -> None:
         self.name, self.type = name, kind
@@ -99,14 +109,21 @@ def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> l
 class KokoroOV:
     sample_rate = 24000
 
-    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300) -> None:
+    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto") -> None:
         from kokoro_onnx import Kokoro
 
         d = models / "kokoro-v1.0"
-        self.kokoro = Kokoro.from_session(_OVSession(d / "kokoro-v1.0.onnx", models / "ov_cache"), str(d / "voices-v1.0.bin"))
+        self.runtime = kokoro_runtime(runtime)
+        if self.runtime == "openvino":
+            session = _OVSession(d / "kokoro-v1.0.onnx", models / "ov_cache")
+        else:                                              # thread-safe like the OpenVINO session: one session serves every call
+            import onnxruntime as rt
+
+            session = rt.InferenceSession(str(d / "kokoro-v1.0.onnx"), providers=["CPUExecutionProvider"])
+        self.kokoro = Kokoro.from_session(session, str(d / "voices-v1.0.bin"))
         self.voice = VOICES.get(voice, voice)
         self.speed = speed
-        self.name = f"kokoro:{self.voice}"
+        self.name = f"kokoro:{self.voice}@{self.runtime}"
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._cache_size = cache_size
         self._lock = threading.Lock()

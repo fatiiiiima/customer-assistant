@@ -1,5 +1,5 @@
 """Kokoro's pieces: a short first piece so the first sound comes quickly, then clauses."""
-from dealer_core.voice.kokoro_tts import first_piece_split
+from dealer_core.voice.kokoro_tts import first_piece_split, kokoro_runtime
 
 
 def test_the_first_piece_is_short_and_nothing_is_lost():
@@ -16,3 +16,12 @@ def test_an_opener_is_its_own_piece_and_the_next_one_is_short():
     assert pieces[0] == "Right," and len(pieces[1].split()) <= 8 and " ".join(pieces) == text
     assert first_piece_split("Of course. What day and time suit you?") == ["Of course.", "What day and time suit you?"]
     assert first_piece_split("Okay.") == ["Okay."]
+
+
+def test_openvino_on_intel_and_amd_onnxruntime_on_apple_chips_unless_chosen():
+    assert kokoro_runtime("auto", "AMD64") == "openvino"                  # Windows on Intel / AMD
+    assert kokoro_runtime("auto", "x86_64") == "openvino"
+    assert kokoro_runtime("auto", "arm64") == "onnxruntime"               # Apple chips: OpenVINO distorts this model's audio
+    assert kokoro_runtime("auto", "aarch64") == "onnxruntime"
+    assert kokoro_runtime("openvino", "arm64") == "openvino"              # tts.kokoro_runtime set by hand wins
+    assert kokoro_runtime("onnxruntime", "AMD64") == "onnxruntime"
