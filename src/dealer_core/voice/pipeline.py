@@ -23,7 +23,7 @@ from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
-from ..agent.engine import BRIDGES
+from ..agent.engine import BRIDGES, CUT_OFF
 from ..agent.wording import OPENERS
 
 STT_RATE = 16000
@@ -73,7 +73,7 @@ def common_phrases(cfg: Config) -> list[str]:
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
-            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + [b for b in BRIDGES]
+            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + ["Is there a colour you'd like?"]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
