@@ -137,3 +137,34 @@ def test_a_name_without_a_cue_is_still_taken_when_it_was_asked_for_or_comes_with
     said(e, s, "I want to come and see it tomorrow at 2 PM")
     said(e, s, "Fatima, 050 793 2546")
     assert s.draft_name == "Fatima" and s.read_back
+
+
+# ------------------------------------------------------------------------------------------------ 5. "Sure, The 2018 Honda Civic ..."
+def test_after_an_opener_the_next_word_is_lower_case_unless_it_is_a_name():
+    from dealer_core.agent.engine import _after_opener, _lower_first
+
+    proper = {"toyota", "land", "cruiser", "honda", "civic"}
+    assert _after_opener("The 2018 Honda Civic is red.", proper) == "the 2018 Honda Civic is red."      # the model did not start with "Sure,"
+    assert _lower_first("Besides Toyota, we've got 20 more cars.", proper) == "besides Toyota, we've got 20 more cars."
+    assert _lower_first("Sharp styling and a punchy turbo engine.", proper) == "sharp styling and a punchy turbo engine."
+    for name in ("Toyota has two in stock.", "Land Cruisers hold their value.", "I can check that.", "AGMC cars are inspected.",
+                 "SUVs are popular here.", "BMWs hold up well.", "Monday works too.", "Dubai traffic is light then."):
+        assert _lower_first(name, proper) == name
+    assert _after_opener("Sure, we've got 4 SUVs.", proper, new_sentence=True) == "We've got 4 SUVs."   # after "Let me check." a new sentence
+
+
+def test_an_opener_then_the_models_sentence_reads_as_one_sentence():
+    from dealer_core.agent.governor import QualityGovernor
+
+    from .test_scale import Scripted
+
+    class Describes(Scripted):
+        def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
+            yield "The 2021 Toyota Land Cruiser is white with 62,000 kilometres. Want to book a test drive?"
+
+    e, _ = agent(None, backend=Describes())
+    e.governor, e.openers = QualityGovernor("full"), True
+    s = e.new_session()
+    said(e, s, "do you have any SUVs")
+    out = list(e.handle_stream(s, "the Land Cruiser"))[:-1]
+    assert out[0].endswith(",") and out[1].startswith("the 2021 Toyota Land Cruiser"), out

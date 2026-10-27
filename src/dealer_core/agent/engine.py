@@ -98,21 +98,30 @@ _BRIDGE_CUE = re.compile(r"\b(?:do you have|have you got|got any|any|show me|loo
                          r"what|which|is there|are there|available|in stock|stock|compare|difference|better|km|kilomet\w*|mileage|colou?r|year|"
                          r"suv|sedan|hatchback|coupe|pickup|van|electric|hybrid|petrol|diesel|automatic|manual|seats?|when|free|open|times?|slots?)\b")
 _REACTION_LEAD = re.compile(r"^(?:sure|ok(?:ay)?|right|alright|great|perfect|lovely|of course|absolutely|no problem)[,!.]\s+(?=\S)", re.I)
-_COMMON_STARTS = {"we've", "we", "we're", "we'd", "there", "there's", "there're", "it", "it's", "that", "that's", "the", "this", "these", "those",
-                  "under", "our", "you", "you're", "your", "here", "here's", "both", "one", "all", "for", "at", "what", "which", "how", "only",
-                  "a", "an", "with", "each", "none", "not", "sadly", "unfortunately", "they", "they're", "its"}
+# Words that keep their capital after "Sure," whatever comes before them. Makes, models, showroom and caller names are added per call (_proper).
+_KEEP_CAPS = {"i", "i'm", "i've", "i'll", "i'd", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february",
+              "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "dubai", "sharjah", "abu", "dhabi",
+              "sheikh", "zayed", "al", "uae", "wazir"}
 
 
-def _lower_first(text: str) -> str:
-    """'We've got 4 BMWs' -> 'we've got 4 BMWs' after an opener; names ('Toyota', 'I') keep their capital."""
+def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> str:
+    """'The Camry is white' -> 'the Camry is white' after an opener ("Sure, the Camry ..."). A name keeps its capital: 'I', a make or model,
+    a day, a place, an acronym (AGMC, SUV), anything in `proper`."""
     first = text.split(" ", 1)[0]
-    return text[0].lower() + text[1:] if first.lower().strip(",.") in _COMMON_STARTS and first[:1].isupper() else text
+    bare = first.strip(",.!?;:")
+    word = bare.lower()
+    if not bare[:1].isupper() or sum(ch.isupper() for ch in bare) >= 2 or word in _KEEP_CAPS or word in proper or word.split("'")[0] in proper:
+        return text
+    return text[0].lower() + text[1:]
 
 
-def _after_opener(sentence: str) -> str:
-    """The model's first sentence when an opener was already said: its own 'Sure,' / 'Great!' dropped, the rest kept."""
+def _after_opener(sentence: str, proper: frozenset[str] | set[str] = frozenset(), new_sentence: bool = False) -> str:
+    """The model's first sentence when an opener was already said: its own 'Sure,' / 'Great!' dropped. After a lead that ends its own sentence
+    ("Let me check.") the rest starts with a capital; after one that ends on a comma ("Sure,") it carries on in lower case, names excepted."""
     rest = re.sub(r"^(?:sure(?: thing)?|ok(?:ay)?|right|alright|great|perfect|of course|absolutely|certainly|let's see)[,!.]?\s+", "", sentence.strip(), flags=re.I)
-    return _lower_first(rest) if rest != sentence.strip() else sentence
+    if new_sentence:
+        return rest[:1].upper() + rest[1:]
+    return _lower_first(rest, proper)
 
 
 _FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info", "colours")   # replies that are lists or figures
@@ -358,7 +367,7 @@ class AgentEngine:
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
-            result["core"] = f"{opener} {_lower_first(result['core'])}"
+            result["core"] = f"{opener} {_lower_first(result['core'], self._proper(s))}"
             prefix, question = self._split_core(result["core"])
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
         if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
@@ -395,7 +404,7 @@ class AgentEngine:
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
                     for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
                         if lead and len(spoken) == 1:
-                            sentence = _after_opener(sentence)
+                            sentence = _after_opener(sentence, self._proper(s), new_sentence=not lead.rstrip().endswith(","))
                             if not sentence:
                                 continue
                         if len(spoken) == (1 if lead else 0) and self.governor is not None:
@@ -409,7 +418,7 @@ class AgentEngine:
                 if len(spoken) > (1 if lead else 0):
                     break
             if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
-                spoken.append(result["core"] if bridge else _lower_first(result["core"]))
+                spoken.append(result["core"] if bridge else _lower_first(result["core"], self._proper(s)))
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
                 yield spoken[-1]
             if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
@@ -437,6 +446,15 @@ class AgentEngine:
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + 2, max_words=90)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         yield TurnResult(reply, dbg, s.ended)
+
+    def _proper(self, s: Session) -> set[str]:
+        """Words that are names in this call, so they keep their capital after an opener: makes and models in stock, showroom names, the caller."""
+        if not hasattr(self, "_names"):
+            vocab = self.svc.inventory.vocabulary()
+            names = {w for make, models in vocab.items() for x in (make, *models) for w in x.lower().split()}
+            names |= {w for b in self.svc.cfg.branches for w in b.name.lower().split()} - {"showroom"}
+            self._names = names
+        return self._names | set((s.draft_name or "").lower().split())
 
     @staticmethod
     def _unfinished(s: Session, words: list[str]) -> bool:
