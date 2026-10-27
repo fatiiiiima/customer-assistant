@@ -6,7 +6,8 @@ defence; on top of that, the car's row is locked (SELECT ... FOR UPDATE) while a
 the last slot are served one after the other and the second is told the slot has gone.
 
 Driver: pg8000 (BSD, pure Python). Connection string: postgresql://user:password@host:port/database (config `app.database_url` or the
-DATABASE_URL environment variable). A small pool keeps connections open for every thread of a worker.
+DATABASE_URL environment variable), or postgresql://user:@/database?host=/socket/folder for a server reached through its socket file (the
+local PostgreSQL pgserver starts on a Mac or Linux). A small pool keeps connections open for every thread of a worker.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..errors import (BookingNotFound, CarNotFound, CarUnavailable, DuplicateBooking, NotModifiable, SlotTaken,
                       StaleBooking)
@@ -51,6 +52,17 @@ def _utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def connect_args(url: str) -> dict:
+    """pg8000 connection arguments from a postgresql:// address. `?host=/a/folder` means the server's socket file in that folder."""
+    u = urlparse(url)
+    args = dict(user=unquote(u.username or "postgres"), password=unquote(u.password or "") or None,
+                database=(u.path or "/postgres").lstrip("/") or "postgres")
+    host = (parse_qs(u.query).get("host") or [""])[0] or u.hostname or "127.0.0.1"
+    if host.startswith("/"):
+        return {**args, "unix_sock": f"{host.rstrip('/')}/.s.PGSQL.{u.port or 5432}"}
+    return {**args, "host": host, "port": u.port or 5432}
+
+
 class PgDb:
     """A small pool of pg8000 connections. `tx()` is one transaction; a unique-index violation inside it is re-raised as `_Unique`."""
 
@@ -58,9 +70,7 @@ class PgDb:
         import pg8000.native as pg
 
         self._pg = pg
-        u = urlparse(url)
-        self._args = dict(user=unquote(u.username or "postgres"), password=unquote(u.password or "") or None, host=u.hostname or "127.0.0.1",
-                          port=u.port or 5432, database=(u.path or "/postgres").lstrip("/") or "postgres")
+        self._args = connect_args(url)
         self._pool: queue.Queue = queue.Queue()
         self._size, self._made, self._lock = size, 0, threading.Lock()
         with self.tx() as c:
