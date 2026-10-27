@@ -92,7 +92,7 @@ def test_not_two_turns_running_unless_the_wait_is_really_long():
         e.governor = QualityGovernor("prefix")
         e.governor.record_decide(decide_ms)
         asked = len(b.prompts)
-        second = list(e.handle_stream(s, "what colours do you have"))[:-1]
+        second = list(e.handle_stream(s, "is there anything good for camping trips"))[:-1]
         assert len(b.prompts) == asked + 1                                    # the model decided this turn too
         assert first[0] in BRIDGES and (second[0] in BRIDGES) is again
         if again:

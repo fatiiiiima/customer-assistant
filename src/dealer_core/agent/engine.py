@@ -59,6 +59,16 @@ _OFFERED_DRIVE = re.compile(r"\b(?:test drive|take a look|have a look|look at it
                             r"schedule|book|set up|visit|viewing|try it)\b")
 _THANKS = re.compile(r"(?:(?:ok|okay|great|perfect|alright|lovely|cool|awesome) )?(?:thank you|thanks|thank you so much|thanks a lot|cheers)(?: (?:so much|very much|a lot))?")
 _LOOKING = re.compile(r"\b(?:looking for|look for|do you have|have you got|any|show me|what about|how about|interested in|i want|i'd like|i would like)\b")
+# "What colours do you have?", "what colors are these cars?", "which colours does it come in": the colour of cars, asked, not a colour named.
+_COLOUR_Q = re.compile(r"\b(?:what|which) colou?rs?\b|\bcolou?rs? (?:are|is|do|does|have|come|available|options?)\b|\b(?:available|other) colou?rs\b|"
+                       r"\bin (?:what|which) colou?r\b|\bcolou?r (?:options|choices)\b")
+_PLURAL_REF = re.compile(r"\b(?:they|these|those|them|both|each|the cars|these cars|those cars|the ones|all of them)\b")
+_STOCK_REF = re.compile(r"\b(?:do you have|have you got|you got|in stock|different|other|all your|your cars)\b")
+_SINGULAR_REF = re.compile(r"\b(?:it|its|it's|this one|that one|this car|that car)\b")
+# A turn cut off mid-phrase (the end-of-turn detector fired during a pause, or the recognizer lost the end): ends on a word that cannot end a
+# request, or the recognizer's usual mishearing of "I'm looking for a..." as "I'm looking forward".
+_UNFINISHED_END = {"a", "an", "the", "for", "to", "of", "with", "and", "or", "some", "my", "your", "about", "than", "under", "below"}
+_LOOKING_FORWARD = re.compile(r"(?:so )?(?:i'?m|i am|we'?re|we are) (?:just )?looking forward(?: to)?")
 _FILLER = {"the", "a", "an", "and", "so", "uh", "um", "umm", "hmm", "er", "erm", "ah", "oh", "to", "of", "in", "is", "it", "but", "or", "well"}
 _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|visit|appointment|today|tomorrow|morning|afternoon|evening|tonight|"
                           r"weekend|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
@@ -81,6 +91,8 @@ _HAS_OPENER = re.compile(r"(?:sure|ok(?:ay)?|right|alright|great|perfect|lovely|
 _NEGATIVE = re.compile(r"\b(?:don't|doesn't|isn't|aren't|not|no|none|can't|haven't|hasn't|sorry|unfortunately|fixed)\b", re.I)
 # Said the moment a turn needs the model's decision, while it is made (pre-rendered by the voice: voice/pipeline.py common_phrases).
 # Only "I am looking it up" wording: it fits every answer that can follow ("Let me check. I don't have any red BMWs right now.").
+CUT_OFF = ["Sorry, I missed the end of that. What are you looking for?", "Sorry, you cut out at the end there. What would you like?",
+           "Sorry, I only caught the start of that. Could you say it again?"]      # a turn cut off mid-phrase (pre-rendered by the voice too)
 BRIDGES = ["Let me check.", "Let me see.", "Let me have a look.", "One moment, let me look."]
 _BRIDGE_CUE = re.compile(r"\b(?:do you have|have you got|got any|any|show me|looking for|look for|how much|price|cost|cheap\w*|expensive|budget|under|below|"
                          r"what|which|is there|are there|available|in stock|stock|compare|difference|better|km|kilomet\w*|mileage|colou?r|year|"
@@ -103,7 +115,7 @@ def _after_opener(sentence: str) -> str:
     return _lower_first(rest) if rest != sentence.strip() else sentence
 
 
-_FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info")   # replies that are lists or figures
+_FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info", "colours")   # replies that are lists or figures
 _HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
 _NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
@@ -120,7 +132,7 @@ CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|p
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
-TOOLS = ("search_cars", "browse_makes", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
@@ -133,6 +145,7 @@ prepare_booking  the customer wants a test drive, or gives a booking detail (day
 confirm_booking  the customer says yes to the read-back of the booking.
 cancel_draft     the customer says no or wants to change the booking details while a booking is being read back.
 compare_cars     the customer wants two cars compared ("which is better", "the difference between").
+colours          the customer asks what colours the cars come in ("what colours do you have?", "what colours are they?").
 my_bookings      the customer asks what they have booked.
 cancel_booking   the customer wants to cancel a test drive they already booked.
 reschedule_booking the customer wants to move a test drive they already booked to another day or time.
@@ -277,6 +290,14 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
+        if self._unfinished(s, words):                                    # "I'm looking for a..." / "I'm looking forward.": the end was cut off
+            line = W.pick(s, "cut_off", CUT_OFF)
+            dbg.intent, dbg.via, dbg.note = "none", "rules", "cut off mid-phrase: asked again"
+            s.remember("customer", text)
+            s.remember("agent", line)
+            yield line
+            yield TurnResult(line, dbg, False)
+            return
         check = self._sounds_like_shown(s, text)
         if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
             heard, near = check
@@ -416,6 +437,14 @@ class AgentEngine:
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + 2, max_words=90)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
         yield TurnResult(reply, dbg, s.ended)
+
+    @staticmethod
+    def _unfinished(s: Session, words: list[str]) -> bool:
+        """The turn stops mid-phrase: "i'm looking for a", "show me the", "something under". Not while a booking detail is being given
+        (a name or a number can end anywhere) and not a one-word answer ("any")."""
+        if len(words) < 2 or s.read_back or s.state in (State.SLOT, State.CONTACT, State.CONFIRM):
+            return False
+        return words[-1] in _UNFINISHED_END or bool(_LOOKING_FORWARD.fullmatch(" ".join(words)))
 
     def _bridge(self, s: Session, text: str) -> str:
         """A short "Let me check." said at once when this turn must wait for the model's decision and the wait is expected to be noticeable.
@@ -575,6 +604,10 @@ class AgentEngine:
         if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):   # the answer to "which one?" comes first, whatever it names
             return {"tool": "cancel_booking" if s.pending.kind == "cancel_which" else "reschedule_booking", "via": "rules"}
         booking_flow = s.read_back or s.state in (State.SLOT, State.CONTACT)          # a booking is being filled in or read back
+        if not booking_flow and _COLOUR_Q.search(joined) and not ex.search_filters(text, self.svc.inventory.vocabulary()).get("color"):
+            if s.car and _SINGULAR_REF.search(joined) and not _PLURAL_REF.search(joined):
+                return {"tool": "get_car", "car_id": s.car, "via": "rules"}       # "what colour is it?": the car just discussed
+            return {"tool": "colours", "via": "rules"}                           # "what colours are these cars?" / "what colours do you have?"
         if not booking_flow:                                                     # managing bookings and comparing come before "which car": they name cars too
             if s.known_bookings and _CANCEL.search(joined) and not _MOVE.search(joined):
                 return {"tool": "cancel_booking", "via": "rules"}
@@ -1380,6 +1413,35 @@ class AgentEngine:
                 "facts": [f"Moving the test drive of {self._booking_text(kb)}. Ask for the new day and time. Nothing has changed yet."]}
 
     # ---- answers the code writes from the site's data --------------------------------------------------------------------------
+    def _t_colours(self, s, args, text, dbg) -> dict:
+        """The colours, from the stock data. About the cars just listed when the caller points at them ("these", "they") or nothing else
+        is in play; otherwise across the stock, or one make / body type if named ("what colours do the Toyotas come in?")."""
+        joined = " ".join(ex.tokens_of(text))
+        f = {k: v for k, v in ex.search_filters(text, self.svc.inventory.vocabulary()).items() if k in ("make", "model", "body_type")}
+        if len(s.shown) >= 2 and not f and (_PLURAL_REF.search(joined) or not (s.car or _STOCK_REF.search(joined))):
+            cars = s.shown[:4]
+            parts = [f"the {T.short_name(c)} is {c.color}" for c in cars]
+            line = (", ".join(parts[:-1]) + " and " + parts[-1]) + ("" if len(s.shown) <= 4 else f", plus {len(s.shown) - 4} more")
+            line = line[:1].upper() + line[1:] + "."
+            return {"core": f"{line} Which one would you like to hear more about?", "facts": [line], "awaiting": True}
+        stock = self.svc.inventory.search(SearchFilters(**f), 500)
+        counts: dict[str, int] = {}
+        for c in stock:
+            counts[c.color] = counts.get(c.color, 0) + 1
+        colours = sorted(counts, key=lambda k: (-counts[k], k))
+        what = W.what_they_asked(stock, f) if f else "cars"
+        if not colours:
+            line = f"I don't have any {what} in stock right now."
+            return {"core": f"{line} Would you like to look at another make or type?", "facts": [line], "awaiting": True}
+        if len(colours) == 1:
+            line = f"The {what} I have are all {colours[0]}."
+        elif len(colours) <= 4:
+            line = f"The {what} come in {', '.join(colours[:-1])} and {colours[-1]}."
+        else:
+            more = len(colours) - 5
+            line = f"Our {what} come in {', '.join(colours[:4])} and {colours[4]}" + (f", plus {more} other colour{'s' if more > 1 else ''}." if more > 0 else ".")
+        return {"core": f"{line} Is there a colour you'd like?", "facts": [line], "awaiting": True}
+
     def _t_showroom_info(self, s, args, text, dbg) -> dict:
         lines = A.showroom_answer(self.svc.site, " ".join(ex.tokens_of(text))) or [f"Our showroom is on {self.svc.site.location or 'Sheikh Zayed Road'}."]
         return {"core": " ".join(lines) + " " + W.anything_else(s), "facts": lines, "awaiting": False}

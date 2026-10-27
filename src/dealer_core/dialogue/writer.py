@@ -397,11 +397,11 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_END = re.compile(r",\s+")
 
 
-def split_point(text: str) -> tuple[int, int] | None:
-    """Where the next speakable piece of the model's text ends: a sentence end, or a comma after a clause of 6+ words (so speech can start on the
-    first clause instead of waiting for the whole sentence). Returns (end of piece, start of the rest)."""
+def split_point(text: str, clauses: bool = True) -> tuple[int, int] | None:
+    """Where the next speakable piece of the model's text ends: a sentence end, or (`clauses`) a comma after a clause of 6+ words (so speech can
+    start on the first clause instead of waiting for the whole sentence). Returns (end of piece, start of the rest)."""
     sentence = _SENTENCE_END.search(text)
-    clause = next((m for m in _CLAUSE_END.finditer(text) if len(text[:m.start()].split()) >= 6), None)
+    clause = next((m for m in _CLAUSE_END.finditer(text) if len(text[:m.start()].split()) >= 6), None) if clauses else None
     if clause and (not sentence or clause.start() < sentence.start()):
         return clause.start() + 1, clause.end()
     return (sentence.start() + 1, sentence.end()) if sentence else None
@@ -566,7 +566,9 @@ class ReplyWriter:
         try:
             for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, temperature, deadline):
                 buf += piece
-                while not stopped and (cut := split_point(buf)):
+                # Only the reply's FIRST piece may be a clause (it is what makes the first sound quick). Once speech is under way, a sentence is
+                # spoken only when it is finished: a model stopped mid-list then leaves nothing hanging ("We've got the Civic, the Corolla,").
+                while not stopped and (cut := split_point(buf, clauses=not spoken)):
                     sentence, buf = buf[:cut[0]], buf[cut[1]:]
                     ok = check(sentence)
                     if ok:
