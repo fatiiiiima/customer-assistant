@@ -57,3 +57,33 @@ def test_the_database_address_of_a_local_postgresql_on_a_mac_is_its_socket_file(
     assert win["host"] == "127.0.0.1" and win["port"] == 5433 and "unix_sock" not in win
     assert connect_args("postgresql://app:p%40ss@db.internal/voice") == {"user": "app", "password": "p@ss", "database": "voice",
                                                                         "host": "db.internal", "port": 5432}
+
+
+def test_a_local_model_server_is_chosen_with_backend_local_and_used_for_replies_and_decisions(monkeypatch):
+    monkeypatch.delenv("VA__DIALOGUE__DECISION_BACKEND", raising=False)
+    assert rc.pick_backend("local", "arm64") == "local"
+    cmd = rc.worker_cmd(0, "local", "postgresql://db", Path("/x/site"), 8765, 16, None)
+    assert cmd[cmd.index("--backend") + 1] == "local_server"
+    env = rc.worker_env("local", "postgresql://db", "", "mlx-community/Qwen3-4B-Instruct-2507-4bit")
+    assert env["VA__DIALOGUE__DECISION_BACKEND"] == "local_server" and env["VA__LLM__BACKENDS__LOCAL_SERVER__MODEL"] == "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    assert "VA__LLM__BACKENDS__LOCAL_SERVER__MODEL" not in rc.worker_env("local", "postgresql://db")
+
+
+def test_the_env_override_reaches_the_local_server_entry():
+    from dealer_core.config import load_config
+
+    cfg = load_config(environ={"VA__LLM__BACKENDS__LOCAL_SERVER__MODEL": "some/model"})
+    b = cfg.llm.backends["local_server"]
+    assert b.model == "some/model" and b.runtime == "openai" and b.host == "http://127.0.0.1:8003/v1" and b.prompt_mode == "static"
+
+
+def test_a_missing_local_server_says_what_to_start():
+    model, why = rc.local_server_model("http://127.0.0.1:9/v1")                  # nothing listens on port 9
+    assert model == "" and "mlx_lm.server" in why and "llama-server" in why and "8003" in why
+
+
+def test_a_dry_run_with_a_local_server_prints_the_plan(tmp_path):
+    (tmp_path / "data.js").write_text("// cars")
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "local", "--site", str(tmp_path)],
+                         capture_output=True, text=True, timeout=60).stdout
+    assert "backend   local" in out and "local_server" in out and "VA__DIALOGUE__DECISION_BACKEND=local_server" in out and "dealer_core.modelserver" not in out

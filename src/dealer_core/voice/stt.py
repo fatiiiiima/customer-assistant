@@ -1,11 +1,16 @@
 """Speech-to-text: OpenVINO GenAI Whisper on the CPU, biased with the car terms (the Phase 0b winner).
 
 STT must NOT share the iGPU with the language model (measured: sharing slows the intent call from 0.9 s to 1.6 s), so the default device is CPU.
+
+PRECISION (27 Oct): on an Apple M3 Pro the OpenVINO CPU plugin runs in float16 by default. Whisper base int8 then falls apart on many inputs: it writes one or two
+words and then token 0 ("!") until its limit, e.g. "No, I want to know something else about the Macan" -> "No!!!!...", and with no hint at all it did so on all 9 of 9
+real turns. With INFERENCE_PRECISION_HINT=f32 the same 9 turns were all transcribed correctly, about 50 ms slower each. `precision` below sets it.
 """
 from __future__ import annotations
 
 import io
 import queue
+import re
 import time
 import wave
 from pathlib import Path
@@ -13,6 +18,20 @@ from pathlib import Path
 import numpy as np
 
 SAMPLE_RATE = 16000
+MAX_TOKENS_PER_SEC = 12      # Whisper writes ~3-6 tokens per second of speech (digits said one by one are the most); more than this is a loop, not speech
+MIN_TOKENS = 24
+
+
+def token_cap(audio_seconds: float) -> int:
+    """The most tokens a transcript of this much audio can need. Without it a looping Whisper ran to its 448-token limit (27 Oct: 'No' and ~400 exclamation marks, 2.8 s)."""
+    return min(440, max(MIN_TOKENS, int(audio_seconds * MAX_TOKENS_PER_SEC) + 16))      # Whisper's own ceiling is 448
+
+
+def is_degenerate(text: str, audio_seconds: float) -> bool:
+    """A transcript that is Whisper looping, not speech: one punctuation mark or letter repeated many times, or far more text than the audio can hold."""
+    if re.search(r"([^\w\s])\1{5,}", text) or re.search(r"(\w)\1{9,}", text):
+        return True
+    return len(text) > 25 * max(audio_seconds, 1.0) + 40
 
 
 def hotword_terms(path: Path) -> list[str]:
@@ -27,13 +46,18 @@ class WhisperOpenVino:
     (Whisper base is ~150 MB per copy; each copy uses its own CPU threads)."""
 
     def __init__(self, model_dir: Path, cache_dir: Path, device: str = "CPU", hotwords: list[str] | None = None, language: str = "en",
-                 copies: int = 1) -> None:
+                 copies: int = 1, precision: str = "f32", threads: int | None = None) -> None:
         import openvino_genai as ov
 
         self.name = f"openvino-whisper:{model_dir.name}@{device}" + (f"x{copies}" if copies > 1 else "")
         self._free: queue.Queue = queue.Queue()
+        props = {"CACHE_DIR": str(cache_dir)}
+        if precision and device.upper().startswith("CPU"):
+            props["INFERENCE_PRECISION_HINT"] = precision                   # see the note at the top of this file; '' = OpenVINO's own default
+        if threads and device.upper().startswith("CPU"):
+            props["INFERENCE_NUM_THREADS"] = int(threads)                    # None = all cores (see voice.stt_threads: measured, capping did not help)
         for _ in range(max(1, copies)):
-            pipe = ov.WhisperPipeline(str(model_dir), device, CACHE_DIR=str(cache_dir))
+            pipe = ov.WhisperPipeline(str(model_dir), device, **props)
             cfg = pipe.get_generation_config()
             if not model_dir.name.split("-int")[0].endswith(".en"):        # English-only models refuse a language or task token
                 cfg.language = f"<|{language}|>"
@@ -54,7 +78,10 @@ class WhisperOpenVino:
 
     def transcribe_float(self, audio: np.ndarray, prompt: str | None = None) -> str:
         pipe, cfg = self._free.get()                                              # a pipeline is not re-entrant: each turn takes a free copy
+        seconds = len(audio) / SAMPLE_RATE
         try:
+            if hasattr(cfg, "max_new_tokens"):
+                cfg.max_new_tokens = token_cap(seconds)                           # safety net: a looping Whisper costs ~0.4 s, not 2.8 s (448 tokens)
             if prompt is not None and hasattr(cfg, "initial_prompt"):
                 cfg.initial_prompt = prompt                                       # what to expect right now (see voice/prompts.py)
             res = pipe.generate(audio.astype(np.float32).tolist(), cfg)

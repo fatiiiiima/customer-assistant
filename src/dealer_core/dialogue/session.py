@@ -66,6 +66,9 @@ class Session:
     replacing: KnownBooking | None = None                    # agent engine: the booking being moved; cancelled once the new one is booked
     cancelled: list[KnownBooking] = field(default_factory=list)        # cancelled in this call (the server tells the page)
     described: str = ""
+    no_invite_until: int = 0                                 # agent engine: no invitation to visit / test drive while len(history) is below this (set when the caller says no, and after each invitation)
+    said_about: dict[str, list[str]] = field(default_factory=dict)   # agent engine: per car, the groups of facts already told (agent/answers.py FACT_GROUPS), so "tell me more" gives a new one
+    day_asks: int = 0                                        # agent engine: times in a row the agent asked which day; the second time it offers real times instead
     makes_said: list[str] = field(default_factory=list)      # agent engine: makes already named in a stock overview (so "the others" means the rest)                                      # agent engine: the car whose full line was just read out
 
     def remember(self, who: str, text: str) -> None:

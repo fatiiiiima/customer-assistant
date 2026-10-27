@@ -17,11 +17,12 @@ from ..dialogue.machine import DialogueEngine
 
 
 class DealerBrain(FrameProcessor):
-    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, **kwargs) -> None:
+    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine, self.session = engine, engine.new_session()
         self._speak_opening, self._on_turn = speak_opening, on_turn
         self._on_heard, self._on_say = on_heard, on_say          # transcript hooks: what the caller said / what the agent says (off unless the caller of the pipeline asks)
+        self._level_of, self._quiet_below = level_of, quiet_below   # () -> the level of the segment just recognised; below `quiet_below` the words may not end the call
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
         self.interrupted = 0                            # turns abandoned because the caller spoke over the agent
@@ -52,6 +53,9 @@ class DealerBrain(FrameProcessor):
             sentences: asyncio.Queue = asyncio.Queue()
             early = self.speculation.decision_for(text) if self.speculation is not None else None
             extra = {"predecided": early} if early is not None else {}
+            level = self._level_of() if self._level_of else None
+            if self._quiet_below and level is not None and level < self._quiet_below and getattr(self.engine, "guards_quiet_turns", False):
+                extra["uncertain"] = True
 
             cancelled = threading.Event()
 

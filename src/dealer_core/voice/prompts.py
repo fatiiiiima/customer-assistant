@@ -12,8 +12,8 @@ from pathlib import Path
 from ..dialogue.states import State
 from ..nlu.expected import last_question
 
-DAY_TIME = ("tomorrow, today, this afternoon, tonight, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday, morning, afternoon, evening, "
-            "at ten, at four thirty, test drive")
+DAY_TIME = ("any day, whenever, as soon as possible, the earliest, tomorrow, today, this afternoon, tonight, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday, "
+            "morning, afternoon, evening, two in the afternoon, at ten, at four thirty, test drive")
 CONTACT = "050, 055, 056, 052, double five"        # no "my name is": Whisper continues a primed phrase and loops on it ("my name is, my name is, ...")
 CONFIRM = "yes, no, that's right, that's correct, change the time, a different day"
 _ASKS_WHEN = re.compile(r"(?:\bwhat day|which day|what time|which time|when|works better|suits you|day suits|day and time)\b")

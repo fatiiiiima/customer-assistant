@@ -66,6 +66,31 @@ class ServerState:
         return self.admission.adjust(self.active) if self.admission is not None else self.max_calls
 
 
+def browser_of(user_agent: str) -> str:
+    """Which browser a call comes from, for the log (the order matters: Edge and Chrome both also say \"Safari\")."""
+    for name, key in (("Edge", "Edg/"), ("Firefox", "Firefox/"), ("Chrome", "Chrome/"), ("Safari", "Safari/")):
+        if key in (user_agent or ""):
+            return name
+    return "unknown"
+
+
+async def probe_loop(engine, governor, every_s: float, sleep=asyncio.sleep, rounds: int | None = None, tries: int = 10) -> None:
+    """Keeps the governor's measure of the model fresh without using a caller's turn: every `every_s` seconds, at a moment when no turn is using the model
+    (looked for for up to `tries` seconds), one small request of the same shape as a model-written turn. A probe that cannot run is skipped, never an error."""
+    done = 0
+    while rounds is None or done < rounds:
+        await sleep(every_s)
+        done += 1
+        for _ in range(tries):
+            if governor.snapshot()["in_flight"] == 0:
+                try:
+                    await asyncio.to_thread(engine.probe_model)
+                except Exception as e:
+                    logger.debug(f"model probe failed: {type(e).__name__}")
+                break
+            await sleep(1.0)
+
+
 def create_server(state: ServerState, allowed_origins: list[str] | None = None) -> FastAPI:
     api = FastAPI(title="AGMC voice server")
     origins = allowed_origins or ["http://localhost:8080", "http://127.0.0.1:8080"]
@@ -95,6 +120,14 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
                     pass
 
         asyncio.get_running_loop().create_task(beat())
+
+    @api.on_event("startup")
+    async def _probe() -> None:
+        engine = getattr(state.app, "engine", None)
+        gov = getattr(engine, "governor", None)
+        every = getattr(getattr(state.cfg, "dialogue", None), "probe_every_s", 0) or 0
+        if gov is not None and getattr(gov, "probed", False) and every > 0 and hasattr(engine, "probe_model"):
+            asyncio.get_running_loop().create_task(probe_loop(engine, gov, every))
 
     @api.on_event("shutdown")
     async def _leave() -> None:
@@ -142,6 +175,7 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
             return
         state.active += 1
         state.served += 1
+        logger.info(f"call {state.served} from {browser_of(ws.headers.get('user-agent', ''))}, {state.active} call(s) open on this worker")
         if state.load_changed is not None:
             state.load_changed.set()
         if state.metrics is not None:

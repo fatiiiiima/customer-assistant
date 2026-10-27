@@ -36,7 +36,8 @@ TOPICS: dict[str, re.Pattern] = {
     "features": re.compile(r"\bfeatures?\b|\bextras?\b|\bequipment\b|\boptions\b|\bwhat does it come with\b|\bwhat comes with\b|\bloaded\b"),
     "about": re.compile(r"\btell me (?:more|about it|everything)\b|\bdescribe\b|\bwhat is it like\b|\bwhat's it like\b|\bany good\b(?! for)|\bworth (?:it|buying)\b|"
                        r"\b(?:know|hear|learn) more\b|\bmore (?:about (?:it|the car|this|that)|details|info\w*)\b|"
-                       r"\b(?:anything|what) else\b.*\b(?:know|about (?:it|the car|this (?:one|car)|that (?:one|car)))\b"),
+                       r"\b(?:anything|what) else\b.*\b(?:know|about (?:it|the car|this (?:one|car)|that (?:one|car)))\b|"
+                       r"\bwhat else (?:can|could|should|do) (?:you|i)\b.*\b(?:tell|say|share|know)\b|\b(?:tell|give) me something else\b"),
 }
 
 # "does it have a sunroof?": what a caller says -> words to look for in the feature list
@@ -164,6 +165,48 @@ def detail_answer(car: CarView, d: CarDetails | None, words: str) -> list[str] |
     if "accident" in topics_in(words) and "inspection" in topics_in(words):
         out = [x for x in out if not x.startswith("It passed")]
     return out[:2] or None
+
+
+# ------------------------------------------------------------------------------------------------ not telling the same thing twice
+# "tell me more", "anything else about it?", "something else about the Macan": the next group of facts that has not been told yet (27 Oct: the same blurb four times)
+FACT_GROUPS = ("about", "condition", "performance", "features", "practical", "economy", "ownership", "interior")
+TOPIC_GROUP = {"about": "about", "accident": "condition", "inspection": "condition", "service": "condition", "owners": "ownership", "warranty": "ownership", "spec": "ownership",
+               "engine": "performance", "power": "performance", "speed": "performance", "drive": "performance", "gearbox": "performance", "economy": "economy", "range": "economy",
+               "fuel": "economy", "boot": "practical", "seats": "practical", "doors": "practical", "features": "features", "interior": "interior"}
+
+
+def group_sentence(group: str, d: CarDetails) -> str:
+    return {
+        "about": blurb_sentence(d.blurb),
+        "condition": f"It's {d.accident} with a {d.service}, and it passed {d.inspection} of our 150 checks.",
+        "performance": f"It has {_a(spoken_engine(d.engine))} engine with {d.power_hp} horsepower.",
+        "features": f"Highlights include {_feature_list(d, 4)}.",
+        "practical": f"It seats {d.seats}, with a {d.boot_litres}-litre boot.",
+        "economy": f"It uses about {spoken_consumption(d.consumption)}.",
+        "ownership": f"It's had {d.owners} previous owner{'s' if d.owners != 1 else ''}, and comes with an AGMC warranty of {d.warranty}.",
+        "interior": f"The interior is {d.interior.lower()}.",
+    }[group]
+
+
+def mark_said(said: list[str], topics: list[str]) -> None:
+    """Note that these topics (as asked about, see TOPICS) have been told."""
+    for t in topics:
+        g = TOPIC_GROUP.get(t)
+        if g and g not in said:
+            said.append(g)
+
+
+def next_facts(d: CarDetails | None, said: list[str], prefer: tuple[str, ...] = (), limit: int = 2) -> list[str]:
+    """Up to `limit` sentences from the groups of facts not yet told (those in `prefer` first), marked as told. Empty when everything has been said."""
+    if d is None:
+        return []
+    out: list[str] = []
+    for g in [*prefer, *FACT_GROUPS]:
+        if g in said or g not in FACT_GROUPS or len(out) >= limit:
+            continue
+        out.append(group_sentence(g, d))
+        said.append(g)
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ showroom

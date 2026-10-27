@@ -14,7 +14,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
 
-from .stt import SAMPLE_RATE, WhisperOpenVino
+from .stt import SAMPLE_RATE, WhisperOpenVino, is_degenerate
 from .tts import PiperSherpa
 
 
@@ -28,6 +28,14 @@ def segment_rms(pcm16: bytes, window: int = 4800) -> float:
     if len(x) <= window:
         return float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
     return float(np.sqrt(np.convolve(x * x, np.ones(window) / window, "valid").max()))
+
+
+UNCLEAR = "um"      # given to the agent when the recognizer produced a loop instead of words: the engine answers a lone filler with "Sorry, I didn't catch that."
+
+
+def squeeze_punctuation(text: str) -> str:
+    """'No!!!!!!!!' -> 'No!': a mark repeated 3+ times is Whisper looping, and as one 'word' it would pass every word-based guard."""
+    return re.sub(r"([^\w\s])\1{2,}", r"\1", text)
 
 
 def is_phantom(text: str) -> bool:
@@ -58,7 +66,9 @@ def collapse_repeats(text: str) -> str:
 
 def clean_transcript(text: str) -> str:
     """The recognizer's words as the agent receives them: loops collapsed, a repeated-word invention dropped (empty)."""
-    text = collapse_repeats(text) if text else ""
+    if text and is_degenerate(text, 0.0):
+        return UNCLEAR
+    text = collapse_repeats(squeeze_punctuation(text)) if text else ""
     return "" if text and is_phantom(text) else text
 
 
@@ -72,6 +82,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
+        self.last_level: float | None = None     # loudest-0.3 s level of the segment just recognised (read by the brain: a quiet segment cannot hang up the call)
 
     @property
     def wants_wav_segments(self) -> bool:
@@ -82,6 +93,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
         rms = segment_rms(audio)
+        self.last_level = rms
         if rms < self.min_rms:
             logger.debug(f"STT skipped: segment too quiet to be speech (level {rms:.4f})")
             return
@@ -92,8 +104,11 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         else:
             text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
+        if text and is_degenerate(text, len(audio) / 2 / SAMPLE_RATE):
+            logger.debug(f"STT returned a loop ({len(text)} characters): the caller is asked to repeat")
+            text = UNCLEAR
         if text:
-            text = collapse_repeats(text)
+            text = collapse_repeats(squeeze_punctuation(text))
         if text and is_phantom(text):
             logger.debug(f"STT dropped a repeated-word hallucination ({len(text.split())} words)")
             text = ""

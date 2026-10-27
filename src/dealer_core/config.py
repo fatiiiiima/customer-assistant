@@ -103,6 +103,8 @@ class TtsCfg(_Strict):
     speaker: int = 0                    # speaker id inside a multi-speaker voice (libritts_r has many; amy has one)
     cache_dir: str = "models/tts_cache"
     copies: int = 2                     # synthesizers shared by all calls (8 sentences at once: worst 2.35 s with one copy, 1.35 s with two)
+    threads: int | None = None          # CPU threads per synthesizer (None = the engine's own default: Kokoro all cores, Piper 4). MEASURED 27 Oct on an M3 Pro: capping only slows it (one sentence 629 ms uncapped,
+                                        # 798 at 4 threads, 975 at 3, 1350 at 2). Left unset; a setting for hardware where several workers share a processor and the measurement says otherwise
 
 
 class TurnCfg(_Strict):
@@ -172,6 +174,8 @@ class DialogueCfg(_Strict):
     quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code (agent/governor.py)
     model_budget_ms: float = 700.0               # auto: time to the model's first sentence that still keeps the reply under ~1 s; slower -> prefix
     model_shed_after_ms: float = 450.0           # auto: past this measured decision time a growing share of turns skip the model (load shedding; 0 = never)
+    explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
+    probe_every_s: float = 20.0                  # voice server: measure the model with a small request of the same shape as a model-written turn this often, only when no turn is using it (0 = off)
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
     openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
@@ -200,11 +204,17 @@ class VoiceCfg(_Strict):
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
     vad_confidence: float = 0.7
     number_stop_secs: float = 0.9                 # silence that ends the caller's turn right after the agent asked for a phone number: people dictate digits in groups with pauses ("050" ... "123" ... "4567")
-    tap_stop_secs: float = 0.35                   # tap mode: a cut turn closes the mic mid-sentence, so it waits longer (24 real recordings: 0.35 s cut 2 sentences vs 4-5 at 0.2 s, for ~0.2 s more wait)
+    tap_stop_secs: float = 0.6                    # tap mode: a cut turn closes the mic mid-sentence and the rest is never heard, so it waits longer. 24 real recordings: 0.2 s cut 4-5 sentences, 0.35 s cut 2, 0.6 s cut 0.
+                                                  # Cost: about +0.3 s on every turn vs 0.35 s (synthetic callers, median 547 -> 867 ms; docs/VOICE.md). Put it back with VA__VOICE__TAP_STOP_SECS=0.35
     silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stt_device: str = "CPU"                      # CPU | GPU (NPU cannot take the recognizer hint). small.en on the GPU: 21/24 of the owner's recordings in 0.17 s
+    stt_threads: int | None = None               # CPU threads for the recognizer (None = OpenVINO's default, all cores). MEASURED 27 Oct on an M3 Pro: one turn 242 ms uncapped, 296 at 4, 382 at 3, 547 at 2;
+                                                 # with THREE recognizers running at once: 595 ms uncapped vs 617 ms capped to 3 each, so capping gains nothing here (the CPU is the limit). Unset by default
+    stt_precision: str | None = "f32"            # CPU recognizer math. OpenVINO's default on Apple chips is float16, where Whisper base int8 loops ("No!!!!...") on many turns; f32 fixed all 9 of 9 (~50-100 ms slower). Empty (VA__VOICE__STT_PRECISION=) = OpenVINO's default
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
+    min_rms: float = 0.005                        # a segment whose loudest 0.3 s is below this is room noise and is not recognised. NOT raised: at 0.012 the owner's 10%-volume clips went 20/24 -> 0/24 heard (docs/SCALING.md)
+    end_call_min_rms: float = 0.03                # a goodbye heard at a level below this is not believed: the agent asks "are you still there?" instead of hanging up. Real turns in the 27 Oct log were 0.065-0.26; the two false goodbyes 0.013 and 0.015
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to

@@ -152,7 +152,8 @@ def snapshot(session) -> dict:
         "pending": {"kind": s.pending.kind, "value": s.pending.value} if s.pending else None, "ended": s.ended, "history": [list(h) for h in s.history],
         "known_bookings": [asdict(k) for k in s.known_bookings], "pending_cancel": asdict(s.pending_cancel) if s.pending_cancel else None,
         "replacing": asdict(s.replacing) if s.replacing else None, "cancelled": [asdict(k) for k in s.cancelled], "described": s.described,
-        "makes_said": list(s.makes_said), "last_variant": dict(s.last_variant),
+        "makes_said": list(s.makes_said), "last_variant": dict(s.last_variant), "day_asks": s.day_asks,
+        "no_invite_until": s.no_invite_until, "said_about": {k: list(v) for k, v in s.said_about.items()},
     })
 
 
@@ -181,6 +182,8 @@ def restore(data: dict, session, service) -> None:
     s.replacing = KnownBooking(**d["replacing"]) if d.get("replacing") else None
     s.cancelled = [KnownBooking(**k) for k in d["cancelled"]]
     s.described, s.makes_said, s.last_variant = d["described"], d["makes_said"], d["last_variant"]
+    s.day_asks = d.get("day_asks", 0)
+    s.no_invite_until, s.said_about = d.get("no_invite_until", 0), {k: list(v) for k, v in (d.get("said_about") or {}).items()}
 
 
 class CallStore:

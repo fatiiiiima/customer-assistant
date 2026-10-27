@@ -47,6 +47,12 @@ def main() -> int:
                     quality=a.quality)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
+    gov = getattr(app.engine, "governor", None)
+    if gov is not None and gov.mode == "auto" and cfg.dialogue.probe_every_s > 0 and hasattr(app.engine, "probe_model"):
+        gov.probed = True                                          # the model's speed is measured by probes, never by a caller's turn
+        app.engine.probe_model(record=False)                       # the first request after a load also warms the prompt: not a fair measure
+        ms = app.engine.probe_model()
+        print("Model speed measured before the first call: " + (f"{ms:.0f} ms to a first sentence ({'model-written replies' if ms <= gov.budget_ms else 'code facts + a short model question'} until it changes)" if ms else "not possible (replies start with the code's own words)"), flush=True)
     print("Loading speech models...", flush=True)
     parts = load_engines(cfg, a.stt_model, a.voice)
     smart = cfg.voice.smart_turn and not a.fixed_silence

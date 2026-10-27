@@ -79,6 +79,19 @@ _LOOKING_FORWARD = re.compile(r"(?:so )?(?:i'?m|i am|we'?re|we are) (?:just )?lo
 _FILLER = {"the", "a", "an", "and", "so", "uh", "um", "umm", "hmm", "er", "erm", "ah", "oh", "to", "of", "in", "is", "it", "but", "or", "well"}
 _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|visit|appointment|today|tomorrow|morning|afternoon|evening|tonight|"
                           r"weekend|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
+# "any day", "whenever", "as soon as possible", "what's free", "when can I come": no day chosen, the caller wants to be offered one (27 Oct: six identical
+# "which day?" questions in a row, because none of these meant anything to the booking logic)
+_FLEXIBLE = re.compile(
+    r"\b(?:any\s+(?:day|days|time|times|date)|every\s+day|when\s*ever|whatever\s+(?:day|time|works|suits|is\s+(?:free|best))|"
+    r"as\s+soon\s+as\s+(?:possible|you\s+can|i\s+can)|asap|earliest|soonest|first\s+(?:available|free)|next\s+(?:available|free)|"
+    r"you\s+(?:choose|pick|decide)|up\s+to\s+you|your\s+choice|no\s+preference|(?:does\s*not|doesn'?t)\s+matter|don'?t\s+mind|"
+    r"what(?:'s|\s+is)\s+(?:free|available|open)|(?:what|which)\s+(?:day|days|time|times|slots?)\s+(?:is|are)\s+(?:free|available|open)|"
+    r"when\s+(?:are\s+you|is\s+it)\s+(?:free|open|available)|when\s+can\s+i\s+(?:come|visit|see|drive|try|stop))\b")
+# the caller leaves the choice to us (as opposed to asking what is free): with times on the table, the earlier one is taken
+_DELEGATES = re.compile(r"\b(?:any\s+(?:day|days|time|times|date)|every\s+day|when\s*ever|whatever|you\s+(?:choose|pick|decide)|up\s+to\s+you|your\s+choice|"
+                        r"no\s+preference|(?:does\s*not|doesn'?t)\s+matter|don'?t\s+mind)\b")
+# a bare request for more, right after an answer about a car
+_MORE_ABOUT = re.compile(r"(?:ok(?:ay)? |yes |yeah |and )?(?:tell me )?(?:something|anything|what) else(?: please| about it)?|(?:tell me )?more(?: please| about it)?|go on|keep going|and what else")
 _CHEAPER = re.compile(r"\b(?:something|anything|any|options?|cars?|models?)\b.*\b(?:cheaper|less expensive|lower price)\b|"
                       r"\b(?:cheaper|less expensive) (?:ones?|options?|cars?|models?)\b|^(?:a )?cheaper(?: one)?$")
 _OTHER_RANGE = re.compile(r"\b(?:what|which|any)\s+(?:other|else)\b.*\b(?:cars?|models?|makes?|brands?|have|got|stock|sell)\b|"
@@ -88,6 +101,8 @@ _REST = re.compile(r"\b(?:other makes|other brands|the others|the rest|remaining
 _BYE = re.compile(r"\b(?:bye|goodbye|good bye|that's all|that is all|that's everything|i'm done|i am done|see you|take care|have a good day)\b")
 _WHAT_STOCK = re.compile(r"\b(?:i need a car|i'm looking for a car|looking for a car|i want (?:a|to buy a) car|buy a car|what cars do you have|what (?:cars|vehicles|models) have you got|what do you have|what have you got|what's in stock|"
                          r"what is in stock|what do you sell|show me (?:what you have|your cars|everything)|what are my options)\b")
+# "what do you have?" while a search is under way (after "Any specific model?") asks for what matches THAT search, not for the whole showroom
+_ASKS_TO_SEE = re.compile(r"\b(?:what do you have|what have you got|what are my options|show me what you have)\b")
 _FUEL = re.compile(r"\b(electric|ev|hybrid|petrol|diesel|plug in hybrid)\b")
 _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) (?:kilomet\w*|km|miles)|barely (?:used|driven))\b")
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")
@@ -101,6 +116,7 @@ _NEGATIVE = re.compile(r"\b(?:don't|doesn't|isn't|aren't|not|no|none|can't|haven
 CUT_OFF = ["Sorry, I missed the end of that. What are you looking for?", "Sorry, you cut out at the end there. What would you like?",
            "Sorry, I only caught the start of that. Could you say it again?"]      # a turn cut off mid-phrase (pre-rendered by the voice too)
 BRIDGES = ["Let me check.", "Let me see.", "Let me have a look.", "One moment, let me look."]
+STILL_THERE = ["Sorry, are you still there?", "Hello? Are you still there?"]          # a goodbye heard too quietly to believe (voice.end_call_min_rms): ask, do not hang up
 _BRIDGE_CUE = re.compile(r"\b(?:do you have|have you got|got any|any|show me|looking for|look for|how much|price|cost|cheap\w*|expensive|budget|under|below|"
                          r"what|which|is there|are there|available|in stock|stock|compare|difference|better|km|kilomet\w*|mileage|colou?r|year|"
                          r"suv|sedan|hatchback|coupe|pickup|van|electric|hybrid|petrol|diesel|automatic|manual|seats?|when|free|open|times?|slots?)\b")
@@ -223,6 +239,7 @@ class AgentEngine:
     """Same interface as DialogueEngine for the voice pipeline: new_session / opening / handle_stream."""
 
     is_agent = True
+    guards_quiet_turns = True        # handle_stream(uncertain=True): a goodbye heard at a very low level asks instead of ending the call
 
     def __init__(self, svc: DealerService, backend, reply_writer: ReplyWriter | None, agent_name: str | None = None) -> None:
         self.svc, self.backend, self.reply_writer = svc, backend, reply_writer
@@ -272,6 +289,36 @@ class AgentEngine:
         s.remember("agent", line)
         return line
 
+    def probe_model(self, record: bool = True) -> float | None:
+        """Milliseconds the model takes to the first verified sentence of a model-written reply, measured on a made-up turn (no caller, no session), or None
+        when it cannot be measured. Fed to the governor (`record_probe`), so the level is chosen from this and never found out on a caller's turn.
+        The prompt has the shape of a real `full` turn (the writer's long instructions, a car's facts, a short history): that is where the time goes."""
+        if self.reply_writer is None:
+            return None
+        car = next(iter(self.svc.inventory.search(SearchFilters(), 1)), None)
+        if car is None:
+            return None
+        w = WriterInput(caller="Tell me about the first one.", risk="low", awaiting=True,
+                        core=f"It's the {T.car_name(car)}, {car.color}, with {car.km:,} kilometres, at {T.money(car.price)}. Would you like to hear more?",
+                        history=[("agent", "Which one would you like to hear more about?"), ("customer", "Tell me about the first one.")],
+                        facts="\n".join(["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]))
+        t0 = time.perf_counter()
+        gen = None
+        try:
+            gen = self.reply_writer.stream(w)
+            first = next(iter(gen), None)
+        except Exception:
+            return None
+        finally:
+            if gen is not None and hasattr(gen, "close"):
+                gen.close()                                              # stops the model: only the first sentence is wanted
+        if first is None:
+            return None
+        ms = (time.perf_counter() - t0) * 1000
+        if record and self.governor is not None:
+            self.governor.record_probe(ms)
+        return ms
+
     def predecide(self, s: Session, text: str) -> dict | None:
         """The model's decision for `text`, made ahead of the turn (voice/speculate.py: during Smart Turn's hold). None when there is nothing
         to prepare: the code routes these words itself, or the model has no room (a guess that may be thrown away must not crowd out real turns)."""
@@ -287,9 +334,10 @@ class AgentEngine:
             return decision
         return self._decide(s, text)
 
-    def handle_stream(self, s: Session, text: str, predecided=None):
+    def handle_stream(self, s: Session, text: str, predecided=None, uncertain: bool = False):
         """Yield the spoken sentences, then the TurnResult (same contract as DialogueEngine.handle_stream).
-        `predecided`: a future holding the decision already made for these words (see `predecide`), used instead of asking the model now."""
+        `predecided`: a future holding the decision already made for these words (see `predecide`), used instead of asking the model now.
+        `uncertain`: the words came from a very quiet segment (room noise can be recognised as words): they may not end the call."""
         t0 = time.perf_counter()
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
@@ -314,6 +362,12 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
+        joined_words = " ".join(words)
+        asked = expected.last_question(s.last_agent()).lower()
+        if asked and W.INVITES.search(asked) and (_NO.match(joined_words) or _NEVER_MIND.search(joined_words)) and not _PLAIN_YES.match(joined_words):
+            s.no_invite_until = len(s.history) + 12                        # "No, I want to know something else": no more invitations for the next few exchanges
+        elif _BOOKING_CUE.search(joined_words):
+            s.no_invite_until = 0                                          # the caller is talking about visiting: asking again is fine
         check = self._sounds_like_shown(s, text)
         if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
             heard, near = check
@@ -355,6 +409,16 @@ class AgentEngine:
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
             tool = "none"
+        if tool not in ("prepare_booking", "check_slots"):
+            s.day_asks = 0                                                  # the booking talk was left: the next request for a day is a first ask again
+        if uncertain and tool == "end_call":                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
+            line = W.pick(s, "still_there", STILL_THERE)
+            dbg.intent, dbg.via, dbg.note = "none", "rules", "goodbye heard at a very low level: asked if the caller is there, did not end the call"
+            s.remember("customer", text)
+            s.remember("agent", line)
+            yield line
+            yield TurnResult(line, dbg, False)
+            return
         args = self._args_for(s, tool, decision.get("car_id"), text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
@@ -692,6 +756,8 @@ class AgentEngine:
             return {"tool": "none", "via": "rules"}
         if not booking_flow and (s.narrow_asks > 0 or s.shown) and s.filters and not s.car and _WHICH_ONES.fullmatch(joined):
             return {"tool": "search_cars", "via": "rules"}                       # "which ones?" after "There are 8 SUVs ..." (or a list): read them out
+        if not booking_flow and s.car and s.described == s.car and _MORE_ABOUT.fullmatch(joined):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}            # "something else please" after facts about this car: the next facts
         if not booking_flow and s.makes_said and _REST.search(joined):
             return {"tool": "browse_makes", "via": "rules"}                       # "what are the 9 other makes?"
         if not booking_flow and _OTHER_RANGE.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make") \
@@ -701,6 +767,8 @@ class AgentEngine:
         if _BYE.search(joined) and len(words) <= 8 and not booking_flow:
             return {"tool": "end_call", "via": "rules"}
         if not booking_flow and _WHAT_STOCK.search(joined) and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make"):
+            if s.filters and s.shown and not s.car and _ASKS_TO_SEE.search(joined):
+                return {"tool": "search_cars", "via": "rules"}                    # 27 Oct: "I'm not looking for any specific model, what do you have?" after the Toyotas: list the Toyotas, not the other makes
             return {"tool": "browse_makes", "via": "rules"}                       # "what cars do you have?"
         if not booking_flow:
             named0 = ex.find_vehicle(words, self.svc.inventory.vocabulary())
@@ -781,6 +849,8 @@ class AgentEngine:
             bare_hour = s.offered_slots and re.fullmatch(r"(?:at |around |about )?(?:\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", joined)
             if w.time is not None or bare_hour or (s.offered_slots and self._offered_pick(s, text) is not None):
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "no, 2 PM", "the afternoon one": a time, whatever comes before it
+            if s.state is State.SLOT and _FLEXIBLE.search(joined):
+                return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "any day", "what's free": offer the next free times
             if not _CHANGE.search(" ".join(words)):
                 ct = ex.contact(text)
                 if w.found or ct.phone or (s.state is State.CONTACT and ct.name):
@@ -1088,7 +1158,7 @@ class AgentEngine:
         more = res.total - len(res.cars)
         if not res.needs_narrowing:
             s.narrow_asks = 0
-        ask = "Would you like to hear more, or book a test drive?" if len(res.cars) == 1 else "Which one would you like to hear more about?"
+        ask = W.hear_more_or_book(s) if len(res.cars) == 1 else "Which one would you like to hear more about?"
         listed = W.list_line(s, list(res.cars), res.total)               # says "plus one more" when the list is 3 of 4
         if more > 0:
             return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
@@ -1103,31 +1173,47 @@ class AgentEngine:
         if all(c.stock_id != car.stock_id for c in s.shown):
             s.shown = [car]
         s.state = State.ANSWERING
+        s.makes_said = []                                                # a car is being discussed: "what else" is no longer "the other makes"
         dbg.tools.append(f"get_car({car.stock_id}) -> {car.status.value}")
         facts = ["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]
         words = " ".join(ex.tokens_of(text))
-        ask = W.offer_test_drive(s)
+        ask = lambda: W.offer_test_drive(s)        # the closing question, chosen only when it is used (an invitation to visit is not made in two answers running, nor after a no)
+        d = self.svc.site.cars.get(car.stock_id)
+        told = s.said_about.setdefault(car.stock_id, [])
+        topics = A.topics_in(words)
         if HAGGLE.search(words) or _VALUE.search(words):                 # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
-            return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask}", "facts": facts, "awaiting": True}
-        detail = A.detail_answer(car, self.svc.site.cars.get(car.stock_id), words)
+            return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask()}", "facts": facts, "awaiting": True}
+        if d is not None and topics and set(topics) == {"about"} and not A.asked_feature(words):
+            return self._more_about(s, car, d, told, facts, ask)         # "tell me more", "anything else about it?": a group of facts not told yet
+        detail = A.detail_answer(car, d, words)
         if detail:                                                       # warranty, accident, engine, boot, "does it have a sunroof?": from the spec sheet
-            return {"core": " ".join(detail) + " " + ask, "facts": facts + [f"Answered from the spec sheet: {' '.join(detail)}"], "awaiting": True}
+            A.mark_said(told, topics)
+            return {"core": " ".join(detail) + " " + ask(), "facts": facts + [f"Answered from the spec sheet: {' '.join(detail)}"], "awaiting": True}
         just_said = s.described == car.stock_id
         if just_said:                                                    # the caller heard the full line a moment ago: answer only what was asked
             part = [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."), ("price", f"It's {T.money(car.price)}."),
                                      ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
             if part:
-                return {"core": " ".join(part) + " " + ask, "facts": facts, "awaiting": True}
-            d = self.svc.site.cars.get(car.stock_id)
+                return {"core": " ".join(part) + " " + ask(), "facts": facts, "awaiting": True}
             if d is not None and _FAMILY.search(words):                  # "is it a good family car?": what a family would ask about
                 said = [f"It seats {d.seats}, with a {d.boot_litres}-litre boot, and it's {d.accident} with a {d.service}."]
-                return {"core": " ".join(said) + " " + ask, "facts": facts, "awaiting": True}
-            if d is not None:                                            # "is it reliable?", "is it any good?": the blurb and the inspection
-                said = A.detail_answer(car, d, "tell me more") or []
-                said.append(f"It's {d.accident} with a {d.service}, and it passed {d.inspection} of our 150 checks.")
-                return {"core": " ".join(said) + " " + ask, "facts": facts, "awaiting": True}
+                A.mark_said(told, ["boot", "accident", "service"])
+                return {"core": " ".join(said) + " " + ask(), "facts": facts, "awaiting": True}
+            if d is not None:                                            # "is it reliable?", "something else about it": the next facts not told yet, the car's condition first for an opinion question
+                return self._more_about(s, car, d, told, facts, ask, prefer=("condition",) if _OPINION.search(words) else ())
         s.described = car.stock_id
-        return {"core": f"{W.car_line(s, car)} {ask}", "facts": facts, "awaiting": True}
+        return {"core": f"{W.car_line(s, car)} {ask()}", "facts": facts, "awaiting": True}
+
+    def _more_about(self, s: Session, car, d, told: list[str], facts: list[str], ask, prefer: tuple[str, ...] = ()) -> dict:
+        """The next one or two groups of facts about this car that the caller has not heard; when there are none, say so rather than repeat one."""
+        s.described = car.stock_id
+        if prefer and prefer[0] in told:                                 # asked "is it reliable?" and the condition was already told: it IS the answer, said again briefly
+            again = A.group_sentence(prefer[0], d)
+            return {"core": again + " " + ask(), "facts": facts + [f"Answered from the spec sheet: {again}"], "awaiting": True}
+        sentences = A.next_facts(d, told, prefer)
+        if not sentences:
+            return {"core": W.nothing_more(s), "facts": facts + ["Everything on the spec sheet has already been told to the caller. Do not repeat any of it."], "awaiting": True}
+        return {"core": " ".join(sentences) + " " + ask(), "facts": facts + [f"Answered from the spec sheet: {' '.join(sentences)}"], "awaiting": True}
 
     def _sounds_like_shown(self, s: Session, text: str):
         """(the car heard, the listed car it sounds like) when the caller seems to name a car just read out but the recognizer heard another
@@ -1171,6 +1257,28 @@ class AgentEngine:
     def _slot_text(self, slots, now) -> str:
         return " or ".join(T.when_short(x, now) for x in slots)
 
+    def _offer_next_slots(self, s: Session, car, text: str = "", intro: str = "") -> dict:
+        """Stop asking which day and offer the next free times: for \"any day\" / \"what's free\", for a day with nothing free, and for a second question in a row.
+        The earliest and a middle one of the first day that has room (the earliest two for \"as soon as possible\"); a part of the day in the words is respected."""
+        tz, now = self.svc.slots.tz(car.branch_id), self.svc.clock()
+        alts = list(self.svc.slots.alternatives(car, now, k=24))
+        pod = part_of_day(text)
+        if pod:
+            part = [a for a in alts if {"morning": a.hour < 12, "afternoon": 12 <= a.hour < 17, "evening": a.hour >= 17}[pod]]
+            alts = part or alts
+        s.day_asks = 0
+        if not alts:
+            return {"core": (intro + " " if intro else "") + "I don't see any free times in the next two weeks. Would you like me to put you through to a colleague?", "risk": "high", "awaiting": True,
+                    "facts": ["There are no free test-drive slots in the booking window."]}
+        day = alts[0].astimezone(tz).date()
+        same = [a for a in alts if a.astimezone(tz).date() == day]
+        soonest = bool(re.search(r"\b(?:soon|soonest|earliest|asap|first)\b", " ".join(ex.tokens_of(text))))
+        pick = same[:2] if soonest else ([same[0], same[len(same) // 2]] if len(same) > 1 else same[:1])
+        s.offered_slots, s.slot_day, s.state = pick, day, State.SLOT
+        times = " or ".join(T.clock_part(x) for x in pick)
+        return {"core": W.offer_slots(s, T.day_name(day, now), times, intro), "risk": "high", "awaiting": True,
+                "facts": ([intro] if intro else []) + [f"Free on {day:%A}: {times} (and others). The customer had not chosen a day; these are offered."]}
+
     def _t_check_slots(self, s, args, text, dbg) -> dict:
         car = self._car_arg(s, args)
         if car is None:
@@ -1179,6 +1287,9 @@ class AgentEngine:
         when = str(args.get("when") or text)
         w = parse_when(when, now, tz)
         if not w.day:
+            if s.day_asks >= 1 or _FLEXIBLE.search(" ".join(ex.tokens_of(when))):       # already asked once, or the caller left it to us: offer, do not ask again
+                return self._offer_next_slots(s, car, when)
+            s.day_asks += 1
             return {"core": "Which day would suit you?", "facts": ["The customer has not said a day yet."], "awaiting": True}
         free = list(self.svc.check_test_drive_slots(car.stock_id, w.day).slots)
         pod = part_of_day(when)
@@ -1222,6 +1333,9 @@ class AgentEngine:
                 pick = self._offered_pick(s, when)
                 if pick is not None:
                     day, tm = pick.date(), pick.time()
+            if tm is None and day is None and s.offered_slots and _DELEGATES.search(" ".join(ex.tokens_of(when))):
+                first = sorted(s.offered_slots)[0]                      # "any day suits me" / "you choose" right after two times were offered: take the earlier one
+                day, tm = first.date(), first.time()
             if tm is None and day is None and s.offered_slots:
                 bare = re.fullmatch(r"(?:at |around |about )?(\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", " ".join(ex.tokens_of(text)))
                 if bare:
@@ -1253,6 +1367,7 @@ class AgentEngine:
                     return {"core": f"I'd offered {choices}. Just to check, did you say {T.clock(chosen)}?", "risk": "high", "awaiting": True,
                             "facts": [f"Heard {T.clock(chosen)}, which was not one of the offered times ({choices}). It is free, but check first."]}
                 s.draft_slot = chosen
+                s.day_asks = 0
                 slot_set_now = True
                 s.offered_slots, s.slot_day, s.pending = [], None, None
             elif day and not tm:
@@ -1261,13 +1376,20 @@ class AgentEngine:
                 if pick:
                     s.offered_slots, s.slot_day, s.state = pick, day, State.SLOT
                     times = " or ".join(T.clock_part(x) for x in pick)
+                    s.day_asks = 0
                     return {"core": f"{W.checking(s)} {T.cap(T.day_name(day, now))} I can do {times}. Which suits you better?", "risk": "high", "awaiting": True,
                             "facts": [f"The customer gave a day but no time. Free on {day:%A}: {times} (and others)."]}
+                return self._offer_next_slots(s, car, when, intro=f"There's nothing free {T.day_name(day, now)}.")      # "and today" after closing: say so, offer what there is
+            elif _FLEXIBLE.search(" ".join(ex.tokens_of(when))):
+                return self._offer_next_slots(s, car, when)
             else:
                 problems.append("the day and time were not understood")
         missing = [x for x, v in (("day and time", s.draft_slot), ("name", s.draft_name), ("mobile number", s.draft_phone)) if not v]
         s.state = State.SLOT if not s.draft_slot else State.CONTACT
         if missing and not s.draft_slot and not s.draft_name and not s.draft_phone:
+            if s.day_asks >= 1:                                          # the day was asked for last turn and not given: offer times, do not ask again
+                return self._offer_next_slots(s, car, when)
+            s.day_asks += 1
             return {"core": W.ask_day(s, car), "risk": "high", "awaiting": True,
                     "facts": [f"The customer wants a test drive of the {T.car_name(car)}. Nothing is booked yet.", *fact_sheet([car], self._branch_name).splitlines(),
                               "Ask which day and time suit them. Do not say anything is booked or confirmed, and do not offer times yourself.",
@@ -1410,6 +1532,7 @@ class AgentEngine:
 
     def _t_cancel_draft(self, s, args, text, dbg) -> dict:
         s.draft_slot = s.draft_name = s.draft_phone = None
+        s.day_asks = 0
         s.read_back = False
         if _NEVER_MIND.search(" ".join(ex.tokens_of(text))):
             s.state = State.ANSWERING

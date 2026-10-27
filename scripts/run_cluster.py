@@ -10,6 +10,7 @@ r"""The whole system on one machine, the way it runs in production across many: 
              (default auto: openvino on Intel / AMD processors, ollama otherwise; production: vLLM)
   workers    python -m dealer_core.server on :8765, :8766, ...                    each up to --calls-per-worker calls
   router     python -m dealer_core.gateway on :8760                                pages ask it which worker to use
+  recognizer (with --stt-server) python -m dealer_core.sttserver on :8002          ONE speech recognizer for every worker (they use VA__VOICE__STT_URL), like a GPU server in production
 
 Needs the `cluster` extra (uv sync ... --extra cluster: pgserver and the PostgreSQL driver). The website is looked for next to this project
 (..\bmw-portal\site); --site says where else. A worker that dies is started again (production: Kubernetes does this). Ctrl+C stops
@@ -32,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PY = str(ROOT / ".venv" / "Scripts" / "python.exe") if os.name == "nt" else sys.executable
 OLLAMA = "http://127.0.0.1:11434"
+LOCAL_SERVER = "http://127.0.0.1:8003/v1"          # llama-server / mlx_lm.server (config backend local_server)
 
 
 def wait_http(url: str, timeout_s: float = 300.0, proc: subprocess.Popen | None = None) -> bool:
@@ -57,24 +59,45 @@ def log_tail(path: Path, lines: int = 15) -> str:
 
 
 def pick_backend(choice: str, machine: str | None = None) -> str:
-    """openvino (the shared OpenVINO model server, for an Intel GPU) or ollama (everything else, e.g. Apple chips)."""
-    if choice in ("openvino", "ollama"):
+    """openvino (the shared OpenVINO model server, for an Intel GPU), ollama (everything else, e.g. Apple chips) or local (an OpenAI-compatible server you started)."""
+    if choice in ("openvino", "ollama", "local"):
         return choice
     m = (machine if machine is not None else platform.machine()).lower()
     return "openvino" if m in ("x86_64", "amd64", "x86", "i386", "i686") else "ollama"
 
 
 def worker_cmd(i: int, backend: str, db_url: str, site: Path, first_port: int, calls: int, quality: str | None) -> list[str]:
-    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", "openvino_server" if backend == "openvino" else "ollama",
+    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", {"openvino": "openvino_server", "local": "local_server"}.get(backend, "ollama"),
            "--port", str(first_port + i), "--max-calls", str(calls), "--state-url", db_url, "--worker-id", f"w{i + 1}", "--site", str(site)]
     return cmd + (["--quality", quality] if quality else [])
 
 
-def worker_env(backend: str, db_url: str) -> dict[str, str]:
+STT_PORT = 8002
+
+
+def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = "") -> dict[str, str]:
     env = {**os.environ, "DATABASE_URL": db_url}
+    if stt_url:
+        env["VA__VOICE__STT_URL"] = stt_url                          # the workers then run no recognizer of their own (voice/stt.py RemoteWhisper)
     if backend == "ollama":
         env["VA__DIALOGUE__DECISION_BACKEND"] = "ollama"        # the tool decisions too: the default is the Intel-GPU model
+    if backend == "local":
+        env["VA__DIALOGUE__DECISION_BACKEND"] = "local_server"
+        if local_model:
+            env["VA__LLM__BACKENDS__LOCAL_SERVER__MODEL"] = local_model     # the name the server lists
     return env
+
+
+def local_server_model(url: str = LOCAL_SERVER) -> tuple[str, str]:
+    """(the model name the local server lists, "") or ("", why the workers cannot use it)."""
+    try:
+        with urllib.request.urlopen(f"{url}/models", timeout=3) as r:
+            names = [m.get("id", "") for m in json.loads(r.read()).get("data", [])]
+    except Exception:
+        return "", (f"No model server is answering at {url}. Start one (docs/ARCH_REVIEW.md section 7b), for example on a Mac:\n"
+                    "  mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-4bit --port 8003\nor with llama.cpp:\n"
+                    "  llama-server -m <qwen3-4b-instruct-2507 Q4_K_M .gguf> --port 8003 --parallel 4 -c 8192")
+    return (names[0], "") if names else ("", f"The server at {url} lists no model.")
 
 
 def ollama_model() -> str:
@@ -101,13 +124,14 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--calls-per-worker", type=int, default=16)
     ap.add_argument("--first-port", type=int, default=8765)
-    ap.add_argument("--backend", choices=["auto", "openvino", "ollama"], default="auto",
+    ap.add_argument("--backend", choices=["auto", "openvino", "ollama", "local"], default="auto",
                     help="the model: openvino = the shared OpenVINO server (Intel GPU), ollama = the Ollama app; auto picks by processor")
     ap.add_argument("--model", default="Qwen3-4B-Instruct-2507-int4-ov-nocal", help="openvino only: the model folder under models/ov")
     ap.add_argument("--site", type=Path, default=Path(os.environ.get("SITE_DIR") or ROOT.parent / "bmw-portal" / "site"),
                     help="the website's site folder (its data.js holds the cars); default: bmw-portal next to this project")
     ap.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""), help="an existing PostgreSQL; default: start one locally")
     ap.add_argument("--quality", default=None)
+    ap.add_argument("--stt-server", action="store_true", help="run one shared speech recognizer (dealer_core.sttserver) instead of one Whisper per worker")
     ap.add_argument("--dry-run", action="store_true", help="print what would start, start nothing")
     a = ap.parse_args()
     backend = pick_backend(a.backend)
@@ -118,12 +142,14 @@ def main() -> int:
             return 1
     if a.dry_run:
         db = a.database_url or "<a local PostgreSQL, started by pgserver>"
-        print(f"backend   {backend}" + (f"  (Ollama at {OLLAMA}, model {ollama_model()})" if backend == "ollama" else ""))
+        print(f"backend   {backend}" + (f"  (Ollama at {OLLAMA}, model {ollama_model()})" if backend == "ollama" else f"  (an OpenAI-compatible server you start, at {LOCAL_SERVER})" if backend == "local" else ""))
         print(f"database  {db}")
         if backend == "openvino":
             print("model     " + " ".join([PY, "-m", "dealer_core.modelserver", "--model", a.model, "--port", "8001"]))
+        if a.stt_server:
+            print("recogniz  " + " ".join([PY, "-m", "dealer_core.sttserver", "--port", str(STT_PORT)]) + f"   (workers: VA__VOICE__STT_URL=http://127.0.0.1:{STT_PORT}/v1)")
         for i in range(a.workers):
-            extra = "VA__DIALOGUE__DECISION_BACKEND=ollama " if backend == "ollama" else ""
+            extra = {"ollama": "VA__DIALOGUE__DECISION_BACKEND=ollama ", "local": "VA__DIALOGUE__DECISION_BACKEND=local_server "}.get(backend, "")
             print(f"worker{i + 1}   {extra}" + " ".join(worker_cmd(i, backend, db, a.site, a.first_port, a.calls_per_worker, a.quality)))
         print("router    " + " ".join([PY, "-m", "dealer_core.gateway", "--state-url", db, "--port", "8760"]))
         return 0
@@ -133,6 +159,13 @@ def main() -> int:
         if problem:
             print(problem, flush=True)
             return 1
+    local_model = ""
+    if backend == "local":
+        local_model, problem = local_server_model()
+        if problem:
+            print(problem, flush=True)
+            return 1
+        print(f"model     {local_model} at {LOCAL_SERVER}", flush=True)
 
     procs: dict[str, tuple[list[str], dict, subprocess.Popen]] = {}
     logs = ROOT / "logs" / "cluster"
@@ -171,11 +204,19 @@ def main() -> int:
                 print("the model server did not start: see logs/cluster/model.log\n" + log_tail(logs / "model.log"), flush=True)
                 return 1
             print("model     http://127.0.0.1:8001/v1", flush=True)
-        else:
+        elif backend == "ollama":
             print(f"model     Ollama at {OLLAMA}", flush=True)
 
+        stt_url = ""
+        if a.stt_server:
+            launch("stt", [PY, "-m", "dealer_core.sttserver", "--port", str(STT_PORT)], base_env)
+            if not wait_http(f"http://127.0.0.1:{STT_PORT}/health", proc=procs["stt"][2]):
+                print("the speech recognizer did not start: see logs/cluster/stt.log\n" + log_tail(logs / "stt.log"), flush=True)
+                return 1
+            stt_url = f"http://127.0.0.1:{STT_PORT}/v1"
+            print(f"recogniz  {stt_url}", flush=True)
         for i in range(a.workers):
-            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url))
+            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url, stt_url, local_model))
         print(f"starting {a.workers} workers (loading the speech models takes a minute or two)...", flush=True)
         started = 0
         for i in range(a.workers):

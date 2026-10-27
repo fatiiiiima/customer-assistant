@@ -92,6 +92,13 @@ llm:
       model: "qwen3:4b-instruct-2507-q4_K_M"
       prompt_mode: auto                          # -> static prompt
       timeout_s: 20.0                            # generous for the same reason (cold model load)
+    local_server:                                 # any OpenAI-compatible server on THIS machine instead of Ollama: llama.cpp `llama-server`, or `mlx_lm.server` on Apple chips. Port 8003 (8080 is the website)
+      runtime: openai                             # start it, then:  scripts/run_cluster.py --backend local   (docs/ARCH_REVIEW.md section 7b has the commands)
+      host: http://127.0.0.1:8003/v1
+      model: local                                # the name the server lists at /v1/models (run_cluster fills this in from the server)
+      prompt_mode: static                         # one long shared start for every prompt, so the server's prefix cache is reused
+      timeout_s: 8.0
+      max_parallel: 16
     # Disabled dev-only stub (needs VOICE_AGENT_ALLOW_CLOUD=1; synthetic data only; name read from env, never hard-coded).
     cloud_stub:
       runtime: cloud_stub

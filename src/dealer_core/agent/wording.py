@@ -5,6 +5,7 @@ session's own random generator, never the same one twice in a row for the same k
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from ..dialogue import templates as T
@@ -96,13 +97,47 @@ def anything_else(s: Session) -> str:
     return pick(s, "else", ["Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?"])
 
 
+# What counts as an invitation to visit (kept equal to engine._OFFERED_DRIVE, which recognises the caller's "yes" to one)
+INVITES = re.compile(r"\b(?:test drive|take a look|have a look|look at it|check it out|come (?:in|and see|by)|see it|in person|firsthand|behind the wheel|take (?:it|her) for a spin|a spin|"
+                     r"drive it|schedule|book|set up|visit|viewing|try it|experience it)\b")
+# an invitation at most every third answer (27 Oct: four replies in a row ended with a different invitation to visit, after the caller had said "No")
+INVITE_EVERY = 6          # history entries: three exchanges
+
+
 def offer_test_drive(s: Session) -> str:
-    return pick(s, "offer", ["Would you like to come and see it?", "Want to book a test drive?", "Shall I set up a test drive for you?"])
+    """The closing question of an answer about a car: an invitation to visit now and then, otherwise a plain \"anything else about it?\".
+    Not while the caller has just said no (Session.no_invite_until), and never in two answers running."""
+    if len(s.history) >= s.no_invite_until:
+        s.no_invite_until = len(s.history) + INVITE_EVERY
+        return pick(s, "offer", ["Would you like to come and see it?", "Want to book a test drive?", "Shall I set up a test drive for you?"])
+    return pick(s, "more_about", ["Anything else you'd like to know about it?", "What else would you like to know about it?", "Is there anything else you'd like to hear about it?"])
+
+
+def hear_more_or_book(s: Session) -> str:
+    """After a search that found exactly one car."""
+    if len(s.history) >= s.no_invite_until:
+        s.no_invite_until = len(s.history) + INVITE_EVERY
+        return "Would you like to hear more, or book a test drive?"
+    return "Would you like to hear more about it?"
+
+
+def nothing_more(s: Session) -> str:
+    """Every fact on the car's sheet has been told: say so, instead of telling one again."""
+    return pick(s, "nothing_more", ["That's everything I have on it. Anything else I can help with?", "I've told you all I have on that one. Would you like to see another car?",
+                                    "That's all I've got on it. Is there anything else you'd like to know?"])
 
 
 def ask_day(s: Session, c: CarView) -> str:
     return pick(s, "ask_day", ["Sure! What day would you like to come in?", f"Great choice. Which day works for you to try the {c.model}?",
                                "Of course. What day and time suit you?"])
+
+
+def offer_slots(s: Session, day_said: str, times: str, intro: str = "") -> str:
+    """Real times offered instead of a question: "Tomorrow I can do 9 in the morning or 2 in the afternoon. Which suits you better?" `intro` (e.g. "There's nothing free today.") comes first."""
+    cap = day_said[:1].upper() + day_said[1:]
+    body = pick(s, "offer_slots", [f"{cap} I can do {times}. Which suits you better?", f"{cap} I've got {times}. Which works for you?",
+                                   f"The soonest is {day_said}: {times}. Which would you prefer?"])
+    return f"{intro} {body}" if intro else body
 
 
 def ask_missing(s: Session, missing: list[str], name: str | None, time_said: str = "") -> str:

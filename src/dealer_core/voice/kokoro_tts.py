@@ -29,16 +29,28 @@ VOICES = {"michael": "am_michael", "adam": "am_adam", "puck": "am_puck", "eric":
           "heart": "af_heart", "bella": "af_bella", "sarah": "af_sarah", "emma": "bf_emma"}
 
 
+def ort_options(threads: int | None = None):
+    """ONNX Runtime session options; `threads` None leaves the thread count to the runtime (all cores)."""
+    import onnxruntime as rt
+
+    opts = rt.SessionOptions()
+    if threads:
+        opts.intra_op_num_threads = int(threads)
+    return opts
+
+
 class _OVSession:
     """What kokoro-onnx expects from an onnxruntime session, run on OpenVINO (one infer request per call: safe from many threads)."""
 
-    def __init__(self, model_path: Path, cache_dir: Path) -> None:
+    def __init__(self, model_path: Path, cache_dir: Path, threads: int | None = None) -> None:
         import onnxruntime as rt
         import openvino as ov
 
         core = ov.Core()
-        self.compiled = core.compile_model(core.read_model(str(model_path)), "CPU",
-                                           {"PERFORMANCE_HINT": "LATENCY", "CACHE_DIR": str(cache_dir)})
+        props = {"PERFORMANCE_HINT": "LATENCY", "CACHE_DIR": str(cache_dir)}
+        if threads:
+            props["INFERENCE_NUM_THREADS"] = int(threads)
+        self.compiled = core.compile_model(core.read_model(str(model_path)), "CPU", props)
         self._meta = rt.InferenceSession(str(model_path), providers=["CPUExecutionProvider"]).get_modelmeta()
         self._model_path = str(model_path)
 
@@ -109,17 +121,17 @@ def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> l
 class KokoroOV:
     sample_rate = 24000
 
-    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto") -> None:
+    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto", threads: int | None = None) -> None:
         from kokoro_onnx import Kokoro
 
         d = models / "kokoro-v1.0"
         self.runtime = kokoro_runtime(runtime)
         if self.runtime == "openvino":
-            session = _OVSession(d / "kokoro-v1.0.onnx", models / "ov_cache")
+            session = _OVSession(d / "kokoro-v1.0.onnx", models / "ov_cache", threads)
         else:                                              # thread-safe like the OpenVINO session: one session serves every call
             import onnxruntime as rt
 
-            session = rt.InferenceSession(str(d / "kokoro-v1.0.onnx"), providers=["CPUExecutionProvider"])
+            session = rt.InferenceSession(str(d / "kokoro-v1.0.onnx"), sess_options=ort_options(threads), providers=["CPUExecutionProvider"])
         self.kokoro = Kokoro.from_session(session, str(d / "voices-v1.0.bin"))
         self.voice = VOICES.get(voice, voice)
         self.speed = speed

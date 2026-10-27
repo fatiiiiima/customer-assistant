@@ -27,6 +27,7 @@ NARROWING = {"budget", "mileage", "colour", "make", "kind"}
 _NOTHING_IN_PARTICULAR = re.compile(
     r"^(?:(?:um+|uh+|well|oh|just|i|its|it's|it is|i have|ive got|i've got|i dont have|i do not have)\s+)*"
     r"(?:any|anything|whatever|either|no\s+(?:particular|specific)?\s*(?:preference|budget|limit|make|colou?r|mileage)|"
+    r"(?:i'?m|i\s+am)\s+not\s+looking\s+for\s+(?:any|anything)\s+(?:specific|particular)(?:\s+(?:make|model|colou?r|brand|one|thing|kind|type))?|"
     r"(?:any|no)\s+(?:budget|limit|price|make|colou?r|mileage|preference|particular|one|range|style|type|size|brand|kind|model)|not\s+(?:really\s+)?(?:fussed|bothered|fussy|sure)|"
     r"(?:it|that)\s+(?:does\s*not|doesnt|doesn't)\s+matter|does\s*not\s+matter|i\s+(?:do\s*not|dont|don't)\s+mind|flexible|open|surprise me)"
     r"(?:\s+(?:(?:or|of|and|any)\s+)*(?:budget|limit|price|make|colou?r|mileage|preference|one|range|style|type|size|brand|kind|model|is fine|will do|works|for me|really))*$")

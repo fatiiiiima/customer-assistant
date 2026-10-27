@@ -5,11 +5,13 @@ All local. The language model runs on the iGPU, Whisper on the CPU, Piper on the
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -17,13 +19,15 @@ from pipecat.processors.frame_processor import FrameProcessor
 
 from ..app import ROOT, App
 from ..config import Config
+from .audiotap import AudioTap
 from .brain import DealerBrain
+from .mic_health import MicHealth
 from .gate import HalfDuplexGate
 from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
-from ..agent.engine import BRIDGES, CUT_OFF
+from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
 from ..agent.wording import OPENERS
 
 STT_RATE = 16000
@@ -43,13 +47,15 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     if cfg.voice.stt_url:                               # a shared, batched recognizer on a GPU server (production): no Whisper in the worker
         stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords)
     else:
-        stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies)
+        stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies,
+                              precision=cfg.voice.stt_precision, threads=cfg.voice.stt_threads)
     if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
-        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime)
+        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads)
     else:
-        tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies)
+        tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies,
+                         threads=cfg.tts.threads or 4)
     stt.warm_up()
     tts.warm_up()
     if hasattr(tts, "preload"):                         # the phrases said all the time play with no wait
@@ -73,7 +79,7 @@ def common_phrases(cfg: Config) -> list[str]:
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
-            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + ["Is there a colour you'd like?"]
+            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + STILL_THERE + ["Is there a colour you'd like?"]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
@@ -138,15 +144,18 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         if on_turn:
             on_turn(result)
 
-    stt = OpenVinoWhisperSTTService(engine=parts.stt_engine)
-    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say)
+    stt = OpenVinoWhisperSTTService(engine=parts.stt_engine, min_rms=vcfg.min_rms)
+    brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
+                        level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms)
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)
         brain.session.state = seed_state if seed_state is not None else brain.session.state
     follow_the_question()
     stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
-    stages: list[FrameProcessor] = [source] + ([mic_gate] if mic_gate is not None else []) + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + [vad]
+    dump = os.environ.get("VA_DUMP_AUDIO_DIR")                  # diagnostic only (voice/audiotap.py): copy what goes in to the detector and what goes out to the page
+    stages: list[FrameProcessor] = [source] + ([mic_gate] if mic_gate is not None else []) + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + (
+        [AudioTap(dump, "in", InputAudioRawFrame)] if dump else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 
@@ -170,6 +179,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                                lambda: len(brain.session.history))
             endpointer.speculation = stt.speculation = brain.speculation = spec
         stages.append(endpointer)
+    stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
     if on_user_stop is not None:                              # tap-to-talk: told when the turn is over, so the microphone can be closed
         from .micgate import StopNotifier
 
@@ -183,5 +193,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             stages.append(proc)
         if name in probes:
             stages.append(probes[name])
+    if dump:
+        stages.append(AudioTap(dump, "out", OutputAudioRawFrame))
     stages.append(sink)
     return Pipeline(stages), brain

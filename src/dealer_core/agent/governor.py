@@ -9,6 +9,11 @@ The governor keeps a moving average of how long the model takes to its first sen
 and the first audio are counted) and the number of turns using the model at once is below its cap. Otherwise it steps down. While it is
 stepped down it still tries `full` now and then (when the model is not busy), so it notices when there is room again.
 
+A caller's turn is never used to find out whether the model got faster (27 Oct: it did that on the first turn after a start and every 8th turn after, and on a laptop that
+turn took 3.3 s to the first sentence, the caller heard "So," and then nothing). The voice server instead measures the model with a small request of the same shape as a
+model-written turn, before the first call and every few seconds when no turn is using the model (`record_probe`, `AgentEngine.probe_model`), and `choose` only reads
+the result. `explore_every` (testing on a live turn) stays available for the text chat and tests and is off by default.
+
 This is what lets the same code run on any machine: on a fast GPU nearly every turn is `full`; on a laptop or at peak load turns become
 `prefix`, and only an overloaded or failing model pushes them to `code`. Nothing waits on a slow model to finish before speaking.
 
@@ -38,12 +43,13 @@ class GovernorStats:
 
 class QualityGovernor:
     def __init__(self, mode: str = "auto", budget_ms: float = 700.0, max_in_flight_full: int = 0, max_in_flight_model: int = 0,
-                 explore_every: int = 8, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None) -> None:
+                 explore_every: int = 0, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None) -> None:
         self.mode = mode                         # auto | full | prefix | code
         self.budget_ms = budget_ms
         self.max_full = max_in_flight_full       # 0 = no cap of its own (the latency estimate decides)
         self.max_model = max_in_flight_model     # 0 = no cap; above it, turns are spoken by code
-        self.explore_every = explore_every
+        self.explore_every = explore_every       # 0 = never test the full level on a caller's turn; N = every Nth turn while stepped down and idle (text chat, tests)
+        self.probed = False                      # True when a background probe keeps full_first_ms measured: then "not measured yet" is played safe (prefix), never tried on a caller
         self.alpha = alpha
         self.stats = GovernorStats()
         self._lock = threading.Lock()
@@ -60,9 +66,11 @@ class QualityGovernor:
                 level = "code"
             elif self.max_full and self.stats.in_flight >= self.max_full:
                 level = "prefix"
-            elif self.stats.full_first_ms is None or self.stats.full_first_ms <= self.budget_ms:
+            elif self.stats.full_first_ms is None:
+                level = "prefix" if self.probed else "full"      # unmeasured: with a probe running, wait for its answer rather than find out on a caller
+            elif self.stats.full_first_ms <= self.budget_ms:
                 level = "full"
-            elif self._since_full >= self.explore_every and self.stats.in_flight == 0:
+            elif self.explore_every and self._since_full >= self.explore_every and self.stats.in_flight == 0:
                 level = "full"                   # look again: the model may have room now
             else:
                 level = "prefix"
@@ -75,6 +83,12 @@ class QualityGovernor:
         with self._lock:
             old = self.stats.full_first_ms
             self.stats.full_first_ms = first_ms if old is None else (1 - self.alpha) * old + self.alpha * first_ms
+
+    def record_probe(self, first_ms: float) -> None:
+        """The time a background probe took to a first sentence. Counts for more than a live turn (alpha 0.5), because it is the only way back up from prefix."""
+        with self._lock:
+            old = self.stats.full_first_ms
+            self.stats.full_first_ms = first_ms if old is None else 0.5 * old + 0.5 * first_ms
 
     def has_room(self) -> bool:
         """Can the model take extra work that may be thrown away (a decision made ahead of time)? Not while it is slow or nearly full."""
@@ -124,6 +138,6 @@ class QualityGovernor:
 
     def snapshot(self) -> dict:
         with self._lock:
-            return {"mode": self.mode, "budget_ms": self.budget_ms, "full_first_ms": round(self.stats.full_first_ms or 0),
+            return {"mode": self.mode, "probed": self.probed, "budget_ms": self.budget_ms, "full_first_ms": round(self.stats.full_first_ms or 0),
                     "decide_ms": round(self.stats.decide_ms or 0), "in_flight": self.stats.in_flight, "shed": self.stats.shed,
                     "turns": dict(self.stats.turns), "at": time.time()}
