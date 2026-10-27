@@ -34,7 +34,9 @@ TOPICS: dict[str, re.Pattern] = {
     "fuel": re.compile(r"\b(?:petrol|diesel|hybrid|electric|ev|plug in)\b|\bwhat fuel\b|\bfuel type\b"),
     "range": re.compile(r"\b(?:range|how far can it (?:go|drive)|on a (?:full )?charge|battery)\b"),
     "features": re.compile(r"\bfeatures?\b|\bextras?\b|\bequipment\b|\boptions\b|\bwhat does it come with\b|\bwhat comes with\b|\bloaded\b"),
-    "about": re.compile(r"\btell me (?:more|about it|everything)\b|\bdescribe\b|\bwhat is it like\b|\bwhat's it like\b|\bany good\b(?! for)|\bworth (?:it|buying)\b"),
+    "about": re.compile(r"\btell me (?:more|about it|everything)\b|\bdescribe\b|\bwhat is it like\b|\bwhat's it like\b|\bany good\b(?! for)|\bworth (?:it|buying)\b|"
+                       r"\b(?:know|hear|learn) more\b|\bmore (?:about (?:it|the car|this|that)|details|info\w*)\b|"
+                       r"\b(?:anything|what) else\b.*\b(?:know|about (?:it|the car|this (?:one|car)|that (?:one|car)))\b"),
 }
 
 # "does it have a sunroof?": what a caller says -> words to look for in the feature list
@@ -58,6 +60,25 @@ def spoken_consumption(c: str) -> str:
         return f"{m.group(1)} litres per hundred kilometres"
     m = re.match(r"\s*([\d.]+)\s*kWh/100\s*km", c)
     return f"{m.group(1)} kilowatt hours per hundred kilometres" if m else c
+
+
+_HAS_VERB = re.compile(r"\b(?:is|are|was|were|has|have|had|comes?|offers?|gives?|makes?|delivers?|brings?|feels?|drives?|handles?|"
+                       r"rides?|sits|built|designed|packed|loaded)\b|'s\b", re.I)
+
+
+def blurb_sentence(blurb: str) -> str:
+    """The website's one-line description as something a person says: "A thunderous V8 super-SUV ..." -> "It's a thunderous V8 super-SUV ...";
+    "Sharp styling and a punchy turbo engine ..." -> "It offers sharp styling and a punchy turbo engine ..."; a full sentence stays as it is."""
+    b = blurb.strip()
+    if not b:
+        return b
+    b = b if b.endswith((".", "!")) else b + "."
+    if _HAS_VERB.search(b):
+        return b
+    first = b.split(" ", 1)[0]
+    keep = sum(ch.isupper() for ch in first) >= 2 or any(ch.isdigit() for ch in first)       # "SUV ...", "V8 ...", "CX-5 ..." keep their capitals
+    low = b if keep else b[:1].lower() + b[1:]
+    return ("It's " if first.lower() in ("a", "an") else "It offers ") + low
 
 
 def topics_in(words: str) -> list[str]:
@@ -132,7 +153,7 @@ def detail_answer(car: CarView, d: CarDetails | None, words: str) -> list[str] |
             "gearbox": f"It's {d.transmission}.",
             "fuel": f"It's {'a hybrid' if car.fuel == 'hybrid' else 'electric' if car.fuel == 'electric' else car.fuel}.",
             "features": f"Highlights include {_feature_list(d, 4)}.",
-            "about": d.blurb if d.blurb.endswith(".") else d.blurb + ".",
+            "about": blurb_sentence(d.blurb),
             "range": ("I don't have its range figure on file, but it uses about " + spoken_consumption(d.consumption) + "."
                       if car.fuel == "electric" else f"It uses about {spoken_consumption(d.consumption)}."),
         }[t]
