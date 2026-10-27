@@ -124,6 +124,15 @@ wheels = [
 ]
 
 [[package]]
+name = "asn1crypto"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -464,6 +473,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6c/93/6e785df7ec0bdbfef9d7bf1044bc7bfabd6d22641d147e8326a1f2ba210b/fastapi-0.156.8.tar.gz", hash = "sha256:cee65bba7890cd85264b3b06c7fdf88e84ca3510d00d4018cdbc2ce629e1ff22", size = 504768, upload-time = "2026-10-21T08:45:18.817Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/21/93/b87423a73fad5b3b1de4f14a680a2d2344c442d5a1f297a0eb413b7572a3/fastapi-0.156.8-py3-none-any.whl", hash = "sha256:d5f2e052a5f985fb0bbe1114527938c25fedbe198a8197faae71c3d38851b7c3", size = 147358, upload-time = "2026-10-21T08:45:17.278Z" },
+]
+
+[[package]]
+name = "fasteners"
+version = "0.20"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/18/7881a99ba5244bfc82f06017316ffe93217dbbbcfa52b887caa1d4f2a6d3/fasteners-0.20.tar.gz", hash = "sha256:55dce8792a41b56f727ba6e123fcaee77fd87e638a6863cec00007bfea84c8d8", size = 25087, upload-time = "2025-08-11T10:19:37.785Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/ac/e5d886f892666d2d1e5cb8c1a41146e1d79ae8896477b1153a21711d3b44/fasteners-0.20-py3-none-any.whl", hash = "sha256:9422c40d1e350e4259f509fb2e608d6bc43c0136f79a00db1b49046029d0b3b7", size = 18702, upload-time = "2025-08-11T10:19:35.716Z" },
 ]
 
 [[package]]
@@ -1470,6 +1488,39 @@ wheels = [
 ]
 
 [[package]]
+name = "pg8000"
+version = "1.31.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "scramp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/3d/34ee10f4b7d050c02008a132701d6c61722a404b334909247e44633605cb/pg8000-1.31.6.tar.gz", hash = "sha256:553b240256d4b2d8f0ad2af28d07df1f9980247f74ac98d2c2b573762ec1ff1b", size = 119018, upload-time = "2026-10-26T17:58:57.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/f6/28aa670fead0076daf55a59cbcfa1bb0ace9568427eb2c463f2598e8bb23/pg8000-1.31.6-py3-none-any.whl", hash = "sha256:1ffe27af94fa5b37ce6885b98d591dc75562ff076859bf50ca7729af59345a80", size = 57878, upload-time = "2026-10-26T17:58:55.653Z" },
+]
+
+[[package]]
+name = "pgserver"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fasteners" },
+    { name = "platformdirs" },
+    { name = "psutil" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/35/f1/475d079b823c26deaf8a2cc3d7358a8f5cfa481bd5a8f878666b08450ed9/pgserver-0.1.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:854fa9394d495b3a332c954b63d4356b56d29220530e6d2aae146821bf87e05a", size = 10378190, upload-time = "2024-06-08T18:41:30.005Z" },
+    { url = "https://files.pythonhosted.org/packages/50/1d/527e42e5cf66cfa224fbec2d031aba9fc17514bab5de3f14b1d7e9c5c3e8/pgserver-0.1.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:0cc5a64f40749c0e9752cd63784e63dfcf1f3e5ecd2279b6b59f7c64fb520fb4", size = 9822142, upload-time = "2024-06-08T18:41:32.685Z" },
+    { url = "https://files.pythonhosted.org/packages/91/3f/3d628b09d379c368a589ca2f417e318bed7615e5df175c17d570e623b2f3/pgserver-0.1.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d595789b47624a3d963aa9aa6359da9be31beb7e61f1a45541953242068b8813", size = 11266040, upload-time = "2024-06-08T18:41:35.156Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/df/284875cff70317a628c87c1555a1c9342316baaadce23741be38a85b39eb/pgserver-0.1.4-cp311-cp311-win_amd64.whl", hash = "sha256:fb755fe493c479fcad1a1e9923fcc1f09d15cd2fb168e563c003b29f14a80545", size = 12797707, upload-time = "2024-06-08T18:41:37.825Z" },
+    { url = "https://files.pythonhosted.org/packages/92/e3/9f8eea535ab4f2906a9924eccc5fb3a7bcff3e02222fbe338d9c24639750/pgserver-0.1.4-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:dc34f88561b18bc08edd98a84528f99a3720fe713a4e39a4a6210a4d009fe465", size = 10378168, upload-time = "2024-06-08T18:41:40.377Z" },
+    { url = "https://files.pythonhosted.org/packages/23/57/94b5f05a23d0fa683c01bfc2d785224057a9eaf0eb00cbfd6da19547012f/pgserver-0.1.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:780fa89f26a960cca0215caf471e70848dd8597bd8ceaeba7faf42170278980c", size = 9822137, upload-time = "2024-06-08T18:41:43.017Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/f1/c9d717f66d2e4a27801577e1ae233c25aa88db875c586ac3ebe7d73b6b75/pgserver-0.1.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1a5d07c61d51f2abfef4ef61e2ef5cd014b994f7e09de8d3c140d2cf370e84a8", size = 11266316, upload-time = "2024-06-08T18:41:48.033Z" },
+    { url = "https://files.pythonhosted.org/packages/85/80/f6304274c1740c283bc7317ababceb3c23c8275ce4995f7379e17b49bc6d/pgserver-0.1.4-cp312-cp312-win_amd64.whl", hash = "sha256:406e9355334e40754160a33d93f18a848720a38cd0b68da50be2ea272c89ed2d", size = 12797714, upload-time = "2024-06-08T18:41:50.774Z" },
+]
+
+[[package]]
 name = "phonemizer"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1796,6 +1847,19 @@ wheels = [
 ]
 
 [[package]]
+name = "python-dateutil"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+    { name = "tzdata" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/df/f15f80383f152452d8985b36d95cb8751f901a3e0ff4cd27f7e118f168e2/python_dateutil-3.0.0.tar.gz", hash = "sha256:7ebcb3c29a92f3ceafe79a7a48a5c45677e9e004bbeec5742ac0bbb00560b7a2", size = 271066, upload-time = "2026-10-21T23:41:45.075Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/17/cebee01d1c0c1441174cf0456ddc91b280d79acb65340c05e41d77866ee8/python_dateutil-3.0.0-py2.py3-none-any.whl", hash = "sha256:3c79630202e4152c6add678446984236efe4f57e84d8e892aab0637bab82e9fd", size = 94659, upload-time = "2026-10-21T23:41:43.431Z" },
+]
+
+[[package]]
 name = "python-dotenv"
 version = "1.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2068,6 +2132,18 @@ wheels = [
 ]
 
 [[package]]
+name = "scramp"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asn1crypto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1f/10/a32f434a66d8c0b3c09a9e314213591017d2a96ec3bd2568717669e582c9/scramp-1.5.0.tar.gz", hash = "sha256:21b88a54bc4b656f57de9f0f6be531ca99f7efe49220bbd083b84cf88748e395", size = 34402, upload-time = "2026-10-25T17:43:19.122Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/62/231ee179d8995d28981414432bf79492f0b909f5820452b77f422fdce259/scramp-1.5.0-py3-none-any.whl", hash = "sha256:8280608f568e81da9e9c9d69cac1331b836622d9b48bf5c5e400e16129c6d1fa", size = 20233, upload-time = "2026-10-25T17:43:17.87Z" },
+]
+
+[[package]]
 name = "sentence-transformers"
 version = "6.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2196,6 +2272,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/de/7d/e5a1de0269ed3d646f430beb1156f17b39899a1cae612dcf6e29a2867248/sherpa_onnx_core-1.13.8-py3-none-win32.whl", hash = "sha256:44f7daed251d96da4a26486fcc42142cf863d8ba760c6bfececd0f210de40414", size = 14772677, upload-time = "2026-09-10T14:54:26.666Z" },
     { url = "https://files.pythonhosted.org/packages/94/38/64356ad97f68fffcf01fe7545407ad18a2ea86c1ffae5b0950f7fac73638/sherpa_onnx_core-1.13.8-py3-none-win_amd64.whl", hash = "sha256:5579e80196d516e6dae23c8f629292ce3142ab8869925d32b94612fd86f93733", size = 16903581, upload-time = "2026-09-10T15:10:50.349Z" },
     { url = "https://files.pythonhosted.org/packages/e4/e0/236bde7b6b9909d2f7f4282b9e18f5fa8d64b841e63265b508a86c3687a8/sherpa_onnx_core-1.13.8-py3-none-win_arm64.whl", hash = "sha256:85e9b12e9e985d73ad9165a1122c396e2c9384256a4023cd7cf9c91bc8d32073", size = 16067491, upload-time = "2026-09-10T14:16:26.19Z" },
+]
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
 
 [[package]]
@@ -2521,6 +2606,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cluster = [
+    { name = "pg8000" },
+    { name = "pgserver" },
+]
 openvino = [
     { name = "openvino" },
     { name = "openvino-genai" },
@@ -2567,6 +2656,8 @@ requires-dist = [
     { name = "ollama", marker = "extra == 'spike'" },
     { name = "openvino", marker = "extra == 'openvino'" },
     { name = "openvino-genai", marker = "extra == 'openvino'" },
+    { name = "pg8000", marker = "extra == 'cluster'" },
+    { name = "pgserver", marker = "extra == 'cluster'" },
     { name = "pipecat-ai", extras = ["local", "websocket"], marker = "extra == 'voice'" },
     { name = "psutil", marker = "extra == 'spike'" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -2584,7 +2675,7 @@ requires-dist = [
     { name = "useful-moonshine-onnx", marker = "extra == 'spike'" },
     { name = "uvicorn", marker = "extra == 'voice'" },
 ]
-provides-extras = ["spike", "openvino", "rag", "voice", "record"]
+provides-extras = ["spike", "openvino", "rag", "voice", "record", "cluster"]
 
 [package.metadata.requires-dev]
 dev = [
