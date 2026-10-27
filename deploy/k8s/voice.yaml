@@ -2,7 +2,8 @@
 # Every image is pinned: a moving tag changes under you when a pod restarts. Upgrade vLLM deliberately, then re-run the capacity probe.
 #   kubectl apply -f deploy/k8s/voice.yaml
 # Sizing (confirm with scripts/capacity_probe.py and scripts/load_test.py on the real cluster):
-#   workers  ~16 calls each  -> 32 replicas for 500 calls, +4 spare; CPU nodes
+#   workers  up to 16 calls each (fewer while their answers are slow) -> ~45 at 500 callers (the autoscaler keeps them ~70% full),
+#            up to 72 for an 800-caller spike; start at 36; CPU nodes (3-4 cores, 6-8 GB each)
 #   model    vLLM, 2+ GPU replicas (one can fail); requests are batched, ~10-20% of callers wait on it at any moment
 #   stt      Whisper on a GPU, batched for every worker (OpenAI transcription API); workers then run no recognizer of their own
 #   database managed PostgreSQL (bookings + call snapshots + worker registry)
@@ -104,7 +105,7 @@ metadata: { name: voice-worker }
 spec:
   scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: voice-worker }
   minReplicas: 8
-  maxReplicas: 48
+  maxReplicas: 72                                     # 800 callers / (16 calls x 70%); raise it for more (each worker: 3-4 cores, 6-8 GB)
   metrics:
     # Scale on DEMAND at 70% of the measured capacity: (calls in progress + callers the router just turned away) / the workers' caps.
     # Turned-away callers are invisible to the workers; caps shrink when replies get slow (server/admission.py). Rule: deploy/prometheus-adapter.yaml
