@@ -129,7 +129,7 @@ class Scenario:
                                                            # False = the code before it: a fixed cap, no shedding, a 5 s deadline
     ceiling: int = 16
     min_workers: int = 36                                  # what is running when the calls start (deploy/k8s: 36 replicas)
-    max_workers: int = 60
+    max_workers: int = 72                                  # deploy/k8s: maxReplicas
     worker_start_s: float = 45.0                           # a new worker: scheduled, started, speech models loaded
     target_s: float = 1.0
     scale_on_demand: bool = True                           # the autoscaler also counts callers just turned away (not only those in calls)

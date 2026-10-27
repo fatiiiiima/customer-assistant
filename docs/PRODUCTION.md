@@ -234,13 +234,28 @@ autoscaling on calls in progress only).
 | fast GPUs | off / on | 0% / 0% | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.98 / 0.99 s | 0% / 0% | 100/0/0 |
 | slow GPU | off / on | 0% / 0% | 0.45 / 0.45 s | 0.84 / 0.83 s | 1.89 / 1.92 s | 0.6% / 0.7% | 11/89/0 |
 | weak worker CPUs | off / on | 0% / 0% | 0.62 / 0.56 s | 1.02 / 0.95 s | 1.19 / 1.19 s | 0% / 0% | 100/0/0 |
-| 95% of GPU capacity lost at 5 min | off / on | 0% / 0% | 0.45 / 0.45 s | **4.15 / 0.95 s** | **12.9 / 2.4 s** | **22.5% / 1.4%** | 48/49/3 -> 44/42/14 (14% shed) |
+| 95% of GPU capacity lost at 5 min | off / on | 0% / 0% | 0.45 / 0.44 s | **4.15 / 0.95 s** | **12.9 / 2.4 s** | **22.5% / 1.3%** | 48/49/3 -> 44/41/15 (15% shed) |
 | cold start: 8 workers when 500 arrive | off / on | **21.3% / 0%** | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.99 / 0.99 s | 0% / 0% | 100/0/0 |
-| spike 500 -> 800 at 5 min | off / on | 5.6% / 5.6% | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.99 / 0.99 s | 0% / 0% | 100/0/0 |
+| spike 500 -> 800 at 5 min | off / on | 5.6% / 5.7% | 0.45 / 0.45 s | 0.88 / 0.88 s | 0.99 / 0.99 s | 0% / 0% | 100/0/0 |
 
 During the GPU failure itself (minutes 5-10) the 90th percentile is 4-5 s without protection and 1.0-1.1 s with it: the model can serve
-only part of the turns, so the rest are answered by code, at once. The spike's 5.6% busy is the autoscaler's ceiling (60 workers) and its
-start-up time (45 s); answers stay fast for everyone who is let in.
+only part of the turns, so the rest are answered by code, at once. The spike's ~5.6% busy is the time new workers take to
+arrive (a 15 s autoscaler check + 45 s to start), not the ceiling: with the maximum raised from 60 to 72 workers it is the same (the cluster
+reached 71). Absorbing a sudden spike without "busy" takes spare workers kept running or faster-starting workers. Answers stay fast for
+everyone who is let in.
+
+### How many workers
+
+| | Workers |
+|---|---|
+| calls per worker | up to 16 (`--max-calls`, measured on the laptop); fewer while that worker's answers are slow |
+| 500 callers, every worker full | 32 |
+| 500 callers at the autoscaler's 70% target (the simulation: 44-45) | ~45 |
+| 800 callers at 70% | ~72 = `maxReplicas` in `deploy/k8s/voice.yaml` |
+| running before the calls start | 36 (`replicas`); never fewer than 8 |
+
+Each worker asks for 3-4 CPU cores and 6-8 GB, so 45 workers is ~135-180 cores. The 16 is the laptop's number: the capacity probe on the
+production servers gives the real one, and the worker count scales with it (32 calls per worker = half the workers).
 
 What it shows: the mechanisms hold the answer time, and say what they gave up. What it does not show: whether a particular GPU is fast enough,
 real audio, real networks. Those are for the capacity probe and the load test on the company's hardware; the simulation's stand-in speeds can
