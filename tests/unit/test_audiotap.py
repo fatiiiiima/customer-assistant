@@ -74,3 +74,46 @@ def test_the_recogniser_reports_its_words_only_to_a_diagnostic_listener():
 
     assert asyncio.run(run(None)) == ["tell me about the macan"]            # no listener: nothing extra happens
     assert asyncio.run(run(seen.append)) == ["tell me about the macan"] and seen == ["tell me about the macan"]
+
+
+def test_the_event_loop_never_touches_the_files(tmp_path):
+    """B7: record() and note() run on the loop that carries every call's audio. They used to write and flush four times per 20 ms frame; now a thread of the tap's own does."""
+    import threading
+    import time
+
+    seen = {"threads": set(), "flushes": 0}
+
+    class Spy:
+        def __init__(self, real):
+            self.real = real
+
+        def write(self, data):
+            seen["threads"].add(threading.current_thread().name)
+            return self.real.write(data)
+
+        def flush(self):
+            seen["threads"].add(threading.current_thread().name)
+            seen["flushes"] += 1
+            self.real.flush()
+
+        def close(self):
+            self.real.close()
+
+    async def go():
+        tap = AudioTap(tmp_path, "in", InputAudioRawFrame)
+        tap._pcm, tap._idx, tap._notes = Spy(tap._pcm), Spy(tap._idx), Spy(tap._notes)
+        before = time.time()
+        for i in range(300):                                          # six seconds of 20 ms frames, arriving at once
+            tap.record(bytes([i % 256, 0]) * 320, 16000)
+        tap.note("said", "hello")
+        await tap.cleanup()
+        return before
+
+    before = asyncio.run(go())
+    assert threading.current_thread().name not in seen["threads"] and seen["threads"] == {"audiotap-in"}
+    assert seen["flushes"] <= 6                                         # about once a second at most, not 3 per frame (900)
+    rows = list(csv.DictReader(next(tmp_path.glob("*_in.csv")).open()))
+    pcm = next(tmp_path.glob("*_in.pcm")).read_bytes()
+    assert len(rows) == 300 and len(pcm) == 300 * 640 and pcm[640:642] == bytes([1, 0]) and pcm[299 * 640] == 299 % 256      # nothing lost, in order
+    assert all(float(r["unix_time"]) >= before - 0.001 for r in rows) and float(rows[-1]["unix_time"]) - float(rows[0]["unix_time"]) < 1.0   # the time each frame ARRIVED, not when it was written
+    assert "\tsaid\thello\n" in next(tmp_path.glob("*_in.txt")).read_text()
