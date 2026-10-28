@@ -660,15 +660,16 @@ class AgentEngine:
     def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str]:
         """(standard wording, awaiting an answer, facts) for a reply the model writes whole (ARCH_PLAN Phase 3, `model_speaks`).
 
-        * The closing question is the model's to choose, except where the call needs an answer: in the booking steps, and a question that is not an invitation or a
-          generic "anything else?" (a clarifying question such as "Which car do you mean?"). The code no longer forces "Would you like to come and see it?" on every reply.
+        * Only the generic "anything else?" closer is dropped (the model may end on a statement). An invitation to visit stays: `wording.offer_test_drive` gives one only when
+          it is due (none after a no, never two answers running, at most one in three), otherwise the generic closer, so the pacing decides. The booking steps and a
+          clarifying question ("Which car do you mean?") keep theirs. (First version dropped invitations too: 0 in 1,000 replies, and 2% of replies asked anything.)
         * The facts are the whole spec sheet of the car in focus, not the next one or two groups, with what the caller has already heard and what they asked about, so a
           follow-up ("and the boot?", "what about the colour") can land on the aspect asked.
         * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked."""
         core, awaiting = result["core"], result["awaiting"]
         facts_part, question = self._split_core(core)
         booking_step = s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back
-        if question and not booking_step and (is_generic_closer(question) or W.INVITES.search(question.lower())) and facts_part:
+        if question and not booking_step and is_generic_closer(question) and facts_part:
             core, awaiting = facts_part, False
         lines = list(result["facts"])
         car = self.svc.get_car(s.car) if s.car else None

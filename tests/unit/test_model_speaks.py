@@ -59,13 +59,44 @@ ENGINE = "It has a 3.0-litre V6 twin-turbo engine with 340 horsepower."
 
 
 # ------------------------------------------------------------------------------------------------ what the model is given, and what is not added
-def test_the_model_sees_the_whole_spec_sheet_and_ends_its_reply_its_own_way():
+def test_the_model_sees_the_whole_spec_sheet_and_nothing_is_added_when_no_invitation_is_due():
+    """The search reply just before invited ("...or book a test drive?"), so this answer has none due: the generic closer is dropped and nothing is added."""
     e, model = engine(ENGINE)
     said, _ = macan_turn(e)
-    assert said == [ENGINE]                                                    # no "Sure," before it, no "Would you like to come and see it?" after it
+    assert said == [ENGINE]                                                    # no "Sure," before it, no "anything else?" after it
     prompt = model.asked[-1]
     assert "Everything on the spec sheet" in prompt and "horsepower" in prompt and "litre boot" in prompt and "previous owner" in prompt
     assert "not waiting for an answer" in prompt
+
+
+def conversation(e, texts):
+    s = e.new_session()
+    return s, [[x for x in e.handle_stream(s, t) if isinstance(x, str)] for t in texts]
+
+
+def invites(reply: list[str]) -> bool:
+    return any(w in " ".join(reply).lower() for w in INVITING)
+
+
+def test_an_invitation_that_is_due_is_kept_at_most_one_in_three_answers():
+    e, _ = engine(ENGINE)
+    _, replies = conversation(e, ["Porsche.", "Yes, talk about the Macan.", "Tell me about the engine.", "And the boot?", "What about the interior?",
+                                  "And the economy?", "How many owners?", "Any warranty?"])
+    answers = replies[1:]                                                      # the car answers (the search reply before them invited)
+    flags = [invites(r) for r in answers]
+    assert any(flags)                                                          # kept when due (none in 1,000 replies in the first version)
+    assert not any(a and b for a, b in zip(flags, flags[1:]))                  # never two running
+    assert all(sum(flags[i:i + 3]) <= 1 for i in range(len(flags)))            # at most one in three
+    assert all(r[-1].endswith("?") for r, f in zip(answers, flags) if f)       # asked as a question, at the end
+
+
+def test_after_a_no_to_an_invitation_there_is_none_for_a_while():
+    e, _ = engine(ENGINE)
+    s, replies = conversation(e, ["Porsche.", "Yes, talk about the Macan.", "Tell me about the engine.", "And the boot?"])
+    assert invites(replies[-1])                                                # the invitation came here
+    after = [[x for x in e.handle_stream(s, t) if isinstance(x, str)] for t in ("No, not now. What about the interior?", "And the economy?",
+                                                                                "How many owners?", "Any warranty?", "And the seats?")]
+    assert not any(invites(r) for r in after)
 
 
 def test_without_the_flag_the_full_level_is_as_before():
@@ -135,8 +166,10 @@ def test_a_booking_step_keeps_its_question_and_a_clarifying_question_stays():
     s.state = State.ANSWERING
     core, awaiting, _ = e._speaking_input(s, "the black one", {"core": "Which car do you mean?", "facts": [], "awaiting": True})
     assert core == "Which car do you mean?" and awaiting                       # nothing else to say: the question is the reply
-    core, awaiting, facts = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Would you like to come and see it?", "facts": [], "awaiting": True})
-    assert core == "It has 340 horsepower." and not awaiting and "end on a statement" in facts
+    core, awaiting, facts = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Anything else you'd like to know about it?", "facts": [], "awaiting": True})
+    assert core == "It has 340 horsepower." and not awaiting and "end on a statement" in facts      # the generic closer is dropped
+    core, awaiting, _ = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Would you like to come and see it?", "facts": [], "awaiting": True})
+    assert core.endswith("Would you like to come and see it?") and awaiting                            # an invitation is given only when due: it stays
 
 
 def test_a_booking_in_progress_or_made_is_named_so_the_model_does_not_offer_or_confirm():
