@@ -138,6 +138,11 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     return text[0].lower() + text[1:]
 
 
+def _rounding_off(said: str) -> str:
+    """A short sentence that closes a reply the caller has heard cut off: after a comma it finishes the clause, after a half-word it starts over politely."""
+    return "and here is the full picture." if said.rstrip().endswith(",") else "Let me put that properly."
+
+
 def _after_opener(sentence: str, proper: frozenset[str] | set[str] = frozenset(), new_sentence: bool = False) -> str:
     """The model's first sentence when an opener was already said: its own 'Sure,' / 'Great!' dropped. After a lead that ends its own sentence
     ("Let me check.") the rest starts with a capital; after one that ends on a comma ("Sure,") it carries on in lower case, names excepted."""
@@ -522,8 +527,11 @@ class AgentEngine:
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:
-                    spoken.append("That is: " + core_facts[0].lower() + core_facts[1:] if not core_facts.startswith("I") else "That is: " + core_facts)
-                    yield spoken[-1]
+                    # What was said cannot be taken back, so the repair finishes that thought and then gives the facts as a sentence of their own (it used to say
+                    # "...black, That is: that's a 2016 Macan, black, ...", a restart in the middle of a sentence).
+                    for part in (_rounding_off(spoken[-1]), core_facts):
+                        spoken.append(part)
+                        yield part
                 close = core_q or W.anything_else(s)
                 spoken.append(close)
                 yield close

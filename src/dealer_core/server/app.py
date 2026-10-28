@@ -61,9 +61,21 @@ class ServerState:
     load_changed: object = None           # asyncio.Event: a call started or ended, so the router hears about it now, not in up to 2 s
     admission: object = None              # server.admission.AdmissionController: the call cap, from the measured reply times
 
+    loop: object = None                   # the event loop the beat runs on
+    draining: bool = False                # told to stop (SIGTERM): the calls in progress finish, no new call is taken, and the router is told so at once
+
     def cap(self) -> int:
         """How many calls this worker takes right now."""
+        if self.draining:
+            return 0
         return self.admission.adjust(self.active) if self.admission is not None else self.max_calls
+
+    def drain(self) -> None:
+        """Called when the process is told to stop. The registry entry would otherwise go on saying "room for more" until the worker is gone, for as long as the calls in
+        progress take to end (up to the call limit), and the router would go on sending callers to an address that no longer accepts them."""
+        self.draining = True
+        if self.load_changed is not None and self.loop is not None:
+            self.loop.call_soon_threadsafe(self.load_changed.set)  # report it now, not at the next beat (safe from a signal handler or another thread)
 
 
 def browser_of(user_agent: str) -> str:
@@ -101,14 +113,14 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         if state.registry is None:
             return
 
-        state.load_changed = asyncio.Event()
+        state.load_changed, state.loop = asyncio.Event(), asyncio.get_running_loop()
 
         async def beat() -> None:
             """Every 2 s, and soon after a call starts or ends: "I am here, this busy" (expires in 6 s if this worker dies). The write runs in a
             thread: a slow database must never stall the event loop that carries every call's audio."""
             while True:
                 gov = getattr(state.app.engine, "governor", None)
-                extra = {"quality": gov.snapshot()["turns"] if gov is not None else {}, "ceiling": state.max_calls}
+                extra = {"quality": gov.snapshot()["turns"] if gov is not None else {}, "ceiling": state.max_calls, "draining": state.draining}
                 if state.admission is not None:
                     extra["p90_ms"] = state.admission.snapshot()["p90_ms"]
                 await asyncio.to_thread(state.registry.beat, state.worker_id, state.public_url, state.active, state.cap(), extra)
@@ -155,7 +167,7 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
     @api.get("/health")
     async def health() -> dict:
         gov = getattr(state.app.engine, "governor", None)
-        return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "cap": state.cap(), "served": state.served, "refused": state.refused,
+        return {"ok": True, "active_calls": state.active, "max_calls": state.max_calls, "cap": state.cap(), "draining": state.draining, "served": state.served, "refused": state.refused,
                 "uptime_s": round(time.monotonic() - state.started), "quality": gov.snapshot() if gov is not None else None,
                 "admission": state.admission.snapshot() if state.admission is not None else None}
 

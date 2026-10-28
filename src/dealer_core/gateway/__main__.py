@@ -63,7 +63,7 @@ class Assigner:
         with self._lock:
             now = self.clock()
             room = [(w, w.get("max", 0) - w.get("active", 0) - self._reserved(w["id"], now)) for w in self.workers]
-            room = [(w, free) for w, free in room if free > 0]
+            room = [(w, free) for w, free in room if free > 0 and not w.get("draining")]       # a worker that is shutting down finishes its calls and takes no new one
             if not room:
                 return None
             a, b = self.rng.sample(room, 2) if len(room) >= 2 else (room[0], room[0])

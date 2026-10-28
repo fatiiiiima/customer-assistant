@@ -5,6 +5,21 @@ import argparse
 from pathlib import Path
 
 
+def drain_on_stop(server_class):
+    """uvicorn's server with one addition: on the first SIGTERM / SIGINT the worker marks itself as draining (see ServerState.drain) before uvicorn starts its graceful stop."""
+
+    class Draining(server_class):
+        def __init__(self, config, state) -> None:
+            super().__init__(config)
+            self.state = state
+
+        def handle_exit(self, sig, frame) -> None:
+            self.state.drain()
+            super().handle_exit(sig, frame)
+
+    return Draining
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Voice server for the AGMC website (all local).")
     ap.add_argument("--site", type=Path, default=Path(r"C:\dev\bmw-portal\site"), help="the website's site folder (its data.js is the inventory)")
@@ -33,6 +48,7 @@ def main() -> int:
 
     import uvicorn
 
+    DrainingServer = drain_on_stop(uvicorn.Server)
     from ..app import ROOT, build_app
     from ..cli.chat import start
     from ..config import load_config
@@ -78,7 +94,8 @@ def main() -> int:
     state.metrics = Metrics()
     origins = a.origin or ["http://localhost:8080", "http://127.0.0.1:8080"]
     print(f"Voice server ready on ws://{a.host}:{a.port}/voice  (up to {a.max_calls} calls; pages allowed: {', '.join(origins)})", flush=True)
-    uvicorn.run(create_server(state, origins), host=a.host, port=a.port, log_level="warning")
+    server = DrainingServer(uvicorn.Config(create_server(state, origins), host=a.host, port=a.port, log_level="warning"), state)
+    server.run()
     return 0
 
 

@@ -294,6 +294,6 @@ class WorkerRegistry:
         return out
 
     def pick(self) -> dict | None:
-        """The live worker with the most free room (none if all are full)."""
-        free = [w for w in self.workers() if w.get("active", 0) < w.get("max", 0)]
+        """The live worker with the most free room (none if all are full). A worker that is draining (shutting down) is never picked."""
+        free = [w for w in self.workers() if not w.get("draining") and w.get("active", 0) < w.get("max", 0)]
         return max(free, key=lambda w: (w["max"] - w["active"], -w["active"])) if free else None
