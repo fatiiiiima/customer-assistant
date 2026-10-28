@@ -69,7 +69,7 @@ def sweep(label: str, fn, levels: list[int], budget_ms: float, stop_early: bool 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", default="openvino_gpu")
-    ap.add_argument("--budget-ms", type=float, default=None, help="time to the model's first sentence that keeps a reply under ~1 s (default dialogue.model_budget_ms)")
+    ap.add_argument("--budget-ms", type=float, default=None, help="time to the model's first sentence that keeps a reply under ~1 s (default latency.model_budget_ms)")
     ap.add_argument("--target", type=int, default=500, help="simultaneous callers to plan for")
     ap.add_argument("--turn-every", type=float, default=15.0, help="seconds between one caller's turns (measured in our test calls: ~15)")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 4, 8, 16, 32, 64])
@@ -86,7 +86,7 @@ def main() -> int:
     from dealer_core.voice.pipeline import load_engines
 
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
-    budget = a.budget_ms or cfg.dialogue.model_budget_ms
+    budget = a.budget_ms or cfg.latency.model_budget_ms
     app = build_app(cfg, inventory="portal", portal_data=a.portal_data, engine="agent", backend=a.backend)
     start(app, quiet=True)
     backend = app.engine.reply_writer.backend

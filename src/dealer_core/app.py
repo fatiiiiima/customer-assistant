@@ -122,6 +122,6 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         if quality or cfg.dialogue.quality != "off":
             from .agent.governor import QualityGovernor
 
-            dialogue.governor = QualityGovernor(quality or cfg.dialogue.quality, cfg.dialogue.model_budget_ms, max_in_flight_model=cfg.dialogue.max_model_turns,
+            dialogue.governor = QualityGovernor(quality or cfg.dialogue.quality, cfg.latency.model_budget_ms, max_in_flight_model=cfg.dialogue.max_model_turns,
                                                 shed_after_ms=cfg.dialogue.model_shed_after_ms, explore_every=cfg.dialogue.explore_every)
     return App(dialogue, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

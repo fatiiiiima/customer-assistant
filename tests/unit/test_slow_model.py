@@ -253,9 +253,9 @@ def test_the_voice_profile_uses_the_short_instructions_only_where_prices_are_fix
 
 
 def test_the_settings_and_the_way_to_switch_them_off():
-    v = load_config(environ={}).voice
-    assert v.first_sentence_deadline_ms == 1500 and v.history_lines == 6
-    cfg = load_config(environ={"VA__VOICE__FIRST_SENTENCE_DEADLINE_MS": "0", "VA__VOICE__HISTORY_LINES": "10"})
+    cfg0 = load_config(environ={})
+    assert cfg0.latency.first_sentence_deadline_ms == 1500 and cfg0.voice.history_lines == 6
+    cfg = load_config(environ={"VA__LATENCY__FIRST_SENTENCE_DEADLINE_MS": "0", "VA__VOICE__HISTORY_LINES": "10"})
     app = build_app(cfg, inventory="demo", classifier=Brain(), reply_mode="conversational", lead_backend=Brain())
     apply_voice_profile(app, cfg)
     assert app.engine.reply_writer.first_deadline_s is None and app.engine.reply_writer.history_lines == 10

@@ -106,7 +106,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     w.max_tokens = min(w.max_tokens, cfg.voice.reply_max_tokens)
     w.retries = 0
     w.opener = cfg.voice.opener
-    w.first_deadline_s = (cfg.voice.first_sentence_deadline_ms / 1000.0) or None   # a model that has not given a usable first sentence by then is not waited for
+    w.first_deadline_s = (cfg.latency.first_sentence_deadline_ms / 1000.0) or None   # a model that has not given a usable first sentence by then is not waited for
     w.history_lines = cfg.voice.history_lines
     if not cfg.negotiation.enabled:                         # the website: fixed prices, so the instructions need no counter-offer example (about half the tokens)
         from ..dialogue.writer import SYSTEM_VOICE
@@ -116,7 +116,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     app.engine.model_only = w.model_only = cfg.voice.model_only
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
-        app.engine.decide_deadline_s = cfg.voice.decide_deadline_ms / 1000
+        app.engine.decide_deadline_s = cfg.latency.decide_deadline_ms / 1000
     if hasattr(app.engine, "bridge_after_ms"):                # agent engine: "Let me check." while a slow model decides (voice only; text chat does not wait on audio)
         app.engine.bridge_after_ms = cfg.voice.bridge_after_ms
 
