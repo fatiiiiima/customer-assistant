@@ -193,7 +193,8 @@ class VoiceCfg(_Strict):
     reply_max_tokens: int = 110
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
-    model_only: bool = True                       # TEST MODE: only the model's own words are spoken: no standard-wording fallback, no appended facts or questions (the safety checks still drop unsafe sentences)
+    model_only: bool = False                      # False (the production behaviour): a reply the model leaves short, or a sentence the checks drop, is completed with the code's own facts and question.
+                                                  # True = TEST MODE: only the model's own words are spoken, nothing in their place (27 Oct: a reply could end after its opener). Was True by default
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
@@ -204,6 +205,8 @@ class VoiceCfg(_Strict):
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
     vad_confidence: float = 0.7
     number_stop_secs: float = 0.9                 # silence that ends the caller's turn right after the agent asked for a phone number: people dictate digits in groups with pauses ("050" ... "123" ... "4567")
+    tap_grace_secs: float = 2.0                   # tap mode: after the turn is over the microphone stays open until the reply starts to play, at most this long. A caller who was only pausing carries on and
+                                                  # the two halves are ONE sentence (before: the page closed the microphone at once and the rest of the sentence was lost). 0 = the old behaviour
     tap_stop_secs: float = 0.6                    # tap mode: a cut turn closes the mic mid-sentence and the rest is never heard, so it waits longer. 24 real recordings: 0.2 s cut 4-5 sentences, 0.35 s cut 2, 0.6 s cut 0.
                                                   # Cost: about +0.3 s on every turn vs 0.35 s (synthetic callers, median 547 -> 867 ms; docs/VOICE.md). Put it back with VA__VOICE__TAP_STOP_SECS=0.35
     silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
@@ -218,6 +221,8 @@ class VoiceCfg(_Strict):
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
+    early_start_secs: float = 0.2                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
+                                                  # voice detector waits 0.6 s, so this answers up to 0.4 s sooner; wasted work if the caller was only pausing (at most 3 times a turn). 0 = only when Smart Turn holds a pause
     speculate: bool = True                       # smart_turn: while it holds a pause as "still going", recognise the turn and make the model's decision in the
                                                  # background; used as they are if the caller has in fact finished (no new speech before the fallback silence)
     bridge_after_ms: float = 450.0               # agent engine: when the model's decision (+ first sentence) is measured to take longer than this, a pre-rendered

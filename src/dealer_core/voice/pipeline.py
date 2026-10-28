@@ -159,7 +159,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 
-        endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs)
+        endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs,
+                                     early_start_secs=vcfg.early_start_secs if vcfg.speculate else 0.0)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
         if vcfg.smart_peek if smart_peek is None else smart_peek:
             from zoneinfo import ZoneInfo
@@ -180,6 +181,10 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             endpointer.speculation = stt.speculation = brain.speculation = spec
         stages.append(endpointer)
     stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
+    if mic_gate is not None and on_user_stop is not None:     # tap-to-talk: a caller who carries on before the reply is heard continues the same sentence
+        from .micgate import ContinuationGuard
+
+        stages.append(ContinuationGuard(mic_gate, brain))
     if on_user_stop is not None:                              # tap-to-talk: told when the turn is over, so the microphone can be closed
         from .micgate import StopNotifier
 

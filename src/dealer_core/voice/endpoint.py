@@ -10,9 +10,14 @@ silence has passed), and swallows the "started speaking" that follows a held sto
 
 With a `speculation` (voice/speculate.py) a held stop also starts recognising the turn so far, and the model's decision, in the background:
 used as they are if the fallback silence ends the turn, dropped if the caller speaks again.
+
+EARLY START (`early_start_secs`): the same work also starts inside every turn, after that much real quiet (judged by loudness against the turn's own peak, not by the voice
+detector, which waits for its full stop time: 0.6 s in tap mode). If the caller speaks again it is dropped; if the turn then ends, it is used as it is, and the answer is
+that much sooner. The cost is the wasted work at every pause that was not the end.
 """
 from __future__ import annotations
 
+import numpy as np
 from loguru import logger
 from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -21,9 +26,19 @@ from pipecat.frames.frames import Frame, InputAudioRawFrame, VADUserStartedSpeak
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
+QUIET_FLOOR = 0.01          # a 20 ms frame below this loudness (0-1) is quiet whatever the turn's peak was
+QUIET_RATIO = 0.06          # ...and below this share of the turn's loudest frame (about 24 dB down: a soft last word is still louder)
+MAX_EARLY_STARTS = 3        # per turn: each one is a recognition run that is wasted if the caller was only pausing
+
+
 class SmartEndpointer(FrameProcessor):
-    def __init__(self, sample_rate: int = 16000, fallback_secs: float = 0.6, analyzer: LocalSmartTurnAnalyzerV3 | None = None, short_answer_secs: float = 1.4, **kwargs) -> None:
+    def __init__(self, sample_rate: int = 16000, fallback_secs: float = 0.6, analyzer: LocalSmartTurnAnalyzerV3 | None = None, short_answer_secs: float = 1.4, early_start_secs: float = 0.0, **kwargs) -> None:
         super().__init__(**kwargs)
+        self.early_start_secs = early_start_secs  # 0 = off: work starts only when Smart Turn holds a pause
+        self._peak, self._quiet_n = 0.0, 0         # the loudest frame of this turn so far, and the length (in samples) of the quiet that has just gone by
+        self._early = False                       # work was started in this quiet and the caller has not spoken since
+        self._early_in_turn = 0
+        self.early_starts = 0                     # how many times it was started (for tests and the log)
         self.short_answer_secs = short_answer_secs
         self.asked_question = None                # () -> bool: did the agent's last turn end on a question? (set by the pipeline; used by the length rule only)
         self.peek = None                          # async (pcm16 bytes) -> the words so far (the speech recognizer, on the audio of this turn)
@@ -41,6 +56,30 @@ class SmartEndpointer(FrameProcessor):
         self.held = 0                             # how many stops Smart Turn held back (for the status line / tests)
         self.last_stop: VADUserStoppedSpeakingFrame | None = None
 
+    def _reset_early(self) -> None:
+        self._peak, self._quiet_n = 0.0, 0
+        self._early, self._early_in_turn = False, 0
+
+    def _watch_for_quiet(self, frame: InputAudioRawFrame) -> None:
+        """One 20 ms frame of a turn in progress: start the work after `early_start_secs` of quiet, drop it when the sound comes back."""
+        x = np.frombuffer(frame.audio, dtype="<i2")
+        if not len(x):
+            return
+        loud = float(np.sqrt(np.mean((x.astype(np.float32) / 32768.0) ** 2)))
+        self._peak = max(self._peak, loud)
+        if loud >= max(QUIET_FLOOR, QUIET_RATIO * self._peak):
+            self._quiet_n = 0
+            if self._early:
+                self._early = False
+                self.speculation.resumed()                  # the caller was only pausing
+            return
+        self._quiet_n += len(x)                                             # counted in samples: ten 20 ms frames added up as seconds are 0.19999999999999998
+        if not self._early and self._quiet_n >= self.early_start_secs * frame.sample_rate and len(self._turn_audio) > 3200 and self._early_in_turn < MAX_EARLY_STARTS:
+            self._early = True
+            self._early_in_turn += 1
+            self.early_starts += 1
+            self.speculation.start(bytes(self._turn_audio))
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if direction is not FrameDirection.DOWNSTREAM:
@@ -53,6 +92,7 @@ class SmartEndpointer(FrameProcessor):
                 if self.speculation is not None:
                     self.speculation.resumed()
                 return
+            self._reset_early()
             if not self._turn_audio:
                 self._turn_audio += self._pre_roll
             if self.speculation is not None:
@@ -81,12 +121,16 @@ class SmartEndpointer(FrameProcessor):
                 if clear:
                     clear()
             if state is EndOfTurnState.COMPLETE:
+                if self._early and self.speculation is not None:
+                    self.speculation.confirm()              # the quiet it was started in went on to the end: what was prepared applies
+                self._reset_early()
                 self._turn_speech = 0.0
                 self._turn_audio.clear()
                 self._holding = False
                 await self.push_frame(frame, direction)
             else:
                 self._holding = True
+                self._early = False                         # the hold below starts its own work
                 self.held += 1
                 if self.speculation is not None and len(self._turn_audio) > 3200:
                     self.speculation.start(bytes(self._turn_audio))       # most held turns were finished: have the answer's groundwork ready
@@ -100,6 +144,8 @@ class SmartEndpointer(FrameProcessor):
                 del self._pre_roll[:-16000]
             if self._speaking:
                 self._turn_speech += len(frame.audio) / 2 / 16000
+            if self.early_start_secs > 0 and self.speculation is not None and self._speaking and not self._holding:
+                self._watch_for_quiet(frame)
             state = self._analyzer.append_audio(frame.audio, self._speaking)
             await self.push_frame(frame, direction)
             if self._holding and state is EndOfTurnState.COMPLETE:       # the fallback silence passed: end the turn now

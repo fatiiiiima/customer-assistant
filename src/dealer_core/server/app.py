@@ -300,9 +300,18 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         serializer=PortalSerializer(), session_timeout=None))
     gate = MicGate(start_open=False) if tap else None          # tap mode: the greeting is spoken first, the visitor taps to reply
 
-    async def turn_over() -> None:                            # tap-to-talk: the server decided your turn is over: close the microphone, tell the page
-        gate.close_after_turn()
+    grace = getattr(getattr(state.cfg, "voice", None), "tap_grace_secs", 0) or 0
+
+    async def mic_off() -> None:
         await send({"type": "mic", "on": False, "reason": "turn"})
+
+    async def turn_over() -> None:                            # tap-to-talk: the server decided your turn is over
+        if grace > 0:                                         # ...but keeps listening until the reply is heard: a pause in the middle of a sentence is not lost (micgate.py)
+            await send({"type": "thinking"})                  # the page shows "thinking" and keeps the microphone open
+            gate.hold_open_until_reply(grace, mic_off)
+            return
+        gate.close_after_turn()                               # the old behaviour: close the microphone now, tell the page
+        await mic_off()
 
     resumable = bool(saver is not None and await asyncio.to_thread(state.calls.exists, call_id))   # a reconnect: no greeting again
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs,

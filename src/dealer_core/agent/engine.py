@@ -159,7 +159,18 @@ _SEATS = re.compile(r"\b(seven|eight|7|8)[- ]?seat(?:s|er)?\b|\bthird row\b|\bbi
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotia\w*|bargain|haggle|flexible on (?:the )?price|room on (?:the )?price|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
 
 CONTINUE_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership. Your reply has already begun (the start is given to you); you only add the closing question,
-in one short natural sentence. Never repeat facts, never mention prices, numbers, discounts, warranties, policies or promises, and never say anything is booked or confirmed."""
+in one short natural sentence. Ask EXACTLY the question you are given, only in other words: do not bring up any topic, feature, car or subject that is not in it, and do not ask a different question.
+Never repeat facts, never mention prices, numbers, discounts, warranties, policies or promises, and never say anything is booked or confirmed."""
+# Words a closing question may use whatever the topic: grammar, and the ordinary ways of asking "anything more?" or "would you like to come?". Any other word must already be in the
+# question the code asked, in what was just said, in the caller's words, in the car's facts or in the last lines of the call: a sentence about "driving experience" or "the next
+# available model" that the code never asked is a topic the model made up (27 Oct, five of nine closing questions drifted like that).
+_GRAMMAR = frozenset("""the and but for with from that this these those there here have has had not yes how what which who when where why also just too very really quite about than into out
+over again still its you your yours our ours they them their him her his she can could would should shall will may might must are was were been being does did doing get got let lets
+any some one ones another other next either both each every all few many much such only own same then than once since while until before after because though although whether""".split())
+_ASKING = frozenset("""like likes fancy want wants wish interested interest keen love happy ready sure maybe perhaps great good nice lovely else more anything something everything tell know hear
+learn ask see seeing look looking visit visiting come coming check drive driving test book booking arrange set schedule time soon today whenever convenient meanwhile need help helps find
+explore options option choose pick decide start continue ahead take try talk discuss show shown leave stop thanks please okay hello again sorry mind thought think say anyone anybody
+     person firsthand showroom viewing appointment spin wheel yourself""".split())
 CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
@@ -601,6 +612,18 @@ class AgentEngine:
         facts = [x for x in (sents[:-1] if question else sents) if not x.rstrip().endswith("?")]
         return " ".join(facts), question
 
+    @staticmethod
+    def _novel_words(sentence: str, *context: str) -> set[str]:
+        """Content words of `sentence` that are neither grammar, an ordinary way of asking, nor in any of the `context` texts (a word counts with its endings: see / seeing)."""
+        def stem(w: str) -> str:
+            w = re.sub(r"(?:'s|'d|'ll|'re|'ve|n't)$", "", w)
+            for suffix in ("ing", "ed", "es", "s"):
+                if len(w) > len(suffix) + 3 and w.endswith(suffix):
+                    return w[: -len(suffix)]
+            return w
+        known = {stem(w) for text in context for w in re.findall(r"[a-z0-9']+", text.lower())} | {stem(w) for w in _GRAMMAR | _ASKING}
+        return {w for w in re.findall(r"[a-z']+", sentence.lower()) if len(w) > 2 and stem(w) not in known}
+
     def _check_continuation(self, sentence: str, prefix: str, question: str, caller: str, facts: str, history: str) -> list[str]:
         """The follow-up may only ask the next question: no figures, no policy, no promise, nothing already said, nothing the code did not supply."""
         problems = list(verify_sentence(sentence, caller, prefix + " " + question, facts, history))
@@ -614,6 +637,9 @@ class AgentEngine:
             problems.append("makes a promise the code did not supply")
         if _DONE.search(sentence) and not _DONE.search(prefix):
             problems.append("says something is booked or confirmed")
+        novel = self._novel_words(sentence, question, prefix, caller, facts, history)
+        if novel:
+            problems.append("brings up something the code did not ask about (" + ", ".join(sorted(novel)[:3]) + "): ask only the question given")
         said = {w for w in re.findall(r"[a-z0-9']+", prefix.lower()) if len(w) > 3}
         mine = {w for w in re.findall(r"[a-z0-9']+", sentence.lower()) if len(w) > 3}
         if mine and len(mine & said) / len(mine) >= 0.6:
@@ -638,8 +664,8 @@ class AgentEngine:
         facts = "\n".join(result["facts"])
         convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
         user = (f"CONVERSATION SO FAR:\n{convo}\n\nCUSTOMER (just now): {text}\n\nYOUR REPLY HAS ALREADY STARTED, you have just said: \"{prefix}\"\n"
-                f"The call now needs this answered: \"{question}\"\nContinue your reply with ONE short sentence (at most 14 words) that asks it in your own words. "
-                "Do not repeat anything you already said, and mention no prices, numbers, policies or promises.")
+                f"The call now needs this answered: \"{question}\"\nContinue your reply with ONE short sentence (at most 14 words) that asks exactly that, in your own words, and nothing else: "
+                "no other topic, no feature, no other car. Do not repeat anything you already said, and mention no prices, numbers, policies or promises.")
         reasons = ""
         for attempt in range(2):
             u = user + (f"\nYour previous attempt was rejected because: {reasons}. Write it again without that." if reasons else "")

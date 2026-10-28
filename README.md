@@ -8,7 +8,7 @@ recognition, the language model and the voice all run on this laptop; the produc
 | Piece | Default | Where it is set |
 |---|---|---|
 | Conversation engine | **state machine**: code decides what the caller meant and what happens next (search, price, slots, booking) | `dialogue.engine` in `config/default.yaml`; `--agent` switches the website server / voice demo to the **agent** engine |
-| Who writes the spoken words | **the language model, always** (Qwen3-4B-Instruct-2507 int4 on the iGPU). `voice.model_only: true` means no canned fallback sentence is ever spoken in its place; a sentence that fails a safety check is dropped | `voice.model_only` |
+| Who writes the spoken words | **the language model, always** (Qwen3-4B-Instruct-2507 int4 on the iGPU). A sentence that fails a safety check is dropped and the code's own facts and question are said in its place (`voice.model_only: true` is a test mode that says nothing instead) | `voice.model_only` |
 | Safety checks on every sentence | no invented number, name, colour or claim; no "booked/confirmed" unless the system said so; no first-person promises | `src/dealer_core/dialogue/writer.py` |
 | Opener ("Got it!") | none: the reply starts with the answer. `voice.opener` exists but is off | `voice.opener` |
 | Greeting | fixed text with the advisor's name (`app.agent_name`: Wazir) | `config/default.yaml` |

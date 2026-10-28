@@ -10,7 +10,7 @@ import threading
 import time
 
 from loguru import logger
-from pipecat.frames.frames import Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame
+from pipecat.frames.frames import BotStartedSpeakingFrame, Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..dialogue.machine import DialogueEngine
@@ -27,6 +27,13 @@ class DealerBrain(FrameProcessor):
         self._busy = asyncio.Lock()
         self.interrupted = 0                            # turns abandoned because the caller spoke over the agent
         self.speculation = None                         # voice.speculate.Speculation: a decision made during Smart Turn's hold
+        # Tap mode keeps the microphone open until the reply is heard (voice/micgate.py ContinuationGuard). If the caller carries on speaking before then, the not-yet-heard
+        # reply is dropped and what they said so far is joined to what comes next, so a sentence cut by a long pause is still one sentence.
+        self._open_turn: str | None = None              # the words of the last turn whose reply the caller has not started to hear
+        self._carry = ""                                 # words to put in front of the next turn
+        self._defer_next = False                        # the next transcript is the first half of a sentence that is still being said: keep it, do not answer it
+        self._abort = False                             # the turn being answered is to be dropped and carried (see take_back)
+        self.continued = 0                              # turns joined to the next one (for tests and the log)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -39,15 +46,47 @@ class DealerBrain(FrameProcessor):
                 await self.push_frame(TTSSpeakFrame(opening, append_to_context=False))
             return
         if isinstance(frame, TranscriptionFrame):
+            if self._defer_next:
+                self._defer_next = False
+                self._carry = f"{self._carry} {frame.text}".strip()
+                self.continued += 1
+                return                                              # the caller is still speaking: wait for the rest of the sentence
             await self._answer(frame.text)
             return
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._open_turn = None                                  # the reply is being heard now: it can no longer be taken back
         await self.push_frame(frame, direction)
+
+    def turn_ended(self) -> None:
+        """A turn has just ended: a first half that never produced a transcript must not swallow this one."""
+        self._defer_next = False
+
+    async def take_back(self) -> bool:
+        """The caller started speaking again before the reply to their last turn was heard. Drops that reply and keeps the words to join to what comes next.
+        Returns True when something may already be on its way to the voice, so the caller of this must interrupt the pipeline to throw it away."""
+        text = self._open_turn
+        if text is None:                                            # the transcript of the last turn has not arrived yet: keep it when it does
+            self._defer_next = True
+            return False
+        self._carry = text                                          # (already includes anything carried into it)
+        self._open_turn = None
+        self.continued += 1
+        if self._busy.locked():                                     # still being answered: the answer is cancelled and not remembered (see _answer)
+            self._abort = True
+            return True
+        history = self.session.history                              # already answered, and the reply is queued for the voice: forget the exchange
+        if len(history) >= 2 and history[-2] == ("customer", text):
+            del history[-2:]
+        return True
 
     async def _answer(self, text: str) -> None:
         """Runs the turn in a worker thread; every sentence goes to the TTS the moment the engine has verified it."""
         async with self._busy:                                      # one turn at a time per caller
-            if self._on_heard:
-                self._on_heard(text)
+            self._abort = False
+            if self._carry:                                         # the first half of a sentence the caller carried on after
+                text, self._carry = f"{self._carry} {text}".strip(), ""
+            self._open_turn = text
+            heard = False
             t0 = time.perf_counter()
             loop = asyncio.get_running_loop()
             sentences: asyncio.Queue = asyncio.Queue()
@@ -73,6 +112,10 @@ class DealerBrain(FrameProcessor):
             try:
                 while (item := await sentences.get()) is not None:
                     if isinstance(item, str):
+                        if not heard:
+                            heard = True
+                            if self._on_heard:
+                                self._on_heard(text)                # shown when the turn is real: a half sentence that gets taken back never appears
                         if not first_ms:
                             first_ms = (time.perf_counter() - t0) * 1000
                         said.append(item)
@@ -83,11 +126,17 @@ class DealerBrain(FrameProcessor):
                         result = item
             except asyncio.CancelledError:                       # the caller spoke over us (barge-in): drop the rest of this reply
                 cancelled.set()
+                if self._abort:                                    # ...before hearing any of it: nothing is kept, the words are joined to the next turn
+                    self._abort, self._carry = False, text
+                    self._open_turn = None
+                    raise
                 self.session.remember("customer", text)           # the engine saves a turn only when it finishes: keep what really happened
                 self.session.remember("agent", (" ".join(said) + " (interrupted)") if said else "(interrupted)")
                 self.interrupted += 1
                 raise
             await worker
+            if not heard and self._on_heard:
+                self._on_heard(text)                                # a turn with nothing to say still shows what the caller said
             if result is not None:
                 d = result.debug
                 self.turn_log.append({"first_sentence_ms": first_ms, "engine_ms": (time.perf_counter() - t0) * 1000, "intent": d.intent,

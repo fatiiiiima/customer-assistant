@@ -92,6 +92,8 @@ llm:
       model: "qwen3:4b-instruct-2507-q4_K_M"
       prompt_mode: auto                          # -> static prompt
       timeout_s: 20.0                            # generous for the same reason (cold model load)
+      num_ctx: 4096                              # was 2048: a model-written turn's prompt reached 1,838 tokens (27 Oct), and past the limit Ollama silently drops the OLDEST tokens, i.e. the start of the instructions.
+                                                 # Changing it makes Ollama reload the model once. Every client of the same Ollama should use the same value, or it reloads on each switch.
     local_server:                                 # any OpenAI-compatible server on THIS machine instead of Ollama: llama.cpp `llama-server`, or `mlx_lm.server` on Apple chips. Port 8003 (8080 is the website)
       runtime: openai                             # start it, then:  scripts/run_cluster.py --backend local   (docs/ARCH_REVIEW.md section 7b has the commands)
       host: http://127.0.0.1:8003/v1
