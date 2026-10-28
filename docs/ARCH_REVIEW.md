@@ -301,6 +301,8 @@ For comparison, the 28 Oct Ollama probe on this machine read 1,251 to 1,479 ms f
 
 **Hearing, `hearing_check.py`, nine recorded turns of 27 Oct, Whisper base int8, hint on / off:** through the recogniser service (`--stt-url`): WER 3% / 10%, 7 of 9 turns exact with the hint, median 214 ms. In-process f32: WER 4% / 16%, 7 of 9 exact, median 214 ms. Nine turns: the difference is noise. This proves the new option works end to end against the OpenAI transcription API; it says nothing about a GPU model.
 
+**Probe options added for the GPU run (28 Oct, same laptop, MLX server, one run):** `--model-only --no-stop --levels 1 4` reached the level the old sweep never did: full prompt 856 ms median / 1,094 ms p90 at 1 at once (1.2 requests/s) and **2,167 ms / 2,682 ms at 4 at once (1.7 requests/s)**; prefix 682 / 749 ms at 1 (1.5 requests/s) and 837 / 932 ms at 4 (4.6 requests/s). So this server finished about 1.2 to 1.7 full-prompt requests a second whatever the concurrency, i.e. it does not batch them. The design rate for 500 callers is 17 to 33 per replica (GUESS, `docs/PHASE0_RUNBOOK.md` section 3). Single run at each level.
+
 ### What was learned about running the harness (all MEASURED)
 
 * `mlx_lm.server` loads the model on the first request. That request took 1 min 42 s and `capacity_probe.py`'s first call timed out at 20 s. Send one real request to any new model server before measuring.
