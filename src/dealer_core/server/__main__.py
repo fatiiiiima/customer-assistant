@@ -80,7 +80,7 @@ def main() -> int:
     if state_url:
         from ..shared.state import CallStore, WorkerRegistry, open_store
 
-        store = open_store(state_url)
+        store = open_store(state_url, pool_size=cfg.app.db_pool_size)
         state.calls, state.registry = CallStore(store), WorkerRegistry(store)
         state.worker_id = a.worker_id or f"{a.host}:{a.port}"
         state.public_url = a.public_url or f"ws://{a.host}:{a.port}/voice"

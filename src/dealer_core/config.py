@@ -34,6 +34,7 @@ class AppCfg(_Strict):
     currency: str = "AED"
     distance_unit: str = "km"
     database_url: str = ""             # postgresql://user:pass@host:port/db: bookings shared by every worker (repos/pg_store.py). Empty: in-memory SQLite (one process)
+    db_pool_size: int = 8              # the most connections ONE worker process opens to PostgreSQL, shared by bookings, stock, call snapshots and the registry (was 8 + 4: ARCH_REVIEW B6). Opened only when needed
     agent_name: str | None = None      # the advisor's name, said in the greeting (the website: Wazir)
 
 

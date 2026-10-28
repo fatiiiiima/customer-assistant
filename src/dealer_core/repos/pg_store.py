@@ -63,6 +63,22 @@ def connect_args(url: str) -> dict:
     return {**args, "host": host, "port": u.port or 5432}
 
 
+_SHARED: dict[str, "PgDb"] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_db(url: str, size: int = 8) -> "PgDb":
+    """The one PgDb of this process for `url`. Bookings, stock and the call state/registry used to open two pools each (8 + 4 connections: about 540 for 45 workers
+    against PostgreSQL's default 100); a process now opens at most `size` connections to a database, whoever asks. A later, larger `size` raises the limit."""
+    with _SHARED_LOCK:
+        db = _SHARED.get(url)
+        if db is None:
+            db = _SHARED[url] = PgDb(url, size)
+        else:
+            db._size = max(db._size, size)
+        return db
+
+
 class PgDb:
     """A small pool of pg8000 connections. `tx()` is one transaction; a unique-index violation inside it is re-raised as `_Unique`."""
 

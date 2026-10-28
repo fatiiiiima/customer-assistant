@@ -90,7 +90,7 @@ async def probe_loop(engine, governor, every_s: float, sleep=asyncio.sleep, roun
     """Keeps the governor's measure of the model fresh without using a caller's turn: every `every_s` seconds, at a moment when at most `max_in_flight` turns are using
     the model (looked for for up to `tries` seconds), one small request of the same shape as a model-written turn. A probe that cannot run is skipped, never an error.
     A round is skipped when a caller's model-written turn timed the model within `every_s`: the probe is the way back up from prefix, and that worker is not below it.
-    (`max_in_flight` 0 was the rule until B5: a worker with turns always in flight never got a gap, and so never learned that the model had got faster.)"""
+    (`max_in_flight` 0, the default, waits for a moment when no turn is using the model; 2 was tried in the scale simulation and recovered no faster: ARCH_REVIEW section 20.)"""
     done = 0
     while rounds is None or done < rounds:
         await sleep(every_s)
