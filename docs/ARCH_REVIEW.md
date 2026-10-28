@@ -508,3 +508,20 @@ Same 17 conversations, 119 turns, once each:
 ### Not changed, on purpose
 
 The prefix and code levels; exact booking and summary lines; `verify_sentence`; the governor; `model_only` false; the opener and the forced question with the flag off.
+
+### 23a. Invitations kept when due (28 Oct, owner's decision), re-measured once
+
+With `model_speaks` on, only the generic "anything else?" closer is now dropped; an invitation to visit stays, and `wording.offer_test_drive` gives one only when it is due (none after a no, never two answers running, at most one in three). Tests: `test_model_speaks.py` (48; the first version's rule fails 3). Same 17 conversations, one pass, same laptop and model, deadlines lifted:
+
+| | Flag off (run above) | Flag on, first version | Flag on, invitations kept |
+|---|---|---|---|
+| Model-written replies | 45 | 44 | 44 |
+| Fell back / guard stops / spoken leaks | 0 / n.a. / 0 | 1 / 0 / 0 | 0 / 0 / 0 |
+| Replies ending on a question | 30 | 1 | 15 |
+| Replies inviting a test drive | 14 | 0 | 14 |
+| Same opener as an earlier reply in the call | 0 | 1 | 3 |
+| "Tell me more about X" answered with X | 6 of 6 | 6 of 6 | 6 of 6 |
+| Scripted bookings | 2 of 3 | 2 of 3 | 2 of 3 (the same two) |
+| First sentence, median / p90 | 1,278 / 1,715 ms | 1,603 / 1,967 ms | 1,668 / 2,214 ms |
+
+The invitations are back at the rate the code had (14), and replies end on a question half as often as with the flag off (15 against 30): the generic closers are gone. **The 1,000-reply figures above are from the first version and were not re-run** (stopped by the owner, to be repeated after a listening test); a single pass of 44 replies is too few to restate them.
