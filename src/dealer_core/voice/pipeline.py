@@ -161,11 +161,13 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     hear = EchoGuard(parts.stt_engine, lambda: brain.session.last_agent(),            # (brain is made just below; the guard only asks for the line when a turn is heard)
                      lambda: stt_prompt(brain.session.state, "", parts.hotword_groups, app.inventory.vocabulary()))
     stt = OpenVinoWhisperSTTService(engine=hear, min_rms=vcfg.min_rms)
+    stop_now = lambda: current_stop[0]                           # the silence the detector waits right now: the turn clock subtracts it to find the real end of speech
     if in_tap is not None:
         stt.on_text = lambda text: in_tap.note("stt", text)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
                         level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms,
                         speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below))
+    brain.vad_stop_secs = stop_now
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)
         brain.session.state = seed_state if seed_state is not None else brain.session.state

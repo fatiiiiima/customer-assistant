@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from typing import Iterator
 
@@ -77,7 +78,36 @@ class OllamaBackend(NluBackend):
         return self._json(state, car, text, prompts.full_schema(state), self.cfg.max_json_tokens)[0]
 
     def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
-        return self._chat(system, user, None, max_tokens, temperature=temperature).message.content or ""
+        if not deadline_s:
+            return self._chat(system, user, None, max_tokens, temperature=temperature).message.content or ""
+        return self._within(system, user, max_tokens, temperature, deadline_s)
+
+    def _within(self, system: str, user: str, max_tokens: int, temperature: float | None, deadline_s: float) -> str:
+        """The answer, or BackendTimeout when it is not complete within `deadline_s` (28 Oct review, B2: only the 20 s client timeout applied on Ollama, so the 1.2 s decision
+        deadline and the reply deadline of the vLLM path were never enforced here). The call runs in a helper thread that reads the reply as a stream and stops reading when told
+        to, which closes the connection and so stops the generation on the server; Ollama has one slot here, and a late answer nobody wants would hold up the next turn."""
+        parts: list[str] = []
+        outcome: dict = {}
+        done, stop = threading.Event(), threading.Event()
+
+        def run() -> None:
+            try:
+                for chunk in self._chat(system, user, None, max_tokens, stream=True, temperature=temperature):
+                    parts.append(chunk.message.content or "")
+                    if stop.is_set():
+                        break
+            except Exception as e:
+                outcome["error"] = e
+            finally:
+                done.set()
+
+        threading.Thread(target=run, daemon=True, name="ollama-bounded").start()
+        if not done.wait(deadline_s):
+            stop.set()
+            raise BackendTimeout(f"{self.name} had no complete answer within {deadline_s:.1f}s")
+        if "error" in outcome:
+            raise outcome["error"]
+        return "".join(parts)
 
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
         """The reply as the model writes it, so the first words can be spoken after the first clause, not after the whole reply (27-28 Oct: without this a model-written reply
@@ -86,10 +116,13 @@ class OllamaBackend(NluBackend):
         if prefill:
             yield from super().lead_in_stream(system, user, max_tokens, temperature, deadline_s, prefill=prefill)
             return
+        started = time.perf_counter()
         for chunk in self._chat(system, user, None, max_tokens, stream=True, temperature=temperature):
             piece = chunk.message.content or ""
             if piece:
                 yield piece
+            if deadline_s and time.perf_counter() - started > deadline_s:
+                return                                          # the reply deadline (as the vLLM path does): stop here, which closes the connection and stops the model
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         system = prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences)

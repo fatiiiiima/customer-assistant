@@ -304,7 +304,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         if state.metrics is not None:
             state.metrics.answer_time(seconds)
 
-    clock = TurnClock(state.stop_secs, timed, on_answer=answered, fillers=FILLERS)
+    # The silence the voice detector waits is not state.stop_secs in tap mode (0.6 s, 0.9 s after a phone question): the clock asks the pipeline's own value
+    clock = TurnClock(lambda: getattr(brain_ref.get("brain"), "vad_stop_secs", lambda: state.stop_secs)(), timed, on_answer=answered, fillers=FILLERS)
     probes = {"vad": StatusLine(set(), clock=clock, stage="vad"), "stt": StatusLine(set(), clock=clock, stage="stt"),
               "brain": StatusLine(set(), clock=clock, stage="brain")}
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(

@@ -85,7 +85,7 @@ _FLEXIBLE = re.compile(
     r"\b(?:any\s+(?:day|days|time|times|date)|every\s+day|when\s*ever|whatever\s+(?:day|time|works|suits|is\s+(?:free|best))|"
     r"as\s+soon\s+as\s+(?:possible|you\s+can|i\s+can)|asap|earliest|soonest|first\s+(?:available|free)|next\s+(?:available|free)|"
     r"you\s+(?:choose|pick|decide)|up\s+to\s+you|your\s+choice|no\s+preference|(?:does\s*not|doesn'?t)\s+matter|don'?t\s+mind|"
-    r"what(?:'s|\s+is)\s+(?:free|available|open)|(?:what|which)\s+(?:day|days|time|times|slots?)\s+(?:is|are)\s+(?:free|available|open)|"
+    r"what(?:'s|\s+is)\s+(?:free|available|open)|(?:what|which)\s+(?:day|days|time|times|slots?)(?:\s+and\s+(?:day|days|time|times))?\s+(?:is|are)\s+(?:free|available|open)|"
     r"when\s+(?:are\s+you|is\s+it)\s+(?:free|open|available)|when\s+can\s+i\s+(?:come|visit|see|drive|try|stop))\b")
 # the caller leaves the choice to us (as opposed to asking what is free): with times on the table, the earlier one is taken
 _DELEGATES = re.compile(r"\b(?:any\s+(?:day|days|time|times|date)|every\s+day|when\s*ever|whatever|you\s+(?:choose|pick|decide)|up\s+to\s+you|your\s+choice|"
@@ -1327,7 +1327,7 @@ class AgentEngine:
         if pod:
             part = [a for a in alts if {"morning": a.hour < 12, "afternoon": 12 <= a.hour < 17, "evening": a.hour >= 17}[pod]]
             alts = part or alts
-        s.day_asks = 0
+        s.day_asks = max(s.day_asks, 1)                         # (not 0: the next answer with no day in it is then offered times again, not asked "which day?" again: ask, offer, ask, offer, 28 Oct)
         if not alts:
             return {"core": (intro + " " if intro else "") + "I don't see any free times in the next two weeks. Would you like me to put you through to a colleague?", "risk": "high", "awaiting": True,
                     "facts": ["There are no free test-drive slots in the booking window."]}
@@ -1385,6 +1385,7 @@ class AgentEngine:
         when = str(args.get("when") or "").strip()
         problems: list[str] = []
         slot_set_now = False
+        delegated = False
         if when and when.lower() not in ("null", "none"):
             w = parse_when(when, now, tz)
             day, tm = w.day, w.time
@@ -1397,6 +1398,7 @@ class AgentEngine:
             if tm is None and day is None and s.offered_slots and _DELEGATES.search(" ".join(ex.tokens_of(when))):
                 first = sorted(s.offered_slots)[0]                      # "any day suits me" / "you choose" right after two times were offered: take the earlier one
                 day, tm = first.date(), first.time()
+                delegated = True
             if tm is None and day is None and s.offered_slots:
                 bare = re.fullmatch(r"(?:at |around |about )?(\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", " ".join(ex.tokens_of(text)))
                 if bare:
@@ -1427,6 +1429,10 @@ class AgentEngine:
                     choices = " or ".join(T.clock(x) for x in offered)
                     return {"core": f"I'd offered {choices}. Just to check, did you say {T.clock(chosen)}?", "risk": "high", "awaiting": True,
                             "facts": [f"Heard {T.clock(chosen)}, which was not one of the offered times ({choices}). It is free, but check first."]}
+                if delegated and not confirmed:                                  # "any day would work" is about the day, not a choice between the two times: ask before taking one
+                    s.pending, s.state = Pending("time_check", chosen), State.SLOT
+                    return {"core": f"Then shall we say {T.when_short(chosen, now)}?", "risk": "high", "awaiting": True,
+                            "facts": [f"The customer left the day to us after two times were offered. Propose {T.when_short(chosen, now)} and wait for a yes."]}
                 s.draft_slot = chosen
                 s.day_asks = 0
                 slot_set_now = True

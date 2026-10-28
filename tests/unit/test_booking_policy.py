@@ -112,6 +112,9 @@ def test_any_day_after_two_times_were_offered_takes_the_earlier_one():
     say(e, s, "When can I come and see it?")
     earlier = min(s.offered_slots)
     tool, said, _ = say(e, s, "Any day suits me.")
+    assert s.draft_slot is None and s.pending is not None and s.pending.kind == "time_check" and s.pending.value == earlier      # 28 Oct: asked first, not taken silently
+    assert "shall we say" in said.lower()
+    tool, said, _ = say(e, s, "Yes.")
     assert s.draft_slot == earlier and s.state is State.CONTACT and "name" in said.lower()
 
 
@@ -148,7 +151,7 @@ def test_the_day_is_asked_once_and_then_times_are_offered():
     _, first, _ = say(e, s, "I want to book a test drive")
     assert s.day_asks == 1 and ("day" in first.lower())
     _, second, _ = say(e, s, "um okay then")                         # the model sends it to the booking tool; no day in it
-    assert len(s.offered_slots) == 2 and "Great choice" not in second and second != first and s.day_asks == 0
+    assert len(s.offered_slots) == 2 and "Great choice" not in second and second != first and s.day_asks == 1       # (still 1 after the offer: see test_the_agent_does_not_alternate_between_asking_and_offering)
 
 
 def test_leaving_the_booking_talk_makes_the_next_request_a_first_ask_again():
@@ -186,3 +189,41 @@ def test_the_whole_27_oct_booking_conversation_never_repeats_a_question():
     assert all("What day would you like" not in r and "Which day works" not in r and "Which day would suit" not in r for r in booking)
     assert all(a != b for a, b in zip(booking, booking[1:]))          # no two replies in a row are the same
     assert s.state is State.CONTACT and s.draft_slot is not None and "2 PM" in booking[-1]
+
+
+
+# ------------------------------------------------------------------------------------------------ 28 Oct review: ask, offer, ask, offer; and a silent choice
+@pytest.mark.parametrize("text", ["what day and time are available", "what days and times are free", "which day and time is open", "what time and day are available", "what time is available"])
+def test_asking_which_day_and_time_are_available_leaves_the_choice_to_the_agent(text):
+    assert _FLEXIBLE.search(text)
+
+
+def test_the_agent_does_not_alternate_between_asking_and_offering():
+    e = engine()
+    s = discussing_a_car(e)
+    replies = [say(e, s, t)[1] for t in ["I want to come and see it", "What day and time are available?", "Needed.", "Hmm.", "okay"]]
+    assert "day" in replies[0].lower() and len(s.offered_slots) == 2
+    assert all("Which day" not in r and "What day would" not in r and "Sure! What day" not in r for r in replies[1:])      # no "which day?" after the times were offered
+
+
+def test_any_day_after_an_offer_proposes_a_time_and_waits_for_a_yes():
+    e = engine()
+    s = discussing_a_car(e)
+    say(e, s, "I want to come and see it")
+    say(e, s, "What day and time are available?")
+    earlier = min(s.offered_slots)
+    _, said, _ = say(e, s, "Any day would work.")
+    assert "shall we say" in said.lower() and s.draft_slot is None and s.pending.value == earlier
+    _, said, _ = say(e, s, "Yes.")
+    assert s.draft_slot == earlier and s.pending is None
+
+
+def test_a_different_time_after_the_proposal_is_taken_instead():
+    e = engine()
+    s = discussing_a_car(e)
+    say(e, s, "I want to come and see it")
+    say(e, s, "What day and time are available?")
+    say(e, s, "Any day would work.")
+    later = max(s.offered_slots)
+    say(e, s, f"No, {later.hour % 12 or 12} {'PM' if later.hour >= 12 else 'AM'} please")
+    assert s.draft_slot == later
