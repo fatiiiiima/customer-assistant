@@ -176,6 +176,7 @@ class DialogueCfg(_Strict):
     model_shed_after_ms: float = 450.0           # auto: past this measured decision time a growing share of turns skip the model (load shedding; 0 = never)
     explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
     probe_every_s: float = 20.0                  # voice server: measure the model with a small request of the same shape as a model-written turn this often, only when no turn is using it (0 = off)
+    probe_max_in_flight: int = 0                 # ...or when at most this many turns are using the model. 0 = only when none is. The plan (B5) asked for 2; in the scale simulation 2 and 4 recovered no faster after a GPU outage and sent 33-37% more probes to an overloaded model (ARCH_REVIEW section 20), so the default stays 0
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
     openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up

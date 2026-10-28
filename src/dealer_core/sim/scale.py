@@ -114,7 +114,12 @@ class Stats:
     shed: int = 0
     calls: int = 0
     refused: int = 0
-    timeline: list[tuple] = field(default_factory=list)    # (t, callers wanting a call, in calls, workers ready, answer p90 last 30 s)
+    probes: int = 0                                        # background probe requests sent to the model server
+    probes_overloaded: int = 0                             # ...of which sent while the model server already had more requests than slots
+    prefix_idle: int = 0                                   # model turns spoken at the prefix level while the model server was less than half busy
+    stuck: int = 0                                         # samples (every 5 s) of a worker with calls whose governor is above its budget although the model server is less than half busy
+    worker_samples: int = 0
+    timeline: list[tuple] = field(default_factory=list)    # (t, callers wanting a call, in calls, workers ready, answer p90 last 30 s, workers above their budget, model load 0-1+)
 
 
 @dataclass
@@ -133,6 +138,9 @@ class Scenario:
     worker_start_s: float = 45.0                           # a new worker: scheduled, started, speech models loaded
     target_s: float = 1.0
     scale_on_demand: bool = True                           # the autoscaler also counts callers just turned away (not only those in calls)
+    probe_every_s: float = 20.0                            # dialogue.probe_every_s
+    probe_max_in_flight: int = 0                           # dialogue.probe_max_in_flight (0: only when no turn at all is using the model)
+    probe_skip_fresh: bool = True                          # skip a round when a caller's model-written turn timed the model within the interval (B5; False = the rule before it)
     cold_start: bool = False                               # start from `cold_min` workers (everything scaled down overnight)
     cold_min: int = 8
     seed: int = 7
@@ -156,14 +164,13 @@ def run(sc: Scenario) -> dict:
     st = Stats()
 
     def new_worker(start_delay: float) -> Worker:
-        gov = QualityGovernor("auto", budget_ms=700, shed_after_ms=450 if sc.adaptive else 0, rng=random.Random(sim.rng.random()))
+        gov = QualityGovernor("auto", budget_ms=700, shed_after_ms=450 if sc.adaptive else 0, rng=random.Random(sim.rng.random()), clock=sim.now)
+        gov.probed = True                                   # the voice server always runs the probe (server/app.py): an unmeasured model is played safe
         w = Worker(f"w{len(workers) + 1}", sc.ceiling, gov,
                    AdmissionController(sc.ceiling, target_s=sc.target_s, clock=sim.now) if sc.adaptive else None, sim.t + start_delay)
         workers.append(w)
+        sim.spawn(prober(w), start_delay)
         return w
-
-    for _ in range(sc.cold_min if sc.cold_start else sc.min_workers):
-        new_worker(0.0)
 
     def ready() -> list[Worker]:
         return [w for w in workers if w.ready_at <= sim.t and not w.draining]
@@ -190,6 +197,40 @@ def run(sc: Scenario) -> dict:
                 emptiest = min(live, key=lambda w: w.active)
                 emptiest.draining = True
 
+    def probe_once(w: Worker):
+        st.probes += 1
+        st.probes_overloaded += model.in_flight >= model.slots
+        lat = model.begin(hw.first_ms)                      # the probe has the shape of a model-written turn: it costs what one costs
+        yield lat
+        model.end()
+        w.governor.record_probe(lat * 1000)
+
+    def prober(w: Worker):
+        """server/app.py probe_loop: a start-up probe, then every `probe_every_s` at a moment the rule allows (looked for for 10 s, 1 s apart)."""
+        yield from probe_once(w)
+        while True:
+            yield sc.probe_every_s
+            if w not in workers:
+                return
+            if sc.probe_skip_fresh and w.governor.measured_within(sc.probe_every_s):
+                continue
+            for _ in range(10):
+                if w.governor.snapshot()["in_flight"] <= sc.probe_max_in_flight:
+                    yield from probe_once(w)
+                    break
+                yield 1.0
+
+    def sampler():
+        """Every 5 s: of the workers with calls, how many are held below the full level by an old measure while the model server is not busy."""
+        while True:
+            yield 5.0
+            if sim.t < sc.measure_from_s or model.in_flight / model.slots >= 0.5:
+                continue
+            for w in ready():
+                if w.active:
+                    st.worker_samples += 1
+                    st.stuck += (w.governor.stats.full_first_ms or 0) > w.governor.budget_ms
+
     def gpu_events():
         for at, slots in sorted(sc.model_slots_at):
             yield max(0.0, at - sim.t)
@@ -199,7 +240,8 @@ def run(sc: Scenario) -> dict:
         while True:
             recent = sorted(a for t, a in recent_answers if t >= sim.t - 30)
             p90 = recent[int(0.9 * (len(recent) - 1))] if recent else 0.0
-            st.timeline.append((round(sim.t), callers_wanted(sc, sim.t), sum(w.active for w in workers), len(ready()), round(p90, 2)))
+            down = sum(1 for w in ready() if (w.governor.stats.full_first_ms or 0) > w.governor.budget_ms)
+            st.timeline.append((round(sim.t), callers_wanted(sc, sim.t), sum(w.active for w in workers), len(ready()), round(p90, 2), down, round(model.in_flight / model.slots, 2)))
             yield 30.0
 
     recent_answers: list[tuple[float, float]] = []
@@ -228,21 +270,26 @@ def run(sc: Scenario) -> dict:
             wait = w.governor.expected_wait_ms()
             bridged = wait is not None and wait >= 450 and rng.random() < 0.7      # "Let me check." (lookup-like requests only)
             lat = model.begin(hw.decide_ms)
+            w.governor.stats.in_flight += 1                        # engine: `with governor.using_model()` around the decision and the writing
             yield min(lat, deadline)                               # past the deadline the request is dropped (the server stops it)
             model.end()
+            w.governor.stats.in_flight -= 1
             w.governor.record_decide(min(lat, deadline) * 1000)
             level = "code" if lat > deadline else w.governor.choose()   # too slow: the code's own decision and wording
             if t0 >= sc.measure_from_s:
                 st.levels[level] += 1
+                st.prefix_idle += level == "prefix" and model.in_flight / model.slots < 0.5
             if level == "full":
                 lat = model.begin(hw.first_ms)
+                w.governor.stats.in_flight += 1
                 yield lat
                 model.end()
+                w.governor.stats.in_flight -= 1
                 w.governor.record_full(lat * 1000)
             else:
                 yield 0.01                                         # the code's facts, at once
                 if level == "prefix":
-                    sim.spawn(continuation())                       # the model adds the question while the facts are spoken
+                    sim.spawn(continuation(w))                      # the model adds the question while the facts are spoken
         yield hw.tts_ms / 1000 * cpu
         answer = sim.t - t0
         first = min(answer, heard + 0.03 + lag) if bridged else answer
@@ -256,10 +303,12 @@ def run(sc: Scenario) -> dict:
             st.answer.append(answer)
             st.bridged += bridged
 
-    def continuation():
+    def continuation(w: Worker):
         lat = model.begin(hw.first_ms * 0.6)
+        w.governor.stats.in_flight += 1
         yield lat
         model.end()
+        w.governor.stats.in_flight -= 1
 
     def caller(slot: int):
         rng = sim.rng
@@ -291,10 +340,13 @@ def run(sc: Scenario) -> dict:
                 workers.remove(w)
             yield rng.uniform(1, 5)
 
+    for _ in range(sc.cold_min if sc.cold_start else sc.min_workers):
+        new_worker(0.0)                                     # (after the probe is defined: each worker starts one)
     sim.spawn(beats())
     sim.spawn(autoscaler())
     sim.spawn(gpu_events())
     sim.spawn(timeline())
+    sim.spawn(sampler())
     for slot in range(max(k for _, k in sc.callers)):
         sim.spawn(caller(slot))
     sim.run(sc.duration_s)
@@ -306,6 +358,19 @@ def pct(xs: list[float], q: float) -> float:
         return 0.0
     s = sorted(xs)
     return s[min(len(s) - 1, int(q * len(s)))]
+
+
+def seconds_to_recover(sc: Scenario, st: Stats) -> float | None:
+    """After the last time model capacity was restored: seconds until no worker was above its model budget (30 s resolution). None if capacity never came back."""
+    restores, last = [], None
+    for at, slots in sorted(sc.model_slots_at):
+        if last is not None and slots > last:
+            restores.append(at)
+        last = slots
+    if not restores:
+        return None
+    t0 = restores[-1]
+    return next((row[0] - t0 for row in st.timeline if row[0] >= t0 and row[5] == 0), None)
 
 
 def summarize(sc: Scenario, st: Stats, model: Shared) -> dict:
@@ -322,6 +387,9 @@ def summarize(sc: Scenario, st: Stats, model: Shared) -> dict:
         "by code %": round(100 * st.levels["code-routed"] / max(1, turns)),
         "model full/prefix/code %": "/".join(str(round(100 * st.levels[k] / max(1, model_turns))) for k in ("full", "prefix", "code")),
         "turns": turns, "model peak in flight": model.peak,
+        "prefix while model idle %": round(100 * st.prefix_idle / max(1, model_turns), 1),
+        "workers held down while model idle %": round(100 * st.stuck / max(1, st.worker_samples), 1), "probe requests": st.probes, "probes while model overloaded": st.probes_overloaded,
+        "seconds to recover": seconds_to_recover(sc, st),
         "workers max": max((r[3] for r in st.timeline), default=0), "timeline": st.timeline,
         "answer mean": round(statistics.fmean(st.answer), 2) if st.answer else 0.0,
     }
@@ -329,6 +397,7 @@ def summarize(sc: Scenario, st: Stats, model: Shared) -> dict:
 
 # ------------------------------------------------------------------------------------------------ the scenarios
 FAST = Hardware("fast GPUs", model_slots=160, decide_ms=120, first_ms=300)
+BUSY = Hardware("every turn on the model", model_slots=160, decide_ms=300, first_ms=500, code_share=0.0)     # the manifest's 10-20% of callers waiting on the model at any moment
 SLOW = Hardware("slow GPU", model_slots=24, decide_ms=300, first_ms=900)
 WEAK_CPU = Hardware("fast GPUs, weak worker CPUs", model_slots=160, decide_ms=120, first_ms=300, worker_cpu_calls=9)
 
@@ -348,4 +417,6 @@ def _scenarios(adaptive: bool) -> list[Scenario]:
         Scenario("500 callers, 95% of GPU capacity lost at 5 min", FAST, RAMP_500, model_slots_at=[(300, 6)], adaptive=adaptive),
         Scenario("spike: 500 -> 800 callers at 5 min", FAST, RAMP_500 + [(300, 800), (420, 500)], adaptive=adaptive),
         Scenario("cold start: 8 workers when 500 callers arrive", FAST, RAMP_500, cold_start=True, adaptive=adaptive),
+        Scenario("500 callers, GPU capacity lost at 5 min, back at 7 min", FAST, RAMP_500, model_slots_at=[(300, 6), (420, 160)], adaptive=adaptive),
+        Scenario("500 callers, every turn on the model, GPU lost at 5 min, back at 7", BUSY, RAMP_500, model_slots_at=[(300, 6), (420, 160)], adaptive=adaptive),
     ]

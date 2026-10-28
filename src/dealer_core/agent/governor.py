@@ -43,7 +43,7 @@ class GovernorStats:
 
 class QualityGovernor:
     def __init__(self, mode: str = "auto", budget_ms: float = 700.0, max_in_flight_full: int = 0, max_in_flight_model: int = 0,
-                 explore_every: int = 0, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None) -> None:
+                 explore_every: int = 0, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None, clock=None) -> None:
         self.mode = mode                         # auto | full | prefix | code
         self.budget_ms = budget_ms
         self.max_full = max_in_flight_full       # 0 = no cap of its own (the latency estimate decides)
@@ -56,6 +56,8 @@ class QualityGovernor:
         self._since_full = 0
         self.shed_after_ms = shed_after_ms        # 0 = never shed
         self._rng = rng or random.Random()
+        self._clock = clock or time.monotonic    # injectable, so the scale simulation can run it on its own clock
+        self._full_at: float | None = None       # when a caller's model-written turn last timed the model
 
     def choose(self) -> str:
         """The level for the next turn."""
@@ -83,6 +85,13 @@ class QualityGovernor:
         with self._lock:
             old = self.stats.full_first_ms
             self.stats.full_first_ms = first_ms if old is None else (1 - self.alpha) * old + self.alpha * first_ms
+            self._full_at = self._clock()
+
+    def measured_within(self, seconds: float) -> bool:
+        """Has a caller's model-written turn timed the model in the last `seconds`? Then the measure is fresh and a probe would only add load: a probe is the way
+        back UP from prefix, and a worker that is writing at the full level is not below it."""
+        with self._lock:
+            return self._full_at is not None and self._clock() - self._full_at < seconds
 
     def record_probe(self, first_ms: float) -> None:
         """The time a background probe took to a first sentence. Counts for more than a live turn (alpha 0.5), because it is the only way back up from prefix."""

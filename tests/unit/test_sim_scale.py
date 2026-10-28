@@ -45,3 +45,21 @@ def test_the_router_reports_callers_turned_away_for_the_autoscaler():
         assert client.get("/assign").status_code == 503
         body = client.get("/metrics").text
     assert "voice_router_turned_away_30s 1" in body and "voice_router_capacity 0" in body
+
+
+# ------------------------------------------------------------------------------------------------ B5: the probe rule, measured in the cluster simulation
+def probes(sc_, **kw):
+    s = Scenario(sc_, FAST, RAMP_200, duration_s=360, measure_from_s=180, min_workers=16, **kw)
+    return run(s)
+
+
+def test_a_healthy_cluster_does_not_probe_workers_whose_own_turns_are_timing_the_model():
+    new = probes("healthy", probe_skip_fresh=True)
+    old = probes("healthy", probe_skip_fresh=False)
+    assert old["probe requests"] > 5 * new["probe requests"]                   # measured 1,257 against 68 over 10 simulated minutes at 500 callers
+    assert abs(new["answer p90"] - old["answer p90"]) < 0.05 and new["answers > 2 s %"] == 0
+
+
+def test_workers_return_to_the_full_level_soon_after_the_model_server_recovers_even_when_skipping_fresh_probes():
+    r = probes("outage", model_slots_at=[(180, 2), (240, 160)], probe_skip_fresh=True)
+    assert r["seconds to recover"] is not None and r["seconds to recover"] <= 120      # 60 s measured at 500 callers
