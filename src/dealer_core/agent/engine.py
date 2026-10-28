@@ -311,13 +311,21 @@ class AgentEngine:
         The prompt has the shape of a real `full` turn (the writer's long instructions, a car's facts, a short history): that is where the time goes."""
         if self.reply_writer is None:
             return None
-        car = next(iter(self.svc.inventory.search(SearchFilters(), 1)), None)
-        if car is None:
+        stock = list(self.svc.inventory.search(SearchFilters(), 12))
+        if not stock:
             return None
-        w = WriterInput(caller="Tell me about the first one.", risk="low", awaiting=True,
+        # A different car and question every time: the same prompt twice is answered from Ollama's cache (480 ms against 1,100 ms for a new one, measured), but a real turn's
+        # ending is always new. The instructions at the start are the same, as in a real call. (Not "tell me about it": the model answers that with "I'll tell you...",
+        # which the checks reject.)
+        self._probe_count = getattr(self, "_probe_count", -1) + 1
+        n = self._probe_count
+        cars = [stock[(n + i) % len(stock)] for i in range(3)]
+        car = cars[0]
+        caller = ("Is the first one a good car?", "How many kilometres does the first one have?", "What colour is the first one?", "Does the first one have any accidents?")[n % 4]
+        w = WriterInput(caller=caller, risk="low", awaiting=True,
                         core=f"It's the {T.car_name(car)}, {car.color}, with {car.km:,} kilometres, at {T.money(car.price)}. Would you like to hear more?",
-                        history=[("agent", "Which one would you like to hear more about?"), ("customer", "Tell me about the first one.")],
-                        facts="\n".join(["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]))
+                        history=[("agent", "Which one would you like to hear more about?"), ("customer", caller)],
+                        facts="\n".join(["Prices are fixed (no negotiation).", *fact_sheet(cars, self._branch_name).splitlines()]))      # as long as a real turn's: three cars
         t0 = time.perf_counter()
         gen = None
         try:
@@ -329,9 +337,12 @@ class AgentEngine:
             if gen is not None and hasattr(gen, "close"):
                 gen.close()                                              # stops the model: only the first sentence is wanted
         ms = (time.perf_counter() - t0) * 1000
-        if first is None and self.reply_writer.last_stream.get("stopped") != FIRST_SENTENCE_DEADLINE:
-            return None
-        # (a model that missed the first-sentence deadline is measured at the deadline: "at least this slow", which is all the governor needs to keep it off the `full` level)
+        stopped = self.reply_writer.last_stream.get("stopped", "")
+        if first is None and (not stopped or stopped.startswith("backend:") or stopped.startswith("high-risk")):
+            return None                                                  # nothing was written, or the model could not be reached: not a measurement
+        # A first sentence that a check then rejected still took this long to write, and a model that missed the first-sentence deadline is measured at the deadline
+        # ("at least this slow"): both say what the governor needs, how fast the model is. (Seen on the Mac: the canned car's first sentence was rejected as
+        # "new first-person promise", so the start-up probe said "not possible" with a perfectly working model.)
         if record and self.governor is not None:
             self.governor.record_probe(ms)
         return ms

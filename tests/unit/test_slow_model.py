@@ -292,3 +292,28 @@ def test_a_probe_that_misses_the_deadline_is_recorded_as_slow_not_as_unmeasurabl
 def test_a_probe_with_any_other_empty_result_is_still_not_a_measurement():
     e = engine(SlowWriter(stopped="backend: RuntimeError"))
     assert e.probe_model() is None and e.governor.snapshot()["full_first_ms"] == 0
+
+
+def test_a_first_sentence_the_checks_rejected_still_measures_the_models_speed():
+    w = SlowWriter(stopped="new first-person promise or ability", wait=0.1)
+    e = engine(w)
+    e.governor.probed = True
+    ms = e.probe_model()
+    assert ms is not None and ms >= 90 and e.governor.snapshot()["full_first_ms"] >= 90
+
+
+def test_each_probe_asks_something_new_so_the_models_prompt_cache_does_not_flatter_it():
+    """Measured on Ollama: the same probe twice took 480 ms the second time against 1,100 ms for a new one; a real turn's ending is always new."""
+    seen = []
+
+    class Spy(SlowWriter):
+        def stream(self, w, temperature=None):
+            seen.append((w.caller, w.facts))
+            return super().stream(w, temperature)
+
+    e = engine(Spy(wait=0.0))
+    e.governor.probed = True
+    for _ in range(4):
+        e.probe_model(record=False)
+    assert len({caller for caller, _ in seen}) == 4 and len({facts for _, facts in seen}) == 4
+    assert all("Tell me about" not in caller for caller, _ in seen)        # that question gets "I'll tell you...", which the checks reject
