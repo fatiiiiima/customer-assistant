@@ -1407,10 +1407,13 @@ class AgentEngine:
         """Which of the times just offered the caller means: "the first one", "the second", "the morning one", "the later one"."""
         words = " ".join(ex.tokens_of(text))
         slots = sorted(s.offered_slots)
-        said = {int(w) for w in re.findall(r"\b(\d{1,2})\b", words)} | {n for w, n in _HOUR_WORDS.items() if re.search(rf"\b{w}\b", words)}
+        said = {int(w) for w in re.findall(r"\b(\d{1,2})\b", words)} | {n for w, n in _HOUR_WORDS.items() if re.search(rf"\b{w}\b", words)
+                                                                          and (w != "one" or re.search(r"\bone (?:o'?clock|pm|p m|in the)\b", words))}   # "the morning one" names no hour
         hits = [x for x in slots if (x.hour % 12 or 12) in said]
         if len(hits) == 1:                                       # "9", "nine", "nine please": the offered time with that hour
             return hits[0]
+        if said and not hits:                                    # an hour that was not offered ("9 in the morning" when 12 and 4 were): not "the morning one" (28 Oct replay: booked 12)
+            return None
         if re.search(r"\b(?:first|earlier|earliest|morning)\b", words):
             return slots[0]
         if re.search(r"\b(?:second|last|later|latest|afternoon|evening)\b", words) and len(slots) > 1:

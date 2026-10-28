@@ -161,3 +161,51 @@ def test_while_a_booking_is_being_arranged_the_code_carries_on_with_it():
     assert s.state.value == "slot"
     intent, reply = say(e, s, CALL[5])
     assert intent == "prepare_booking" and "horsepower" not in " ".join(reply) and "litre" not in " ".join(reply)
+
+
+# ------------------------------------------------------------------------------------------------ found replaying the call with the real model (11:00 clock)
+@pytest.mark.parametrize("words, hour", [("9 in the morning", 9), ("9 in the morning.", 9), ("2 in the afternoon", 14), ("5 in the evening", 17),
+                                         ("at 9 in the morning", 9), ("nine in the morning", 9), ("10 at night", 22)])
+def test_a_time_said_the_way_the_agent_offers_times_is_read(words, hour):
+    from zoneinfo import ZoneInfo
+
+    from dealer_core.nlu.datetime_parse import parse_when
+
+    tz = ZoneInfo("Asia/Dubai")
+    w = parse_when(words, datetime(2026, 10, 27, 11, 0, tzinfo=tz), tz)
+    assert w.time is not None and w.time.hour == hour
+
+
+def test_an_hour_that_was_not_offered_is_never_taken_as_one_that_was():
+    """With 12 and 4 PM offered, "9 in the morning" booked 12 PM: the hour was not read, and "morning" was taken as "the earlier one"."""
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Dubai")
+    s = type("S", (), {})()
+    s.offered_slots = [datetime(2026, 10, 27, 12, 0, tzinfo=tz), datetime(2026, 10, 27, 16, 0, tzinfo=tz)]
+    assert AgentEngine._offered_pick(s, "9 in the morning") is None
+    assert AgentEngine._offered_pick(s, "the morning one").hour == 12                  # no hour named: still the earlier one
+    assert AgentEngine._offered_pick(s, "4 please").hour == 16
+
+
+def test_the_call_at_11_does_not_book_a_time_the_caller_did_not_ask_for():
+    global EVENING
+    saved, EVENING = EVENING, datetime(2026, 10, 27, 11, 0, tzinfo=ZoneInfo("Asia/Dubai"))
+    try:
+        e = engine(TooSlow())
+        s = e.new_session()
+        for t in CALL[:7]:
+            say(e, s, t)                                                           # ... "Any day works." -> "Then shall we say today at 12:00 PM?"
+        _, reply = say(e, s, "9 in the morning.")
+        text = " ".join(reply)
+        assert s.draft_slot is None or s.draft_slot.hour == 9                      # never 12
+        assert "12 PM" not in text.replace("12 in the afternoon", "") or "?" in text
+    finally:
+        EVENING = saved
+
+
+def test_a_sentence_with_a_degree_sign_from_the_facts_is_not_refused():
+    from dealer_core.dialogue.writer import verify_sentence
+
+    facts = "Highlights include Panoramic Sky Lounge, heated seats, 360° camera and gesture control."
+    assert verify_sentence("It has a 360° camera and heated seats.", "tell me more", "", facts, "") == []
