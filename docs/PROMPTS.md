@@ -6,7 +6,7 @@ Written 28 Oct 2026 for Phase 2 of `docs/ARCH_PLAN.md`. Labels as in the plan: M
 
 A model server with a prefix cache (vLLM's automatic prefix caching) keeps the attention state of prompts it has already read. A new request that starts with the same tokens as an earlier one reuses that state up to the **first token that differs**, and only reads the rest. So the cost of a request is the cost of the part after the first difference, and one changing token near the start throws away everything behind it (INFERRED from how prefix caches work; whether a cache hit really happens on the production server is not measured: see "How to check" below).
 
-Ollama on the laptop has one cache slot and keeps the last prompt only (MEASURED, `docs/ARCH_REVIEW.md` section 7b: a short prompt of another shape in between makes the next long prompt be read in full). That is why the laptop gains nothing from layout, and why the numbers in section 20 of the review say so.
+Ollama on the laptop is a poor place to judge layout. On 27 Oct a short prompt of another shape in between made the next long prompt be read in full (MEASURED, `docs/ARCH_REVIEW.md` section 7b: one cache slot, the last prompt only). On 28 Oct, Phase 2, the same decision prompt took 115 ms the second time and 124 ms after an unrelated request in between (MEASURED, 4 pairs), so on the Ollama now running the cache is not simply "the last prompt"; why is unknown. Either way the single call's time on the laptop is decoding, not reading the prompt (about 1.55 s whether the prompt was cached or not), so the laptop says nothing about layout; section 21 of the review has what it does say.
 
 ## The layout of the single-call prompt (`agent/turn_prompt.py`, built in `agent/engine.py: _single_system, _single_user`)
 
@@ -39,7 +39,18 @@ The conversation is a sliding window of the last N lines. Once a call is past N 
 
 ## How much of a prompt is shared
 
-`scripts/replay_turns.py` prints, for consecutive model-decided turns of the same recorded call, the share of each prompt (in characters) that starts exactly like the previous turn's prompt: an upper bound on what a prefix cache could reuse, at the granularity of characters. The numbers are in `docs/ARCH_REVIEW.md` section 20. vLLM caches whole blocks of tokens (16 by default), so the real share is slightly lower.
+`scripts/replay_turns.py` prints, for consecutive model-decided turns of the same recorded call, the share of each prompt (in characters) that starts exactly like the previous turn's prompt: an upper bound on what a prefix cache could reuse, at the granularity of characters. The numbers are in `docs/ARCH_REVIEW.md` section 21. vLLM caches whole blocks of tokens (16 by default), so the real share is slightly lower.
+
+What it shows (MEASURED, characters, one laptop, 28 Oct):
+
+| | decision prompt (two-call) | single-call prompt |
+|---|---|---|
+| system message, characters | 2,175 | 3,660 |
+| one hand-built state (the M3 in focus, one exchange), the minute changes | 83% of the next prompt shared | 94% |
+| the same state, one more exchange in the same minute | 92% | 97% |
+| the 8 consecutive pairs of model-decided turns in the 16 recorded calls, with each call's own clock | 86% | 85% |
+
+The first two rows are the layout doing what it is meant to (the clock no longer sits in front of the state). The recorded calls do NOT show a gain: the single call's user message carries more that changes (up to five cars' facts, the state), and with only 8 pairs the replay cannot separate the two. Whether the production server's hit rate is better is the open measurement below.
 
 ## How to check on the production server (not done: it needs the server)
 
