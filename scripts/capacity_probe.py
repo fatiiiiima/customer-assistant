@@ -32,6 +32,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+DEFAULT_PORTAL_DATA = ROOT.parent / "bmw-portal" / "site" / "data.js"     # was C:\dev\bmw-portal\...: the same file on the Windows layout, and found on any other machine
+
 CALLER_LINES = ["is the RAV4 a good family car", "how does it compare with the Camry", "what would you recommend for a family of five",
                 "tell me about the Land Cruiser", "is it reliable", "which one is the fastest", "anything cheaper than that", "does it have a sunroof"]
 
@@ -69,6 +71,7 @@ def main() -> int:
     ap.add_argument("--target", type=int, default=500, help="simultaneous callers to plan for")
     ap.add_argument("--turn-every", type=float, default=15.0, help="seconds between one caller's turns (measured in our test calls: ~15)")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 4, 8, 16, 32, 64])
+    ap.add_argument("--portal-data", type=Path, default=DEFAULT_PORTAL_DATA, help="the website's site/data.js (default: ../bmw-portal/site/data.js beside this repository)")
     a = ap.parse_args()
 
     from dealer_core.app import build_app
@@ -80,7 +83,7 @@ def main() -> int:
 
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
     budget = a.budget_ms or cfg.dialogue.model_budget_ms
-    app = build_app(cfg, inventory="portal", portal_data=Path(r"C:\dev\bmw-portal\site\data.js"), engine="agent", backend=a.backend)
+    app = build_app(cfg, inventory="portal", portal_data=a.portal_data, engine="agent", backend=a.backend)
     start(app, quiet=True)
     backend = app.engine.reply_writer.backend
     facts = ("- 2021 Toyota RAV4: white, 98,500 dirhams, 5 seats, all-wheel drive, hybrid, 219 hp, uses 4.9 L/100 km, boot 580 litres, accident-free\n"
