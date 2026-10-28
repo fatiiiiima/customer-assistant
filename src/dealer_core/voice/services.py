@@ -14,6 +14,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
 
+from .prompts import CONTACT
 from .stt import SAMPLE_RATE, WhisperOpenVino, is_degenerate
 from .tts import PiperSherpa
 
@@ -109,6 +110,16 @@ def echoes_agent(heard: str, agent_line: str) -> bool:
     return False
 
 
+def is_short_digit_run(text: str) -> bool:
+    """Only digits, commas and spaces, and either fewer than nine digits or a group of digits repeated straight after itself: not a phone number. With the digits hint on, this is what the
+    recogniser writes for a short answer that is not a number ("050, 056, 056, 0" for "No." on 28 Oct: ten digits, so the count alone is not enough). A real number is read out in groups
+    that differ ("055 123 4567"); if one is wrongly caught, listening again without the hint costs a moment and still writes the digits."""
+    if not text or re.fullmatch(r"[\d\s,.\-]+", text) is None:
+        return False
+    groups = re.findall(r"\d+", text)
+    return sum(len(g) for g in groups) < 9 or any(a == b and len(a) >= 2 for a, b in zip(groups, groups[1:]))
+
+
 class EchoGuard:
     """Around a recogniser for one call. If the words it writes are the agent's own question, it listens again without the agent's sentence in the hint (the car names stay);
     if that is still the agent's question, nothing was understood and the caller is asked to repeat. Everything else is passed through unchanged."""
@@ -122,6 +133,11 @@ class EchoGuard:
 
     def transcribe(self, pcm16: bytes, prompt: str | None = None) -> tuple[str, float]:
         text, ms = self._engine.transcribe(pcm16, prompt)
+        if prompt and prompt.startswith(CONTACT) and is_short_digit_run(text):       # the digits hint was written down: listen again with no hint at all
+            self.retries += 1
+            again, ms2 = self._engine.transcribe(pcm16, "")
+            logger.debug("STT wrote the digits hint for a short answer: listened again without it")
+            return (again if again else UNCLEAR), ms + ms2
         line = self._agent_line() if self._agent_line else ""
         if not (text and line and echoes_agent(text, line)):
             return text, ms

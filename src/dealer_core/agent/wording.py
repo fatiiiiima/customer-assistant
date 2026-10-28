@@ -132,11 +132,15 @@ def ask_day(s: Session, c: CarView) -> str:
                                "Of course. What day and time suit you?"])
 
 
+def offer_slot_variants(day_said: str, times: str) -> list[str]:
+    cap = day_said[:1].upper() + day_said[1:]
+    return [f"{cap} I can do {times}. Which suits you better?", f"{cap} I've got {times}. Which works for you?",
+            f"The soonest is {day_said}: {times}. Which would you prefer?"]
+
+
 def offer_slots(s: Session, day_said: str, times: str, intro: str = "") -> str:
     """Real times offered instead of a question: "Tomorrow I can do 9 in the morning or 2 in the afternoon. Which suits you better?" `intro` (e.g. "There's nothing free today.") comes first."""
-    cap = day_said[:1].upper() + day_said[1:]
-    body = pick(s, "offer_slots", [f"{cap} I can do {times}. Which suits you better?", f"{cap} I've got {times}. Which works for you?",
-                                   f"The soonest is {day_said}: {times}. Which would you prefer?"])
+    body = pick(s, "offer_slots", offer_slot_variants(day_said, times))
     return f"{intro} {body}" if intro else body
 
 

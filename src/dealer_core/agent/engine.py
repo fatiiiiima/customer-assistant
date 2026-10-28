@@ -437,6 +437,15 @@ class AgentEngine:
         tool = decision.get("tool", "none")
         if tool not in TOOLS:
             tool = "none"
+        if tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
+            # 28 Oct: nothing is booked yet, a booking is only being arranged. "Do." (for "two") and "I want to change the time", said while times were on offer, went to the tools
+            # for bookings that exist and were answered "I don't see any test drives booked to move."
+            if tool == "reschedule_booking":
+                if s.draft_slot and re.search(r"\b(?:change|different|another|other|move)\b", joined_words):
+                    s.draft_slot = None                                      # "change the time": the time chosen so far is let go and times are offered again
+                tool = "prepare_booking"
+            else:
+                tool = "cancel_draft"
         if tool not in ("prepare_booking", "check_slots"):
             s.day_asks = 0                                                  # the booking talk was left: the next request for a day is a first ask again
         if uncertain and tool == "end_call":                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
@@ -910,7 +919,7 @@ class AgentEngine:
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "any day", "what's free": offer the next free times
             if not _CHANGE.search(" ".join(words)):
                 ct = ex.contact(text)
-                if w.found or ct.phone or (s.state is State.CONTACT and ct.name):
+                if w.found or ct.phone or (s.state is State.CONTACT and (ct.name or ct.heard_digits)):     # (digits that are not a whole number: ask again, do not leave it to the model)
                     return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}
         return None
 
@@ -957,6 +966,7 @@ class AgentEngine:
             cue = re.search(r"\b(?:my name is|this is|i am|i'm|name's|it's)\b", text, re.I)
             when_found = parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found
             args["phone"] = ct.phone
+            args["heard_digits"] = ct.heard_digits if not ct.phone else None
             asked_name = s.state is State.CONTACT or bool(re.search(r"\b(?:name|who should i put)\b", expected.last_question(s.last_agent()), re.I))
             # Without "my name is", the leading words are a name only when a name was asked for or a number comes with them
             # ("Mohammed, 050 ..."): "Yeah, I want to come and see it" after "Want to come and see it?" is not a name.
@@ -1451,6 +1461,10 @@ class AgentEngine:
                 return self._offer_next_slots(s, car, when)
             else:
                 problems.append("the day and time were not understood")
+        if args.get("heard_digits") and not s.draft_phone and s.draft_slot:       # 28 Oct: "050, 0790, 054, 056" for 0507932546 was dropped and the agent asked "Anything else you'd like to know?"
+            s.state = State.CONTACT
+            return {"core": "I didn't catch the whole number. Could you say it again, a few digits at a time?", "risk": "high", "awaiting": True,
+                    "facts": ["The mobile number was not heard completely (it is not a valid UAE number). Ask the customer to say it again, a few digits at a time."]}
         missing = [x for x, v in (("day and time", s.draft_slot), ("name", s.draft_name), ("mobile number", s.draft_phone)) if not v]
         s.state = State.SLOT if not s.draft_slot else State.CONTACT
         if missing and not s.draft_slot and not s.draft_name and not s.draft_phone:

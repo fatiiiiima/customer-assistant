@@ -156,12 +156,15 @@ class KokoroOV:
                     self._cache.popitem(last=False)
         return audio
 
-    def preload(self, phrases: list[str]) -> float:
-        """Render the phrases Wazir says all the time, before the first call (they then play with no wait)."""
+    def preload(self, phrases: list[str], first_only: list[str] = ()) -> float:
+        """Render the phrases Wazir says all the time, before the first call (they then play with no wait). For `first_only` just the first piece of each is rendered: the openings of
+        sentences whose rest changes every time ("Today I can do" ... the times), so the first sound has no wait and the rest is made while it plays."""
         t0 = time.perf_counter()
         for p in phrases:
             for piece in first_piece_split(p):
                 self._say(piece)
+        for p in first_only:
+            self._say(first_piece_split(p)[0])
         return time.perf_counter() - t0
 
     def warm_up(self) -> None:

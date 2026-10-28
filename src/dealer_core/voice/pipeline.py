@@ -59,8 +59,21 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     stt.warm_up()
     tts.warm_up()
     if hasattr(tts, "preload"):                         # the phrases said all the time play with no wait
-        tts.preload(common_phrases(cfg))
+        tts.preload(common_phrases(cfg), first_only=slot_offer_openings())
     return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
+
+
+def slot_offer_openings() -> list[str]:
+    """The sentences that offer test-drive times, as agent/wording.py writes them, with sample times: only their first piece is rendered in advance (voice/kokoro_tts.py first_only).
+    The first piece is the first four words, so it can be kept ahead of time where the day is the only thing that varies ("Today I can do", "The soonest is today:"), and not where a
+    time comes in the first four words ("Today I've got 9"). Measured 28 Oct: about 0.35 s to the first sound of every slot offer."""
+    from ..agent.wording import offer_slot_variants
+
+    days = ["today", "tomorrow"] + [f"on {d}" for d in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")]
+    out: list[str] = []
+    for d in days:
+        out += [v for v in offer_slot_variants(d, "9 in the morning or 2 in the afternoon") if "9" not in " ".join(v.split()[:4])]
+    return out
 
 
 def common_phrases(cfg: Config) -> list[str]:

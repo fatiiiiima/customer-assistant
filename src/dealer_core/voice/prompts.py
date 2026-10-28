@@ -14,7 +14,11 @@ from ..nlu.expected import last_question
 
 DAY_TIME = ("any day, whenever, as soon as possible, the earliest, tomorrow, today, this afternoon, tonight, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday, "
             "morning, afternoon, evening, two in the afternoon, at ten, at four thirty, test drive")
-CONTACT = "050, 055, 056, 052, double five"        # no "my name is": Whisper continues a primed phrase and loops on it ("my name is, my name is, ...")
+# no "my name is": Whisper continues a primed phrase and loops on it ("my name is, my name is, ...").
+# "no, yes, not now" are there because a hint of digits alone makes the base recogniser write the digits for any short answer: measured 28 Oct on synthetic speech with this room's
+# noise, "No, thanks." / "Not now." / "My name is Omar." came back as "050, 056, 056, 056, ..." with digits alone and right with these three words added; whole phone numbers were
+# recognised the same (14 of 14 with both). In the owner's call, a real "No." at the "mobile number?" question was heard as "050, 056, 056, 0" and the agent went on to ask for a name.
+CONTACT = "050, 055, 056, 052, double five, no, yes, not now"
 CONFIRM = "yes, no, that's right, that's correct, change the time, a different day"
 _ASKS_WHEN = re.compile(r"(?:\bwhat day|which day|what time|which time|when|works better|suits you|day suits|day and time)\b")
 
