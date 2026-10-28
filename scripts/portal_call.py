@@ -29,9 +29,15 @@ FRAME = 320                                                # 20 ms of 16 kHz
 
 
 def caller_audio(lines: list[str], voice: str) -> list[np.ndarray]:
-    from dealer_core.voice.tts import PiperSherpa
+    """The caller's voice: a Piper voice name (default amy), or kokoro:<voice> on a machine that has only the Kokoro model (pick one other than the agent's)."""
+    if voice.startswith("kokoro:"):
+        from dealer_core.voice.kokoro_tts import KokoroOV
 
-    tts = PiperSherpa(ROOT / "models", voice)
+        tts = KokoroOV(ROOT / "models", voice.split(":", 1)[1])
+    else:
+        from dealer_core.voice.tts import PiperSherpa
+
+        tts = PiperSherpa(ROOT / "models", voice)
     return [(np.clip(soxr.resample(tts.synthesize(t), tts.sample_rate, 16000), -1, 1) * 32767).astype(np.int16) for t in lines]
 
 
