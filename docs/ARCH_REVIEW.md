@@ -542,4 +542,23 @@ Replay of the call's ten caller lines through the engine with a model that never
 
 **Why the call was slow (4 to 5 s on the model-written turns, 0.7 to 0.9 s on the others).** At `--quality full` every answer about a car is written whole by the model: on this laptop about 1.6 s to its first sentence (section 23), after a decision call of about 1 s on turns the code cannot route, one request at a time. The code-answered turns (the slot offer, the read-back) were 0.7 to 0.9 s. The default (`--quality auto`) would have put this laptop on the prefix level (the code's facts at once). And the test instructions I gave left the 4.5 s whole-reply deadline on, which cut the longer Phase 3 replies after their first clause and produced faults 2 and 3; `VA__VOICE__REPLY_DEADLINE_MS=10000` avoids the cut on this machine at the cost of a longer wait.
 
-Not yet done: the same ten lines with the real model (`scripts/replay_model_speaks.py --only testcall`); the owner's model server was serving a live call when this was written. The worker that took the call runs the code before these fixes and must be restarted to have them.
+### 24a. The call replayed with the real model (MLX, the laptop; `replay_model_speaks.py --only testcall`, first-sentence deadline off, whole-reply deadline 4.5 s and 10 s)
+
+The replay script's clock is 11:00 on 27 Oct, not the call's 21:00 on 28 Oct, so the times on offer were today's 12 PM and 4 PM instead of tomorrow's 9 AM and 2 PM. That difference exposed a worse fault than the five above, and the replay found two more:
+
+| # | Seen in the replay | Cause | Fix |
+|---|---|---|---|
+| 6 | With 12 and 4 PM offered, "9 in the morning." → "Perfect, today at 12 PM" and the read-back booked **12 PM, a time the caller never said** | `parse_when` did not read a digit followed by "in the morning / afternoon / evening" (the way the agent itself offers times: "9 in the morning or 2 in the afternoon"), and `_offered_pick` then took "morning" as "the earlier offered time". In the real call 9 AM was on offer, so the hour matched and this was hidden | the parser reads "9 in the morning", "2 in the afternoon", "10 at night"; a named hour that was not offered never picks an offered one; the word "one" in "the morning one" no longer counts as 1 o'clock |
+| 7 | "The 2019 BMW X5 is white, and here is the full picture." on two turns in a row | the model copied "360° camera" from the car's own facts and the sentence check refused the "°", cutting the reply after its first clause | the degree sign is allowed (the code's own wording already says "360° camera") |
+| 8 | the same cut, again, after the "°" fix | the model wrote "8.9 L/100 km"; the check refuses the "/" (correctly: the voice would say "slash") | `clean_draft` turns "N L/100 km" into "N litres per hundred kilometres" and "N km/h" into "N kilometres an hour" before the check |
+
+**Correction to the paragraph above.** I put faults 2 and 3 down to the 4.5 s whole-reply deadline. The replay does not support that: with all fixes, the 4.5 s run and the 10 s run gave the same whole replies, with no cut. Faults 7 and 8, characters copied from the facts and refused, explain the cuts in this replay. Whether the deadline also cut replies in the live call is unknown (the live worker's notes were not kept).
+
+After the fixes, both runs:
+
+* "I want to hear more about the BMW X5." → "The 2019 BMW X5 is white, with 5 seats, 650-litre boot, 340 hp, and 8.9 litres per hundred kilometres. It's accident-free, with full service history and 146 out of 150 checks passed. Would you like to come and see it?" (the invitation is due, so it is asked)
+* "Tell me more about it." → "The 2019 BMW X5 has a 3.0-litre I6 turbo engine with 340 horsepower, Panoramic Sky Lounge, heated seats, 360° camera, and gesture control. It's white, with 71,000 km and 2 previous owners." (whole; no question forced. It says "340 horsepower" and "white" again: the not-repeating memory records the groups the code told, not what the model said. Not fixed.)
+* "I want to see the car." → "Sure! What day would you like to come in?"; "9 in the morning." (9 AM already past on this clock) → "That's a bit too soon. How about today at 12:00 PM or today at 1:00 PM?". The scripted caller then gives a name, not a time, so nothing is booked, which is correct here. The booking on the first "yes, please book it" is shown with the call's own clock in `test_test_call_28oct.py`.
+* Model-written replies 2, fell back 0, guard stops 0, spoken leaks 0; first sentence median 1,532 ms (4.5 s run) and 1,454 ms (10 s run), two replies each, laptop.
+
+Tests: `test_test_call_28oct.py` now 36; each fix fails some when removed. `pytest tests/unit`: 1,024 passed, 40 skipped. The worker that took the call runs the code before these fixes and must be restarted to have them.
