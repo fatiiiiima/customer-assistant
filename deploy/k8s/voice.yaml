@@ -89,6 +89,7 @@ spec:
             - { name: VA__VOICE__STT_URL, value: "http://stt-server:8000/v1" }        # recognition on the GPU service, not in the worker
             - { name: VA__VOICE__STT_REMOTE_MODEL, value: "openai/whisper-large-v3-turbo" }
             - { name: VA__VOICE__MODEL_ONLY, value: "false" }      # production: never a test mode (a short model turn is completed by code)
+            - { name: VA__DIALOGUE__DECISION_BACKEND, value: "gpu_server" }   # the tool decisions go to the same vLLM as the replies (--backend below); the default is the Intel-GPU model
           command: ["sh", "-c"]
           args: ["python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16
                   --worker-id $POD_NAME --public-url wss://voice.agmc.ae/w/$POD_IP/voice --origin https://www.agmc.ae"]

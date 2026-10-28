@@ -31,6 +31,7 @@ services:
       STATE_URL: postgresql://postgres:change-me@postgres:5432/agmc
       VA__VOICE__STT_URL: http://stt-server:8000/v1
       VA__VOICE__STT_REMOTE_MODEL: openai/whisper-large-v3-turbo
+      VA__DIALOGUE__DECISION_BACKEND: gpu_server   # the tool decisions go to the same vLLM as the replies (--backend below); the default is the Intel-GPU model
       VA__VOICE__MODEL_ONLY: "false"   # production: a turn the model leaves short is completed with the code's own facts and question (model_only is a test mode)
     command: ["sh", "-c", "python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16 --worker-id $$HOSTNAME --public-url ws://$$HOSTNAME:8765/voice --origin https://www.agmc.ae"]
     volumes: [./models:/app/models:ro, ./site:/site:ro]
