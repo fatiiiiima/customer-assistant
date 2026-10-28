@@ -16,6 +16,10 @@ answer: the whole object, reply included (it is not streamed). The session then 
 `--first-sentence` also runs the whole turn both ways on copies of the session at the full level (the model writes) and times the first spoken sentence, which is what a caller waits for:
 two-call = decision + the writer's first sentence, one-call = the one request (+ the writer only when the checks refuse its reply).
 
+CAVEAT ON `--first-sentence`: each whole turn runs right after the measurement of the same turn, so the server has just read the two-call decision's prompt. On Ollama (this laptop) that
+decision took about 115 ms when its prompt was already read against about 265 ms when it was not (MEASURED, 4 pairs, 28 Oct), and an unrelated request in between did NOT make it cold (124 ms),
+so the two-call figure here is the optimistic one. The one-call figure does not move (about 1.55 s either way: its time is decoding, not reading the prompt).
+
 The times are the times of whatever machine and backend this runs on. On a laptop they are laptop times. Nothing here is a production number. Caller words are printed with long digit runs masked.
 """
 from __future__ import annotations
