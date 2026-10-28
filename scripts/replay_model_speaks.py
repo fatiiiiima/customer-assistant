@@ -34,6 +34,8 @@ TELL_ME = [("Porsche.", None), ("Yes, tell me about the Macan.", None), ("Tell m
            ("Tell me more about its history.", "history"), ("What about the fuel economy?", "litres"), ("How many owners has it had?", "owner"),
            ("Tell me more about the interior.", "interior")]
 BOOKS = {0, 1, 3}
+TEST_CALL = ["I'm looking for a BMW.", "Any budget, any model?", "I want to hear more about the BMW X5.", "Tell me more about it.", "I want to see the car.",
+             "I want to see the car, I want to go on a test drive.", "Any day works.", "9 in the morning.", "Fatima 050, 793, 2546", "yes, please book it"]   # the owner's 28 Oct call
 # A rough diagnostic, not a check: phrases that judge or embellish rather than state ("known for strong performance", "practical for weekend drives"). The fact checks
 # do not catch these (no number, name or commercial term in them); the prompt forbids praise. Counted so a listening test knows where to look.
 PRAISE = re.compile(r"\b(?:known for|perfect for|ideal for|great for|enough for|making it|makes it|strong|responsive|smooth|comfortable|spacious|luxurious|sporty|"
@@ -57,6 +59,7 @@ def main() -> int:
     ap.add_argument("--portal-data", type=Path, default=ROOT.parent / "bmw-portal" / "site" / "data.js")
     ap.add_argument("--no-deadline", action="store_true", help="judge correctness, not speed: no first-sentence deadline and a 10 s reply deadline (on this laptop the full prompt "
                     "takes longer than the live 1.5 s, so with the deadline every reply falls back to the code's wording). The time to the first sentence is still recorded")
+    ap.add_argument("--reply-deadline-s", type=float, default=None, help="with --no-deadline: the whole-reply deadline instead of 10 s (the owner's test call ran with 4.5 s)")
     ap.add_argument("--show", action="store_true", help="print every turn")
     ap.add_argument("--only", default="", help="run only the conversations whose name starts with this (mix, tell-me-more, call)")
     ap.add_argument("--out", type=Path, default=ROOT / "logs" / "replay_model_speaks.json")
@@ -78,7 +81,7 @@ def main() -> int:
     e = app.engine
     e.model_speaks = not a.off
     if a.no_deadline and e.reply_writer is not None:
-        e.reply_writer.first_deadline_s, e.reply_writer.deadline_s = None, 10.0
+        e.reply_writer.first_deadline_s, e.reply_writer.deadline_s = None, a.reply_deadline_s or 10.0
     names = guards.car_names(app.inventory.vocabulary())
 
     seen: dict = {}
@@ -90,7 +93,7 @@ def main() -> int:
         return core, awaiting, facts
 
     e._speaking_input = recording_input
-    conversations = [("mix%d" % i, [(t, None) for t in c]) for i, c in enumerate(MIX)] + [("tell-me-more", TELL_ME)] + \
+    conversations = [("mix%d" % i, [(t, None) for t in c]) for i, c in enumerate(MIX)] + [("tell-me-more", TELL_ME), ("testcall", [(t, None) for t in TEST_CALL])] + \
                     [("call%02d" % i, [(t, None) for t in c]) for i, c in enumerate(heard_lines(ROOT / "logs" / "audio_dump"))]
     conversations = [c for c in conversations if c[0].startswith(a.only)]
     stats = {"model_speaks": not a.off, "deadlines": "off (correctness run)" if a.no_deadline else "live", "conversations": 0, "turns": 0, "model_replies": 0, "fell_back": 0, "guard_stops": 0, "spoken_leaks": 0, "ends_on_question": 0,
