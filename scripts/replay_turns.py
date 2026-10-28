@@ -145,7 +145,9 @@ def replay_call(engine, texts: list[str], first_sentence: bool = False, alternat
             row.update(route="model", two=(two.get("tool"), two.get("car_id")), one=(one.get("tool"), one.get("car_id")), two_ms=measured["two_ms"], one_ms=measured["one_ms"],
                        two_error=two.get("error"), one_error=one.get("error"), one_note=one.get("single", {}),
                        say=bool(one.get("say")), say_chars=len(one.get("say") or ""))
-            row["agree"] = same_action(row["two"], row["one"]) and not (row["two_error"] or row["one_error"])
+            failed = bool(row["two_error"] or row["one_error"])
+            row["agree"] = same_action(row["two"], row["one"], before.car) and not failed              # a decision that names no car means the car in focus, as in the engine
+            row["agree_strict"] = same_action(row["two"], row["one"]) and not failed                    # ...and with the car compared as written
             if first_sentence:
                 row["fs_two"], row["fs_one"] = measured["fs_two"], measured["fs_one"]
         rows.append(row)
@@ -173,6 +175,7 @@ def summarise(rows: list[dict], decide_deadline_ms: float = 1200.0, single_deadl
     out = {
         "turns": len(rows), "routed_by_code": len(rows) - len(model), "decided_by_the_model": len(model), "agree_on_model_turns": len(agree),
         "agree_share_model_turns": (len(agree) / len(model)) if model else None,
+        "agree_strict_on_model_turns": sum(1 for r in model if r["agree_strict"]),
         "agree_share_all_turns": ((len(rows) - len(model) + len(agree)) / len(rows)) if rows else None,
         "disagreements": [{"turn": r["turn"], "words": r["words"], "two_call": r["two"], "one_call": r["one"], "two_error": r.get("two_error"), "one_error": r.get("one_error"),
                            "malformed": r["one_note"].get("malformed")} for r in model if not r["agree"]],

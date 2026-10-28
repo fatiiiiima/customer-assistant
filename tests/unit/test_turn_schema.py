@@ -73,3 +73,9 @@ def test_same_action_looks_at_the_car_only_where_the_action_is_about_a_car():
     assert not same_action(("get_car", "AG-101"), ("search_cars", None))
     assert same_action(("search_cars", None), ("search_cars", "AG-101"))          # a car on an action that is not about one means nothing
     assert same_action(("get_car", ""), ("get_car", None))
+
+
+def test_a_decision_with_no_car_means_the_car_in_focus():
+    assert same_action(("prepare_booking", None), ("prepare_booking", "AG-114"), default_car="AG-114")
+    assert not same_action(("prepare_booking", None), ("prepare_booking", "AG-114"), default_car="AG-122")
+    assert not same_action(("prepare_booking", None), ("prepare_booking", "AG-114"))

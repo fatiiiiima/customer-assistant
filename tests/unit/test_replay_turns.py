@@ -58,6 +58,12 @@ class TestReplay:
         assert summary["disagreements"][0]["two_call"] == ("get_car", "AG-122") and summary["disagreements"][0]["one_call"] == ("none", None)
         assert summary["agree_share_all_turns"] == 0.5                                # the code-routed turn agrees by construction
 
+    def test_a_car_named_by_only_one_path_is_the_car_in_focus_not_a_disagreement(self):
+        fake = Fake([turn(car="AG-122")], decision="get_car")                             # the two-call decision names no car: the engine uses the one in focus
+        _, rows = self.run(fake, ["a bmw m3", WORDS])
+        assert rows[1]["agree"] and not rows[1]["agree_strict"]
+        assert script().summarise(rows)["agree_strict_on_model_turns"] == 0
+
     def test_a_malformed_one_call_answer_is_reported_and_is_not_a_disagreement_of_the_action(self):
         fake = Fake(["banana"], decision="get_car AG-122")
         _, rows = self.run(fake, ["a bmw m3", WORDS])

@@ -92,8 +92,9 @@ def parse_turn(raw: str, actions: tuple[str, ...] | list[str], car_ids: list[str
     return Turn(action, car, say)
 
 
-def same_action(a: tuple[str, str | None], b: tuple[str, str | None]) -> bool:
-    """Do two decisions (action, car) choose the same action? The car only matters for the actions that act on one car."""
+def same_action(a: tuple[str, str | None], b: tuple[str, str | None], default_car: str | None = None) -> bool:
+    """Do two decisions (action, car) choose the same action? The car only matters for the actions that act on one car, and a decision that names none means the car in focus
+    (`default_car`): that is what the engine does with it (`AgentEngine._car_arg`)."""
     if a[0] != b[0]:
         return False
-    return a[0] not in ("get_car", "check_slots", "prepare_booking") or (a[1] or None) == (b[1] or None)
+    return a[0] not in ("get_car", "check_slots", "prepare_booking") or (a[1] or default_car or None) == (b[1] or default_car or None)
