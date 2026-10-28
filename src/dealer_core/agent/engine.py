@@ -31,7 +31,7 @@ from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
 from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
-from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, fact_sheet, is_generic_closer, promise_in, verify_sentence
+from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -41,6 +41,13 @@ from ..tools.results import BookingKind
 from ..tools.service import DealerService
 
 _PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
+# A yes to "Shall I book it?" that names the booking (28 Oct, the owner's test call: "yes, please book it" was not a plain yes, the model was too slow, and the code
+# answered with the car's facts and another invitation). Used only while a read-back waits for the answer.
+_BOOK_YES = re.compile(r"(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|right|correct)(?: please)? )*(?:please )?"
+                       r"(?:go ahead(?: and (?:book|confirm)(?: it| that)?)?|(?:book|confirm)(?: it| that| me in| the (?:test drive|booking)| a test drive| the test drive)?)"
+                       r"(?: please| for me| thanks| thank you)*")
+# "I want to see the car" right after an invitation to come and see it (same call): a visit, not more facts. Alone it can mean the photos (section 12), so only after one.
+_SEE_CAR = re.compile(r"\b(?:see|look at|view|check out) (?:the car|this car|that car|it|her|the (?!(?:photos?|pictures?|pics|images?|videos?)\b)\w+)\b(?! (?:photos?|pictures?|pics|images?|videos?)\b)")
 _CHANGE = re.compile(r"\b(?:no|not|change|different|another|other|cancel|wait|actually|instead|but)\b")
 _VALUE = re.compile(r"\b(?:good price|fair price|good deal|worth it|worth the|too expensive|expensive|too much|overpriced|pricey)\b")
 _ATTRIBUTE = {"km": re.compile(r"\b(?:kilomet\w*|km|mileage|miles|done|driven)\b"), "colour": re.compile(r"\b(?:colou?r)\b"),
@@ -137,6 +144,9 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     if not bare[:1].isupper() or sum(ch.isupper() for ch in bare) >= 2 or any(ch.isdigit() for ch in bare) or word in _KEEP_CAPS or word in proper or word.split("'")[0] in proper:
         return text
     return text[0].lower() + text[1:]
+
+
+FINISHED_CLAUSE = "and that's the main thing."         # ends a reply cut after a clause when everything the code would add was already said
 
 
 def _rounding_off(said: str) -> str:
@@ -563,8 +573,13 @@ class AgentEngine:
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:
                     # What was said cannot be taken back, so the repair finishes that thought and then gives the facts as a sentence of their own (it used to say
-                    # "...black, That is: that's a 2016 Macan, black, ...", a restart in the middle of a sentence).
-                    for part in (_rounding_off(spoken[-1]), core_facts):
+                    # "...black, That is: that's a 2016 Macan, black, ...", a restart in the middle of a sentence). After a finished clause, a fact the caller has just heard is
+                    # not said again (28 Oct test call: "...340 horsepower, and here is the full picture. It has a 3.0-litre I6 turbo engine with 340 horsepower.").
+                    rest = core_facts
+                    if spoken[-1].rstrip().endswith(","):
+                        heard = " ".join(spoken)
+                        rest = " ".join(x for x in voice_rules.sentences(core_facts) if not covers(heard, x))
+                    for part in ((_rounding_off(spoken[-1]), rest) if rest else (FINISHED_CLAUSE,)):
                         spoken.append(part)
                         yield part
                 close = self._split_core(core)[1] if speaks else (core_q or W.anything_else(s))
@@ -651,6 +666,17 @@ class AgentEngine:
             if not set(o.lower().strip(",.").split()) & set(first.lower().replace(",", "").split()[:8]):
                 return o
         return ""
+
+    @staticmethod
+    def _confirms(words: str) -> bool:
+        """A yes to the read-back: "yes", "yes please", and also "yes, please book it", "go ahead", "book it", "confirm it"."""
+        return bool(_PLAIN_YES.fullmatch(words) or _BOOK_YES.fullmatch(words))
+
+    @staticmethod
+    def _invited_recently(s: Session) -> bool:
+        """Did one of the agent's last two replies invite the caller to come and see the car or to book a test drive?"""
+        agent = [t for who, t in s.history if who == "agent"][-2:]
+        return any(W.INVITES.search(t.lower()) for t in agent)
 
     def _car_words(self) -> set[str]:
         if not hasattr(self, "_car_word_set"):
@@ -794,6 +820,14 @@ class AgentEngine:
         """The action when the model is not asked (overloaded or too slow): a search if the words say what to look for, the car being discussed
         if there is one, otherwise a guiding question."""
         words = " ".join(ex.tokens_of(text))
+        if s.read_back:                                                    # "Shall I book it?" is waiting: never answer with the car's facts (28 Oct test call)
+            if self._confirms(words):
+                return {"tool": "confirm_booking", "via": "rules"}
+            if re.match(r"(?:no|nope|not quite|wrong|that's wrong|actually)\b", words):
+                return {"tool": "fix_booking", "via": "rules"}
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # not clear: the details are read back again and the question asked again
+        if s.state in (State.SLOT, State.CONTACT) or s.draft_slot:
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # a booking is being arranged: carry on with it (it asks for what is missing), not the car's facts
         if ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words):
             return {"tool": "search_cars", "via": "rules"}
         if s.car:
@@ -949,6 +983,8 @@ class AgentEngine:
             return {"tool": "search_cars", "via": "rules"}                       # "something cheaper", "anything with seven seats", "something sporty"
         if not booking_flow and s.car and _BOOKING_CUE.search(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "can I see it this weekend?"
+        if not booking_flow and s.car and _SEE_CAR.search(joined) and self._invited_recently(s):
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "I want to see the car" after "Would you like to come and see it?"
         if not booking_flow:
             if A.showroom_topics(joined) and not _BOOKING_CUE.search(joined) and not re.search(r"\bmy (?:number|phone|mobile|whatsapp|email)\b", joined):
                 return {"tool": "showroom_info", "via": "rules"}
@@ -965,7 +1001,7 @@ class AgentEngine:
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or detail)
                 and not _BOOKING_CUE.search(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
-        if s.state is State.CONFIRM and s.read_back and _PLAIN_YES.fullmatch(" ".join(words)):
+        if s.state is State.CONFIRM and s.read_back and self._confirms(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
         if s.read_back and re.match(r"(?:no|nope|not quite|wrong|that's wrong|actually)\b", joined):
             return {"tool": "fix_booking", "via": "rules"}                         # "no, the name is Omer" / "no, it's 055..." / "no"
