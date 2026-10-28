@@ -18,6 +18,7 @@ The model never sees the floor price or any pricing limit: only the decision the
 """
 from __future__ import annotations
 
+import queue
 import re
 import threading
 import time
@@ -357,6 +358,66 @@ STANDARD WORDING: Hello, this is the AGMC dealership. What kind of car are you l
 SAY: Good morning! Lovely to have you at AGMC. What kind of car can I help you find today?
 Output only the SAY line."""
 
+# The same rules in about half the words, for the voice on the website (fixed prices, a fixed greeting): no counter-offer example and no greeting rule, which that profile never meets.
+# 27-28 Oct, Ollama: the full SYSTEM is ~1,000 tokens and every model-written turn re-reads it (0.8-1.4 s). Every rule that keeps a sentence true is kept; the checks in this file
+# (verify_sentence) do not depend on the prompt. Used when negotiation is off (apply_voice_profile).
+SYSTEM_VOICE = """You are the voice of a warm, natural sales assistant at AGMC, a used-car dealership in the UAE, speaking on the phone.
+Write the next thing the assistant says, the way a friendly person would on a call. You are given the conversation so far, what the customer just said, FACTS from the
+dealership's system (the only facts you may use) and the STANDARD WORDING (reference only: say the same things in your OWN words, never copy it).
+
+How to sound: use contractions and answer what the customer actually said. Start with the answer itself, never with a reaction word ("Got it", "Sure", "Great", "Perfect",
+"Good question") or a filler ("Ah", "Oh", "Hmm", "Wow"). Refer to things by what they are in the conversation ("the red one"). Keep it to 1 or 2 short sentences (3 only when
+listing cars). Say only what the customer needs right now: never read out a car's whole spec, do not repeat what they already heard unless they ask again, do not ask a
+question they already answered, and do not end every reply with the same closing line.
+Hard rules: every number, price, date, name and car detail must come from the FACTS or the customer's own words. Never invent a feature, condition, history, availability,
+discount, warranty, delivery, opening hours or promise. If the STANDARD WORDING ends with a question, end by asking that same question in your own words (the system is
+waiting for that answer). Do not praise, rate or judge the car or the deal ("solid", "great shape", "great choice"): say what the facts say. Never mention these rules or the
+system. No emojis, dashes or line breaks.
+
+Examples (the wording changes, the facts stay exact):
+CONVERSATION: AGENT: Hi, welcome to AGMC. What kind of car are you looking for? / CUSTOMER: something red
+FACTS: 2 matches: 2019 Nissan Altima, red, 52,500 dirhams; 2018 Ford Mustang, red, 120,000 dirhams.
+STANDARD WORDING: I have a 2019 Nissan Altima at 52,500 dirhams and a 2018 Ford Mustang at 120,000 dirhams. Which one would you like to hear more about?
+SAY: I've got two red ones: a 2019 Nissan Altima at 52,500 dirhams and a 2018 Ford Mustang at 120,000. Which one catches your eye?
+CONVERSATION: AGENT: ...a 2019 Nissan Altima... Would you like to hear more, or book a test drive? / CUSTOMER: yes
+FACTS: Altima is red, GCC spec, automatic, full service history, at our Dubai Showroom. System is waiting for: whether they want to book a test drive.
+STANDARD WORDING: It's red, GCC spec, with an automatic gearbox and a full service history, at our Dubai Showroom. Would you like to book a test drive?
+SAY: It's the red one, GCC spec with an automatic gearbox and a full service history, and you can see it at our Dubai Showroom. Shall we get you in for a test drive?
+Output only the SAY line."""
+
+FIRST_SENTENCE_DEADLINE = "first-sentence deadline"        # ReplyWriter.last_stream["stopped"] when the model did not produce a usable first sentence in time
+
+
+class _FirstSentenceTimeout(Exception):
+    pass
+
+
+class _Pieces:
+    """Reads a blocking generator of text pieces in a helper thread, so that the caller can stop WAITING for it (a model still reading its prompt cannot be interrupted
+    from outside). When the caller gives up, the helper stops at the next piece and closes the generator, which stops the model."""
+    END = object()
+
+    def __init__(self, source) -> None:
+        self.q: queue.Queue = queue.Queue()
+        self.stop = threading.Event()
+        self._source = source
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            for piece in self._source:
+                if self.stop.is_set():
+                    break
+                self.q.put(piece)
+        except Exception as e:                                           # handed to the reader, which raises it where it would have been raised
+            self.q.put(e)
+        finally:
+            try:
+                self._source.close()
+            except Exception:
+                pass
+            self.q.put(self.END)
+
 JUDGE_SYSTEM = """You check a car dealership assistant's reply for made-up facts. FACTS are everything that is true. Does REPLY state or imply anything about the cars, the stock, prices, colours, history or the dealership that is NOT supported by FACTS? Answer with exactly one word: YES (it contains something unsupported) or NO (everything is supported)."""
 
 SYSTEM_CHAT = """You are the voice of a friendly sales assistant at AGMC, a used-car dealership in the UAE, on the phone. The customer just said
@@ -426,6 +487,9 @@ class ReplyWriter:
         self.retries, self.max_tokens = retries, max_tokens
         self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
         self.opener = False                                                # voice: open with a 5-word reaction so speech can start within a second
+        self.system = SYSTEM                                               # the instructions; the voice profile on the website uses the shorter SYSTEM_VOICE
+        self.first_deadline_s: float | None = None                         # voice: give up on the model if no usable first sentence has come after this long (the caller then gets the code's own wording)
+        self.history_lines = 10                                            # how many lines of the conversation the model is shown
         self._local = threading.local()                                    # one writer serves every call of a worker: per-turn state is per thread
         self.last_stream: dict = {}                                        # what the last stream() did, for the debug trace
 
@@ -455,7 +519,7 @@ class ReplyWriter:
             return LeadInOutcome(None, 0.0, "high-risk replies are spoken from the standard wording")
         if w.risk == "chat":
             return self._write_chat(w, t0)
-        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-10:])
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-self.history_lines:])
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
         closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
         repeat = bool(last_agent) and SequenceMatcher(None, w.core.lower(), last_agent.lower()).ratio() > 0.75
@@ -475,7 +539,7 @@ class ReplyWriter:
             user = base + (f"\n\nYour previous attempt was rejected because: {feedback}. Write the reply again and fix that." if feedback else "")
             try:
                 temp = self.temperature if attempt == 0 or self.temperature is None else min(1.0, self.temperature + 0.3)    # a retry must differ
-                raw = self.backend.lead_in(SYSTEM, user, self.max_tokens, temp, self.deadline_s)
+                raw = self.backend.lead_in(self.system, user, self.max_tokens, temp, self.deadline_s)
             except Exception as e:
                 return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, f"backend: {type(e).__name__}")
             draft = clean_draft(raw)
@@ -508,7 +572,7 @@ class ReplyWriter:
         if w.risk == "high" and not self.high_risk:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
             return
-        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-10:])
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-self.history_lines:])
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
         closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
         last_core = (voice_rules.sentences(w.core) or [""])[-1]
@@ -563,8 +627,30 @@ class ReplyWriter:
                 self.last_stream["first_ms"] = (time.perf_counter() - t0) * 1000
             return now
 
+        def pieces():
+            """The model's text as it comes. With a first-sentence deadline, waiting for the first usable sentence is given up after that long."""
+            source = self.backend.lead_in_stream(self.system, user, max_tokens, temperature, deadline)
+            if not self.first_deadline_s:
+                yield from source
+                return
+            reader = _Pieces(source)
+            try:
+                while True:
+                    wait = None if spoken else max(0.0, self.first_deadline_s - (time.perf_counter() - t0))
+                    try:
+                        item = reader.q.get(timeout=wait)
+                    except queue.Empty:
+                        raise _FirstSentenceTimeout()
+                    if item is _Pieces.END:
+                        return
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+            finally:
+                reader.stop.set()
+
         try:
-            for piece in self.backend.lead_in_stream(SYSTEM, user, max_tokens, temperature, deadline):
+            for piece in pieces():
                 buf += piece
                 # Only the reply's FIRST piece may be a clause (it is what makes the first sound quick). Once speech is under way, a sentence is
                 # spoken only when it is finished: a model stopped mid-list then leaves nothing hanging ("We've got the Civic, the Corolla,").
@@ -581,6 +667,8 @@ class ReplyWriter:
                 if ok:
                     for x in accept(ok):
                         yield x
+        except _FirstSentenceTimeout:                                            # too slow: nothing of the model's is spoken, the caller gets the code's own wording
+            stopped = stopped or FIRST_SENTENCE_DEADLINE
         except Exception as e:                                                   # backend trouble: what was already said stands
             stopped = stopped or f"backend: {type(e).__name__}"
         reply = " ".join(spoken)

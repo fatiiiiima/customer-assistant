@@ -8,8 +8,12 @@ from dealer_core.config import load_config
 
 def test_the_defaults_are_the_production_behaviour():
     v = load_config(environ={}).voice
-    assert v.model_only is False and v.early_start_secs == 0.2 and v.tap_grace_secs == 2.0
+    assert v.model_only is False and v.early_start_secs == 0 and v.tap_grace_secs == 2.0     # the early start is off: it cost hearing (docs/ARCH_REVIEW.md section 10)
     assert load_config(environ={"VA__VOICE__MODEL_ONLY": "true"}).voice.model_only is True          # the test mode is still one setting away
+
+
+def test_the_early_start_can_still_be_turned_on_for_trials():
+    assert load_config(environ={"VA__VOICE__EARLY_START_SECS": "0.2"}).voice.early_start_secs == 0.2
 
 
 def test_every_change_can_be_switched_off_with_one_setting():

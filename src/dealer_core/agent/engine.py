@@ -30,7 +30,7 @@ from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
 from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
-from ..dialogue.writer import _DONE, split_point, ReplyWriter, WriterInput, fact_sheet, promise_in, verify_sentence
+from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, fact_sheet, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -323,9 +323,10 @@ class AgentEngine:
         finally:
             if gen is not None and hasattr(gen, "close"):
                 gen.close()                                              # stops the model: only the first sentence is wanted
-        if first is None:
-            return None
         ms = (time.perf_counter() - t0) * 1000
+        if first is None and self.reply_writer.last_stream.get("stopped") != FIRST_SENTENCE_DEADLINE:
+            return None
+        # (a model that missed the first-sentence deadline is measured at the deadline: "at least this slow", which is all the governor needs to keep it off the `full` level)
         if record and self.governor is not None:
             self.governor.record_probe(ms)
         return ms
@@ -507,6 +508,10 @@ class AgentEngine:
                 dbg.lead_ms = info.get("first_ms", 0.0)
                 if info.get("stopped"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
+                if info.get("stopped") == FIRST_SENTENCE_DEADLINE:        # the model is slow, not wrong: asking again would only double the wait. The code's own wording follows below,
+                    if self.governor is not None:                           # and the governor learns at once that the model-written level does not fit right now
+                        self.governor.record_full((time.perf_counter() - t_write) * 1000)
+                    break
                 if len(spoken) > (1 if lead else 0):
                     break
             if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
@@ -947,8 +952,12 @@ class AgentEngine:
         out = fn(s, args, text, dbg)
         out.setdefault("risk", "low")
         out.setdefault("awaiting", False)
-        context = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams{self._spec_facts(c)}" for c in ([self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []) + list(s.shown)][:5]
-        out["facts"] = [f"What the customer wanted: {tool.replace('_', ' ')}.", *out.get("facts", []),
+        # What the model is given, once each (27 Oct: the car in focus was listed twice, as the focus and as one of the cars shown, and "prices are fixed" was said in two wordings;
+        # about 150 tokens read by the model on every turn for nothing). The tool's own weaker price line is dropped in favour of the stronger one below.
+        focus = [self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []
+        unique = list({c.stock_id: c for c in focus + list(s.shown)}.values())
+        context = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams{self._spec_facts(c)}" for c in unique][:5]
+        out["facts"] = [*[f for f in out.get("facts", []) if not f.startswith("Prices are fixed (no negotiation)")],
                         "Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'.",
                         *(["Cars in this call (true facts you may use):", *context] if context else [])]
         return out

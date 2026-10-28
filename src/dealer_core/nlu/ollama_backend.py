@@ -79,6 +79,18 @@ class OllamaBackend(NluBackend):
     def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
         return self._chat(system, user, None, max_tokens, temperature=temperature).message.content or ""
 
+    def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
+        """The reply as the model writes it, so the first words can be spoken after the first clause, not after the whole reply (27-28 Oct: without this a model-written reply
+        was generated whole first, 1.8-2.5 s, before anything of it was spoken). Ollama's chat cannot continue a reply already begun by code, so with a `prefill` the base
+        class's way is used (it tells the model what was already said)."""
+        if prefill:
+            yield from super().lead_in_stream(system, user, max_tokens, temperature, deadline_s, prefill=prefill)
+            return
+        for chunk in self._chat(system, user, None, max_tokens, stream=True, temperature=temperature):
+            piece = chunk.message.content or ""
+            if piece:
+                yield piece
+
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         system = prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences)
         stream = self._chat(system, f"CONTEXT: {context}\nCALLER: {question}", None, self.cfg.max_answer_tokens, stream=True)

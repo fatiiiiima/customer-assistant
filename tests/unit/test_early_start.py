@@ -127,6 +127,6 @@ def test_the_setting_and_its_wiring():
     from dealer_core.config import load_config
     from dealer_core.voice import pipeline
 
-    assert load_config(environ={}).voice.early_start_secs == 0.2
-    assert load_config(environ={"VA__VOICE__EARLY_START_SECS": "0"}).voice.early_start_secs == 0
+    assert load_config(environ={}).voice.early_start_secs == 0          # off by default: its slices were heard worse than the normal path (docs/ARCH_REVIEW.md section 4, 10)
+    assert load_config(environ={"VA__VOICE__EARLY_START_SECS": "0.2"}).voice.early_start_secs == 0.2
     assert "early_start_secs=vcfg.early_start_secs if vcfg.speculate else 0.0" in inspect.getsource(pipeline.build_pipeline)

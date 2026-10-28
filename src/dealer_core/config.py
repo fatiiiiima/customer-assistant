@@ -189,6 +189,9 @@ class DialogueCfg(_Strict):
 
 class VoiceCfg(_Strict):
     reply_deadline_ms: int = 4500                # model-written reply must be ready by then, else the standard wording is spoken
+    first_sentence_deadline_ms: int = 1500       # ...and its FIRST usable sentence by this time (about twice the governor's budget): else the model is given up on and the code's own wording is spoken at once,
+                                                 # with no second try. Before, a slow model-written turn could keep the caller waiting up to twice the reply deadline. 0 = no limit
+    history_lines: int = 6                       # lines of the conversation the model is shown for a reply (the text chat keeps 10)
     reply_max_words: int = 30
     reply_max_tokens: int = 110
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
@@ -221,7 +224,7 @@ class VoiceCfg(_Strict):
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
-    early_start_secs: float = 0.2                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
+    early_start_secs: float = 0.0                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
                                                   # voice detector waits 0.6 s, so this answers up to 0.4 s sooner; wasted work if the caller was only pausing (at most 3 times a turn). 0 = only when Smart Turn holds a pause
     speculate: bool = True                       # smart_turn: while it holds a pause as "still going", recognise the turn and make the model's decision in the
                                                  # background; used as they are if the caller has in fact finished (no new speech before the fallback silence)
