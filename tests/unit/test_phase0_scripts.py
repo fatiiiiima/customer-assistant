@@ -61,3 +61,30 @@ def test_caller_voice_can_be_a_kokoro_voice(monkeypatch):
     clips = mod.caller_audio(["Hello"], "kokoro:michael")
     assert asked == ["michael"]
     assert clips[0].dtype == np.int16 and len(clips[0]) == 16000              # one second, resampled to 16 kHz
+
+
+def test_probe_sweep_stops_after_a_level_over_twice_the_budget_unless_told_not_to():
+    mod = script("capacity_probe")
+    slow = lambda i: 5000.0                                   # every request takes 5 s: over twice a 700 ms budget at once
+    _, stopped = mod.sweep("full", slow, [1, 2, 4], 700.0)
+    assert [r["at_once"] for r in stopped] == [1]
+    _, every = mod.sweep("full", slow, [1, 2, 4], 700.0, stop_early=False)
+    assert [r["at_once"] for r in every] == [1, 2, 4]          # the 50-100 at once the gate needs, however slow the card
+
+
+def test_probe_options_exist_and_the_log_folder_is_made():
+    text = (ROOT / "scripts" / "capacity_probe.py").read_text(encoding="utf-8")
+    assert '"--no-stop"' in text and '"--model-only"' in text
+    assert text.count('(ROOT / "logs").mkdir(exist_ok=True)') == 2        # both ways of finishing write logs/capacity_probe.json
+
+
+def test_probe_rows_say_how_many_requests_a_second_the_server_finished():
+    mod = script("capacity_probe")
+    import time as t
+
+    def fn(i):
+        t.sleep(0.01)
+        return 10.0
+
+    _, rows = mod.sweep("full", fn, [2], 700.0)
+    assert rows[0]["requests_per_s"] > 0 and set(rows[0]) == {"at_once", "median_ms", "p90_ms", "requests_per_s"}

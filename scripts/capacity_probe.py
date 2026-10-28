@@ -48,18 +48,20 @@ def first_sentence_ms(backend, system: str, user: str, max_tokens: int, prefill:
     return (time.perf_counter() - t0) * 1000
 
 
-def sweep(label: str, fn, levels: list[int], budget_ms: float) -> tuple[int, list[dict]]:
-    """Run `fn` N at a time; the largest N whose 90th percentile stays within the budget."""
+def sweep(label: str, fn, levels: list[int], budget_ms: float, stop_early: bool = True) -> tuple[int, list[dict]]:
+    """Run `fn` N at a time; the largest N whose 90th percentile stays within the budget. Stops once a level is over twice the budget, unless `stop_early` is off."""
     rows, best = [], 0
     for n in levels:
+        t0 = time.perf_counter()
         with cf.ThreadPoolExecutor(n) as pool:
             times = list(pool.map(lambda i: fn(i), range(n * 2)))           # two rounds, so every slot is busy the whole time
+        per_s = len(times) / (time.perf_counter() - t0)                     # requests the server finished per second at this many at once
         p90 = float(np.percentile(times, 90))
-        rows.append({"at_once": n, "median_ms": round(st.median(times)), "p90_ms": round(p90)})
-        print(f"  {label:7s} {n:3d} at once: first sentence median {st.median(times):6.0f} ms, p90 {p90:6.0f} ms", flush=True)
+        rows.append({"at_once": n, "median_ms": round(st.median(times)), "p90_ms": round(p90), "requests_per_s": round(per_s, 1)})
+        print(f"  {label:7s} {n:3d} at once: first sentence median {st.median(times):6.0f} ms, p90 {p90:6.0f} ms, {per_s:5.1f} requests/s", flush=True)
         if p90 <= budget_ms:
             best = n
-        elif p90 > budget_ms * 2:
+        elif stop_early and p90 > budget_ms * 2:
             break
     return best, rows
 
@@ -71,6 +73,8 @@ def main() -> int:
     ap.add_argument("--target", type=int, default=500, help="simultaneous callers to plan for")
     ap.add_argument("--turn-every", type=float, default=15.0, help="seconds between one caller's turns (measured in our test calls: ~15)")
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 4, 8, 16, 32, 64])
+    ap.add_argument("--no-stop", action="store_true", help="run every level, even after one is over twice the budget (the gate is measured at 50-100 at once, which a slow card would never reach)")
+    ap.add_argument("--model-only", action="store_true", help="measure only the model server: skip this machine's own speech recognition and voice timing (they say nothing about a GPU server)")
     ap.add_argument("--portal-data", type=Path, default=DEFAULT_PORTAL_DATA, help="the website's site/data.js (default: ../bmw-portal/site/data.js beside this repository)")
     a = ap.parse_args()
 
@@ -102,9 +106,14 @@ def main() -> int:
 
     print(f"model: {a.backend} ({cfg.llm.backends[a.backend].model}); budget for the first sentence {budget:.0f} ms", flush=True)
     full(0), prefix(0)                                                        # warm up
-    full_n, full_rows = sweep("full", full, a.levels, budget)
-    prefix_n, prefix_rows = sweep("prefix", prefix, a.levels, budget + 2000)   # code speaks the facts first (~2 s): the question only has to be ready by then
+    full_n, full_rows = sweep("full", full, a.levels, budget, not a.no_stop)
+    prefix_n, prefix_rows = sweep("prefix", prefix, a.levels, budget + 2000, not a.no_stop)   # code speaks the facts first (~2 s): the question only has to be ready by then
 
+    if a.model_only:
+        out = {"backend": a.backend, "budget_ms": budget, "full": full_rows, "prefix": prefix_rows}
+        (ROOT / "logs").mkdir(exist_ok=True)               # logs/ is not in a fresh clone
+        (ROOT / "logs" / "capacity_probe.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+        return 0
     parts = load_engines(cfg)
     clip = (np.random.default_rng(1).normal(0, 0.05, 16000 * 3)).astype(np.float32)
     t0 = time.perf_counter()
@@ -138,6 +147,7 @@ def main() -> int:
         print(f"  For {a.target} callers at {label}: {math.ceil(a.target / cap) if cap else 'n/a'} machines like this one" + (" (plus one spare)" if cap else ""))
     out = {"backend": a.backend, "budget_ms": budget, "full": full_rows, "prefix": prefix_rows, "stt_per_s": stt_per_s, "tts_sentences_per_s": tts_per_s,
            "callers": callers, "full_cap": full_cap, "prefix_cap": prefix_cap, "target": a.target}
+    (ROOT / "logs").mkdir(exist_ok=True)
     (ROOT / "logs" / "capacity_probe.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
     return 0
 
