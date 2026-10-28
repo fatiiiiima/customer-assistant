@@ -158,6 +158,9 @@ def clean_draft(raw: str) -> str:
     t = re.sub(r"^(?:SAY|REPLY)\s*:\s*", "", t, flags=re.I)
     t = re.sub(r"\s*[–—]\s*", ", ", t)
     t = t.replace("’", "'").replace("‘", "'").replace("“", "").replace("”", "").replace('"', "")
+    # Units written the way a spec sheet writes them, said the way the code says them (28 Oct replay: "8.9 L/100 km" was refused for its slash, cutting the reply).
+    t = re.sub(r"\b(\d+(?:\.\d+)?)\s?(?:L|l|litres?|liters?)\s?/\s?100\s?km\b", r"\1 litres per hundred kilometres", t)
+    t = re.sub(r"\b(\d+)\s?km\s?/\s?h\b", r"\1 kilometres an hour", t)
     return strip_fillers(" ".join(t.split()))
 
 

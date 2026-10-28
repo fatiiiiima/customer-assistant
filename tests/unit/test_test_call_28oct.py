@@ -209,3 +209,11 @@ def test_a_sentence_with_a_degree_sign_from_the_facts_is_not_refused():
 
     facts = "Highlights include Panoramic Sky Lounge, heated seats, 360° camera and gesture control."
     assert verify_sentence("It has a 360° camera and heated seats.", "tell me more", "", facts, "") == []
+
+
+@pytest.mark.parametrize("raw, said", [("And 8.9 L/100 km.", "And 8.9 litres per hundred kilometres."), ("It uses 9.8 l/100km.", "It uses 9.8 litres per hundred kilometres."),
+                                       ("Top speed is 250 km/h.", "Top speed is 250 kilometres an hour.")])
+def test_units_from_a_spec_sheet_are_said_in_words_not_refused(raw, said):
+    from dealer_core.dialogue.draft import clean_draft
+
+    assert clean_draft(raw) == said
