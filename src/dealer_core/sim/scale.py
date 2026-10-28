@@ -402,6 +402,19 @@ SLOW = Hardware("slow GPU", model_slots=24, decide_ms=300, first_ms=900)
 WEAK_CPU = Hardware("fast GPUs, weak worker CPUs", model_slots=160, decide_ms=120, first_ms=300, worker_cpu_calls=9)
 
 RAMP_500 = [(0, 100), (30, 250), (60, 400), (90, 500)]
+RAMP_1000 = [(0, 200), (30, 500), (60, 800), (90, 1000)]
+RAMP_1500 = [(0, 300), (30, 750), (60, 1200), (90, 1500)]
+
+
+def model_capacity_sweep(callers: int, slots: list[int], max_workers: int) -> list[dict]:
+    """How much model capacity a given number of callers needs, with the stand-in speeds of FAST (decision 120 ms, first sentence 300 ms): the same cluster run with
+    fewer and fewer `slots` (requests the model server(s) serve together at full speed) until answers slow down or the mechanisms start to give up quality."""
+    ramp = {500: RAMP_500, 1000: RAMP_1000, 1500: RAMP_1500}[callers]
+    out = []
+    for n in slots:
+        hw = Hardware(f"{n} slots", model_slots=n, decide_ms=FAST.decide_ms, first_ms=FAST.first_ms, stt_slots=max(64, callers // 4))
+        out.append({"model slots": n, **{k: v for k, v in run(Scenario(f"{callers} callers, {n} slots", hw, ramp, max_workers=max_workers)).items() if k != "timeline"}})
+    return out
 
 
 def scenarios(adaptive: bool) -> list[Scenario]:
@@ -417,6 +430,9 @@ def _scenarios(adaptive: bool) -> list[Scenario]:
         Scenario("500 callers, 95% of GPU capacity lost at 5 min", FAST, RAMP_500, model_slots_at=[(300, 6)], adaptive=adaptive),
         Scenario("spike: 500 -> 800 callers at 5 min", FAST, RAMP_500 + [(300, 800), (420, 500)], adaptive=adaptive),
         Scenario("cold start: 8 workers when 500 callers arrive", FAST, RAMP_500, cold_start=True, adaptive=adaptive),
+        Scenario("1,000 callers, fast GPUs, the manifest's 72 workers", FAST, RAMP_1000, adaptive=adaptive),
+        Scenario("1,000 callers, fast GPUs, 120 workers allowed", FAST, RAMP_1000, max_workers=120, adaptive=adaptive),
+        Scenario("1,500 callers, fast GPUs, 180 workers allowed", FAST, RAMP_1500, max_workers=180, adaptive=adaptive),
         Scenario("500 callers, GPU capacity lost at 5 min, back at 7 min", FAST, RAMP_500, model_slots_at=[(300, 6), (420, 160)], adaptive=adaptive),
         Scenario("500 callers, every turn on the model, GPU lost at 5 min, back at 7", BUSY, RAMP_500, model_slots_at=[(300, 6), (420, 160)], adaptive=adaptive),
     ]
