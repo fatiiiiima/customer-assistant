@@ -150,7 +150,15 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         if on_turn:
             on_turn(result)
 
+    dump = os.environ.get("VA_DUMP_AUDIO_DIR")                  # diagnostic only (voice/audiotap.py): copy what goes in to the detector and what goes out to the page
+    in_tap = AudioTap(dump, "in", InputAudioRawFrame) if dump else None
+    if in_tap is not None:                                      # ...and, beside the audio, the words (what was recognised, given to the agent, said back)
+        heard_hook, say_hook = on_heard, on_say
+        on_heard = lambda text: (in_tap.note("heard", text), heard_hook(text) if heard_hook else None)[1]
+        on_say = lambda text: (in_tap.note("said", text), say_hook(text) if say_hook else None)[1]
     stt = OpenVinoWhisperSTTService(engine=parts.stt_engine, min_rms=vcfg.min_rms)
+    if in_tap is not None:
+        stt.on_text = lambda text: in_tap.note("stt", text)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
                         level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms)
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
@@ -159,9 +167,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     follow_the_question()
     stt.prompt_for = lambda: stt_prompt(brain.session.state, brain.session.last_agent(), parts.hotword_groups, app.inventory.vocabulary())
     tts = SherpaPiperTTSService(engine=parts.tts_engine)
-    dump = os.environ.get("VA_DUMP_AUDIO_DIR")                  # diagnostic only (voice/audiotap.py): copy what goes in to the detector and what goes out to the page
     stages: list[FrameProcessor] = [source] + ([mic_gate] if mic_gate is not None else []) + ([HalfDuplexGate(gate_tail_secs)] if half_duplex else []) + (
-        [AudioTap(dump, "in", InputAudioRawFrame)] if dump else []) + [vad]
+        [in_tap] if in_tap is not None else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
 

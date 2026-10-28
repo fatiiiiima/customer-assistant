@@ -791,6 +791,13 @@ class AgentEngine:
         if not booking_flow and s.car and "about" in A.topics_in(joined) and self._names_only_this_car(s, words):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "anything else about the car I should know?" / "what else should I know about it?"
         picked = ex.selection(text, s.shown)
+        if not booking_flow and _BOOKING_CUE.search(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
+            # 28 Oct: "Yes, I want to come and see the Macan." is a booking, not a pick from the list: naming the car must not turn it into "tell me about it" (three times in one call)
+            named_car = ex.find_vehicle(words, self.svc.inventory.vocabulary())
+            only = list(self.svc.inventory.search(SearchFilters(make=named_car.get("make"), model=named_car["model"]), 2)) if named_car.get("model") else []
+            target = picked or (only[0].stock_id if len(only) == 1 else None) or s.car
+            if target:
+                return {"tool": "prepare_booking", "car_id": target, "via": "rules"}
         if picked and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM):
             return {"tool": "get_car", "car_id": picked, "via": "rules"}
         named = ex.find_vehicle(words, self.svc.inventory.vocabulary())

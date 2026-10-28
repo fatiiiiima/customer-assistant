@@ -79,6 +79,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         self.min_rms = min_rms
         self.prompt_for = None                   # set by the pipeline: () -> the recognizer hint for what the agent just asked
         self.speculation = None                  # voice.speculate.Speculation: words already recognised during Smart Turn's hold
+        self.on_text = None                      # diagnostics only (voice/audiotap.py): told the words of each segment
         super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
@@ -115,6 +116,8 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         if text:
             # The transcript itself is never logged (privacy): only its length.
             logger.debug(f"STT {self.last_ms:.0f} ms, {len(text.split())} words, {len(audio) / 2 / SAMPLE_RATE:.1f} s of audio, level {rms:.3f}")
+            if self.on_text:
+                self.on_text(text)
             yield TranscriptionFrame(text, self._user_id, time_now_iso8601(), Language.EN)
 
 
