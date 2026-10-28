@@ -221,6 +221,10 @@ class VoiceCfg(_Strict):
     stop_secs: float = 0.3                       # silence that ends the caller's turn (VAD)
     min_rms: float = 0.005                        # a segment whose loudest 0.3 s is below this is room noise and is not recognised. NOT raised: at 0.012 the owner's 10%-volume clips went 20/24 -> 0/24 heard (docs/SCALING.md)
     end_call_min_rms: float = 0.03                # a goodbye heard at a level below this is not believed: the agent asks "are you still there?" instead of hanging up. Real turns in the 27 Oct log were 0.065-0.26; the two false goodbyes 0.013 and 0.015
+    speak_up_below: float = 0.02                 # a segment whose loudest 0.3 s is below this is not acted on: the agent asks the caller to speak up. Measured 28 Oct on 252 readings of the owner's own turns made quieter
+                                                 # (room noise kept): below 0.02 about 80% of the turns were badly wrong with the base model and 65-80% with small.en, and only 6 of 79-87 turns that were
+                                                 # heard right were stopped. 0 = off
+    speak_up_suspect_below: float = 0.05         # between this and the one above, only when the words look like a recogniser's invention ("please subscribe", "comments below", a lone "okay"). 0 = off
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to

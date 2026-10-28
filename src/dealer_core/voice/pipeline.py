@@ -156,11 +156,16 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         heard_hook, say_hook = on_heard, on_say
         on_heard = lambda text: (in_tap.note("heard", text), heard_hook(text) if heard_hook else None)[1]
         on_say = lambda text: (in_tap.note("said", text), say_hook(text) if say_hook else None)[1]
-    stt = OpenVinoWhisperSTTService(engine=parts.stt_engine, min_rms=vcfg.min_rms)
+    from .services import EchoGuard
+
+    hear = EchoGuard(parts.stt_engine, lambda: brain.session.last_agent(),            # (brain is made just below; the guard only asks for the line when a turn is heard)
+                     lambda: stt_prompt(brain.session.state, "", parts.hotword_groups, app.inventory.vocabulary()))
+    stt = OpenVinoWhisperSTTService(engine=hear, min_rms=vcfg.min_rms)
     if in_tap is not None:
         stt.on_text = lambda text: in_tap.note("stt", text)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
-                        level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms)
+                        level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms,
+                        speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below))
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)
         brain.session.state = seed_state if seed_state is not None else brain.session.state
@@ -181,14 +186,14 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             from .answers import is_complete_answer
 
             tz = ZoneInfo(app.service.cfg.branches[0].timezone)
-            endpointer.peek = lambda pcm: asyncio.to_thread(lambda: parts.stt_engine.transcribe(pcm, stt.prompt_for())[0])
+            endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
             endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
                                                                    app.inventory.vocabulary(), app.service.clock(), tz)
         if vcfg.speculate:                                    # recognise (and decide) during Smart Turn's hold; used if the caller has finished
             from .services import clean_transcript
             from .speculate import Speculation
 
-            spec = Speculation(lambda pcm: clean_transcript(parts.stt_engine.transcribe(pcm, stt.prompt_for())[0]),
+            spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0]),
                                (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
                                lambda: len(brain.session.history))
             endpointer.speculation = stt.speculation = brain.speculation = spec

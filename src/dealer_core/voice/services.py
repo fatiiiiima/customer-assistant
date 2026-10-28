@@ -30,6 +30,25 @@ def segment_rms(pcm16: bytes, window: int = 4800) -> float:
     return float(np.sqrt(np.convolve(x * x, np.ones(window) / window, "valid").max()))
 
 
+SPEAK_UP = "Sorry, I can barely hear you. Could you speak up or move closer to the microphone?"
+
+# What the recogniser writes for sound it cannot make out (Whisper learned from video captions): measured 28 Oct on quiet versions of the owner's own turns,
+# "Please subscribe and hit the bell icon...", "Please feel free to ask in the comments below.", a lone "Okay." or "Thank you." for a whole sentence.
+_INVENTED = re.compile(r"\b(?:subscribe|bell icon|comments? below|in the comments|thanks? for watching|thank you for (?:watching|your time|listening)|see you (?:next|in the next)|"
+                       r"like and share|feel free to (?:ask|comment|post|call)|share this video|don't forget to)\b", re.I)
+_LONE_FILLER = re.compile(r"^\s*(?:okay|ok|thank you|thanks|you|bye|so)\s*[.!?]*\s*$", re.I)
+
+
+def too_quiet_to_trust(text: str, level: float, very_quiet: float, suspect_below: float) -> bool:
+    """True when the turn should not be acted on, because the caller was too quiet for the words to be trusted: the level is under `very_quiet`, or it is under
+    `suspect_below` and the words look invented. 0 turns a part off. Everything louder is left alone, whatever the words."""
+    if not text or level is None:
+        return False
+    if very_quiet and level < very_quiet:
+        return True
+    return bool(suspect_below and level < suspect_below and (_INVENTED.search(text) or _LONE_FILLER.match(text) or is_degenerate(text, 0.0)))
+
+
 UNCLEAR = "um"      # given to the agent when the recognizer produced a loop instead of words: the engine answers a lone filler with "Sorry, I didn't catch that."
 
 
@@ -70,6 +89,46 @@ def clean_transcript(text: str) -> str:
         return UNCLEAR
     text = collapse_repeats(squeeze_punctuation(text)) if text else ""
     return "" if text and is_phantom(text) else text
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9']+", text.lower())]
+
+
+def echoes_agent(heard: str, agent_line: str) -> bool:
+    """True when `heard` is the agent's own question given back: it starts like one of the agent's sentences and is mostly made of its words (at least 5 words).
+    Seen 28 Oct with quiet speech: the recognizer is given what the agent just said as a hint, and when the audio is weak it writes the hint down, so "I want to come and
+    see it" became "Would you like to come and see it?"."""
+    h = _words(heard)
+    if len(h) < 5:
+        return False
+    for sentence in re.split(r"(?<=[.!?])\s+", agent_line):
+        s = _words(sentence)
+        if len(s) >= 3 and h[:3] == s[:3] and sum(w in s for w in h) / len(h) >= 0.7:
+            return True
+    return False
+
+
+class EchoGuard:
+    """Around a recogniser for one call. If the words it writes are the agent's own question, it listens again without the agent's sentence in the hint (the car names stay);
+    if that is still the agent's question, nothing was understood and the caller is asked to repeat. Everything else is passed through unchanged."""
+
+    def __init__(self, engine, agent_line, plain_prompt) -> None:
+        self._engine, self._agent_line, self._plain_prompt = engine, agent_line, plain_prompt
+        self.retries = 0
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+    def transcribe(self, pcm16: bytes, prompt: str | None = None) -> tuple[str, float]:
+        text, ms = self._engine.transcribe(pcm16, prompt)
+        line = self._agent_line() if self._agent_line else ""
+        if not (text and line and echoes_agent(text, line)):
+            return text, ms
+        self.retries += 1
+        again, ms2 = self._engine.transcribe(pcm16, self._plain_prompt())
+        logger.debug("STT wrote the agent's own question: listened again without it in the hint")
+        return (again if again and not echoes_agent(again, line) else UNCLEAR), ms + ms2
 
 
 class OpenVinoWhisperSTTService(SegmentedSTTService):
