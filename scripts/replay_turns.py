@@ -52,6 +52,20 @@ def read_words_log(path: Path) -> list[str]:
     return out
 
 
+def read_timed_words_log(path: Path) -> list[tuple[float, str]]:
+    """The same turns with the time (seconds since 1970) each was heard at, so a replay can keep the call's own clock: slots are offered from the hour of the call, and the minute in a
+    prompt changes between turns as it did then."""
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[1] == "heard" and parts[2].strip():
+            try:
+                out.append((float(parts[0]), parts[2].strip()))
+            except ValueError:
+                continue
+    return out
+
+
 def mask(text: str) -> str:
     """Phone numbers and other long digit runs are not printed."""
     return _LONG_NUMBER.sub("<number>", text)
@@ -115,8 +129,12 @@ def said_with(engine, before, text: str, decision: dict) -> str:
         engine.single_call, engine.governor, engine.openers = saved
 
 
-def replay_call(engine, texts: list[str], first_sentence: bool = False, alternate_from: int = 0, log=print) -> list[dict]:
-    """Replay one call. One row per caller turn; `route` is "code" (the code's routing was sure) or "model" (both paths were asked)."""
+def replay_call(engine, texts: list[str], first_sentence: bool = False, alternate_from: int = 0, log=print, times: list[float] | None = None) -> list[dict]:
+    """Replay one call. One row per caller turn; `route` is "code" (the code's routing was sure) or "model" (both paths were asked).
+    `times`: when each turn was heard (seconds since 1970); the engine's clock is set to it for that turn and put back at the end."""
+    from datetime import datetime, timezone
+
+    real_clock = engine.svc.clock
     from dealer_core.agent.governor import QualityGovernor
     from dealer_core.agent.turn_schema import same_action
 
@@ -127,6 +145,9 @@ def replay_call(engine, texts: list[str], first_sentence: bool = False, alternat
     previous_prompts: tuple[str, str] | None = None
     for i, text in enumerate(texts):
         row: dict = {"turn": i, "words": mask(text), "route": "code"}
+        if times is not None:
+            at = datetime.fromtimestamp(times[i], timezone.utc)
+            engine.svc.clock = lambda at=at: at
         before = copy.deepcopy(s)
         measured: dict = {}
         real_decide = engine._decide
@@ -177,6 +198,7 @@ def replay_call(engine, texts: list[str], first_sentence: bool = False, alternat
                 row["fs_two"], row["fs_one"] = measured["fs_two"], measured["fs_one"]
         rows.append(row)
         log(format_row(len(rows), row))
+    engine.svc.clock = real_clock
     return rows
 
 
@@ -261,9 +283,10 @@ def main() -> int:
     engine._decide(engine.new_session(), "hello")                                                  # warm up (the first request after a model load is slow)
     all_rows: list[dict] = []
     for path in logs:
-        texts = read_words_log(path)
+        timed = read_timed_words_log(path)
+        texts = [t for _, t in timed]
         print(f"{path.name}: {len(texts)} caller turns\n  turn route  two-call action             one-call action           agree  two ms   one ms  words", flush=True)
-        for r in replay_call(engine, texts, a.first_sentence, alternate_from=len(all_rows)):
+        for r in replay_call(engine, texts, a.first_sentence, alternate_from=len(all_rows), times=[t for t, _ in timed]):
             r["call"] = path.name
             all_rows.append(r)
         print()

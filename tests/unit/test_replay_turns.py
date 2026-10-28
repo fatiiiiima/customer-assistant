@@ -24,6 +24,12 @@ def test_the_callers_turns_are_the_heard_lines_of_a_words_log(tmp_path):
     assert script().read_words_log(log) == ["Porsche.", "Test drive."]
 
 
+def test_the_turns_come_with_the_time_they_were_heard(tmp_path):
+    log = tmp_path / "20261028_000000_0001_in.txt"
+    log.write_text("1793179831.9\tsaid\tHi.\n1793179836.2\tstt\tporsche\n1793179836.268\theard\tPorsche.\n1793179840.1\theard\tTest drive.\nbad\theard\tx\n", encoding="utf-8")
+    assert script().read_timed_words_log(log) == [(1793179836.268, "Porsche."), (1793179840.1, "Test drive.")]
+
+
 def test_long_digit_runs_are_masked_in_what_is_printed():
     m = script().mask
     assert m("050, 056, 056, 0") == "<number>" and m("my number is 0507932546 thanks") == "my number is <number> thanks"
@@ -96,6 +102,18 @@ class TestReplay:
         assert "_decide" not in vars(e)
         summary = script().summarise(rows)["first_sentence_ms"]
         assert summary["turns"] == 1 and summary["one_call_reply_used"] == 1 and summary["same_spoken_intent"] == 1
+
+    def test_the_call_keeps_its_own_clock_and_the_real_one_is_put_back(self):
+        from datetime import datetime, timezone
+
+        fake = Fake([turn(), turn()], decision="get_car AG-122")
+        e = engine(fake, single=False)
+        real = e.svc.clock
+        t1, t2 = 1793179836.0, 1793179836.0 + 7 * 60                                     # seven minutes later
+        script().replay_call(e, ["a bmw m3", WORDS, "my cousin drives a lot, is it comfortable for him"], log=lambda *_: None, times=[t1, t1 + 5, t2])
+        assert e.svc.clock is real
+        nows = [u.split("NOW: ")[1].split(" (Dubai)")[0] for _, u, *_ in fake.seen]
+        assert nows[0] != nows[1] and nows[0].startswith("Wednesday 28 October 2026, 13:3") and nows[1].startswith("Wednesday 28 October 2026, 13:37")
 
     def test_the_order_the_two_paths_are_timed_in_alternates(self):
         order = []
