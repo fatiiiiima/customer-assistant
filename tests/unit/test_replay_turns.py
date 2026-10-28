@@ -50,10 +50,13 @@ class TestReplay:
         r = rows[1]
         assert r["two"] == ("get_car", "AG-122") and r["one"] == ("get_car", "AG-122") and r["agree"] and r["say"] and r["one_ms"] >= 0 and r["two_ms"] >= 0
 
-    def test_a_different_action_is_a_disagreement_and_is_listed(self):
+    def test_a_different_action_is_a_disagreement_and_is_listed_with_what_each_would_have_meant_to_the_caller(self):
         fake = Fake([turn(action="none", car=None, say="Hello there.")], decision="get_car AG-122")
         _, rows = self.run(fake, ["a bmw m3", WORDS])
         summary = script().summarise(rows)
+        d = summary["disagreements"][0]
+        assert d["would_say_two_call"] and d["would_say_one_call"] and d["would_say_two_call"] != d["would_say_one_call"] and d["same_words_spoken"] is False
+        assert fake.calls["write"] == 0                                                   # (code-level wording: no model was asked to find out)
         assert not rows[1]["agree"] and summary["agree_on_model_turns"] == 0 and summary["agree_share_model_turns"] == 0.0
         assert summary["disagreements"][0]["two_call"] == ("get_car", "AG-122") and summary["disagreements"][0]["one_call"] == ("none", None)
         assert summary["agree_share_all_turns"] == 0.5                                # the code-routed turn agrees by construction
@@ -89,6 +92,8 @@ class TestReplay:
         r = rows[1]
         assert r["fs_two"]["first_ms"] is not None and r["fs_one"]["first_ms"] is not None
         assert "single call: its reply was used" in r["fs_one"]["note"] and "single call" not in r["fs_two"]["note"]
+        assert fake.calls["decide"] == 2 and fake.calls["structured"] == 2                  # each path asked the model for itself, in the measurement and in its whole turn
+        assert "_decide" not in vars(e)
         summary = script().summarise(rows)["first_sentence_ms"]
         assert summary["turns"] == 1 and summary["one_call_reply_used"] == 1 and summary["same_spoken_intent"] == 1
 

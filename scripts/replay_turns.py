@@ -96,6 +96,21 @@ def time_first_sentence(engine, s, text: str, single: bool) -> dict:
             "reply": " ".join(spoken)}
 
 
+def said_with(engine, before, text: str, decision: dict) -> str:
+    """What the agent would say at the code level if `decision` were the model's, from the state the turn began in (no model is asked: the wording is the code's own). It shows what a
+    disagreement between the two paths would mean to the caller."""
+    from dealer_core.agent.governor import QualityGovernor
+
+    saved = engine.single_call, engine.governor, engine.openers
+    engine.single_call, engine.governor, engine.openers = False, QualityGovernor("code"), False
+    engine._decide = lambda s, t: {k: v for k, v in decision.items() if k not in ("say", "single")}
+    try:
+        return " ".join(x for x in engine.handle_stream(copy.deepcopy(before), text) if isinstance(x, str))
+    finally:
+        del engine._decide
+        engine.single_call, engine.governor, engine.openers = saved
+
+
 def replay_call(engine, texts: list[str], first_sentence: bool = False, alternate_from: int = 0, log=print) -> list[dict]:
     """Replay one call. One row per caller turn; `route` is "code" (the code's routing was sure) or "model" (both paths were asked)."""
     from dealer_core.agent.governor import QualityGovernor
@@ -124,8 +139,12 @@ def replay_call(engine, texts: list[str], first_sentence: bool = False, alternat
                 d = real_decide(_before, t) if which == "two" else engine._decide_single(_before, t)
                 measured[which], measured[which + "_ms"] = d, (time.perf_counter() - t0) * 1000
             if first_sentence:
-                measured["fs_two"] = time_first_sentence(engine, _before, t, False)
-                measured["fs_one"] = time_first_sentence(engine, _before, t, True)
+                engine._decide = real_decide                                           # (the whole turn must ask the model itself: not be handed the decision measured above)
+                try:
+                    measured["fs_two"] = time_first_sentence(engine, _before, t, False)
+                    measured["fs_one"] = time_first_sentence(engine, _before, t, True)
+                finally:
+                    engine._decide = reach_model
             prompts = decision_prompts(engine, _before, t)
             if previous_prompts is not None:
                 _row["share_two"], _row["share_one"] = prefix_share(previous_prompts[0], prompts[0]), prefix_share(previous_prompts[1], prompts[1])
@@ -148,6 +167,8 @@ def replay_call(engine, texts: list[str], first_sentence: bool = False, alternat
             failed = bool(row["two_error"] or row["one_error"])
             row["agree"] = same_action(row["two"], row["one"], before.car) and not failed              # a decision that names no car means the car in focus, as in the engine
             row["agree_strict"] = same_action(row["two"], row["one"]) and not failed                    # ...and with the car compared as written
+            if not row["agree"] and not failed:
+                row["reply_two"], row["reply_one"] = said_with(engine, before, text, two), said_with(engine, before, text, one)       # what each choice would have meant to the caller
             if first_sentence:
                 row["fs_two"], row["fs_one"] = measured["fs_two"], measured["fs_one"]
         rows.append(row)
@@ -178,7 +199,9 @@ def summarise(rows: list[dict], decide_deadline_ms: float = 1200.0, single_deadl
         "agree_strict_on_model_turns": sum(1 for r in model if r["agree_strict"]),
         "agree_share_all_turns": ((len(rows) - len(model) + len(agree)) / len(rows)) if rows else None,
         "disagreements": [{"turn": r["turn"], "words": r["words"], "two_call": r["two"], "one_call": r["one"], "two_error": r.get("two_error"), "one_error": r.get("one_error"),
-                           "malformed": r["one_note"].get("malformed")} for r in model if not r["agree"]],
+                           "malformed": r["one_note"].get("malformed"),
+                           "would_say_two_call": r.get("reply_two"), "would_say_one_call": r.get("reply_one"), "same_words_spoken": r.get("reply_two") == r.get("reply_one")}
+                          for r in model if not r["agree"]],
         "malformed": sum(1 for r in model if r["one_note"].get("malformed")), "one_call_errors": sum(1 for r in model if r.get("one_error")),
         "two_call_errors": sum(1 for r in model if r.get("two_error")),
         "two_call_ms": {"median": st.median(two_ms) if two_ms else None, "p90": pct(two_ms, 0.9) if two_ms else None, "max": two_ms[-1] if two_ms else None,
