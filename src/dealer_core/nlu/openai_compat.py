@@ -128,7 +128,7 @@ class OpenAICompatBackend(NluBackend):
     def structured(self, system: str, user: str, schema: dict, max_tokens: int = 120, deadline_s: float | None = None) -> str | None:
         """One JSON object that follows `schema`, asked the portable way (`response_format` json_schema: vLLM, llama.cpp server and TGI honour it, and vLLM turns it into its
         own structured-output constraint, so the model cannot leave the schema). Greedy. None if the server refuses it (HTTP 400): this server is not asked this way again.
-        NOT checked against a real vLLM server yet (none is available without a GPU): see docs/ARCH_REVIEW.md section 21."""
+        NOT checked against a real vLLM server yet (none is available without a GPU): see docs/ARCH_REVIEW.md section 22."""
         if not self.can_structure:
             return None
         body = self._body(system, user, max_tokens, 0.0)

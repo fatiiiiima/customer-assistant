@@ -59,4 +59,4 @@ def test_the_numbers_reach_what_uses_them():
 
 def test_the_section_says_where_its_values_come_from():
     doc = LatencyCfg.__doc__
-    assert "PHASE0_RUNBOOK" in doc and "NOT YET MEASURED" in doc
+    assert "PHASE0_RUNBOOK" in doc and "CLOSED" in doc and "laptop" in doc

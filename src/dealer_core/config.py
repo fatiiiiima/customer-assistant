@@ -169,8 +169,8 @@ class LatencyCfg(_Strict):
     WHERE THE VALUES COME FROM. Not from the production hardware. They were set on the owner's laptop (Ollama / OpenVINO on an Intel iGPU or an M3 Pro, 4B model) in the 27-28 Oct
     reviews (docs/ARCH_REVIEW.md sections 9, 11 and 14). The values that belong here are the ones measured on the model server the deployment really uses, by the procedure in
     docs/PHASE0_RUNBOOK.md (`scripts/capacity_probe.py`, `scripts/load_test.py`: the first-sentence time at 1 to 100 callers at once, and the governor level each turn ran at).
-    Phase 0 numbers: NOT YET MEASURED (no GPU run has been made). Until they exist these stay as they were and must not be read as production figures. When they exist, set them
-    here, in the deployment's overlay or with VA__LATENCY__<KEY>, and write the run into docs/ARCH_REVIEW.md.
+    Phase 0 is CLOSED as "no GPU available" (docs/ARCH_REVIEW.md, the scope decision): there are no GPU numbers and none are expected, so these values stay the laptop's and must not
+    be read as production figures. If a card ever exists, run docs/PHASE0_RUNBOOK.md (kept for that day), set the measured values here or with VA__LATENCY__<KEY>, and write the run down.
 
     The old names (`dialogue.model_budget_ms`, `voice.decide_deadline_ms`, `voice.first_sentence_deadline_ms`) are still read, so an existing overlay or environment keeps working;
     the new name wins when both are given (`Config._move_latency_keys`)."""
