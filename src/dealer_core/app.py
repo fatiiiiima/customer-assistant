@@ -119,6 +119,7 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         dialogue = AgentEngine(svc, decide or writer_backend, engine_obj_writer(dialogue))
         dialogue.prefix_mode = cfg.dialogue.agent_prefix if agent_prefix is None else agent_prefix
         dialogue.openers = cfg.dialogue.openers
+        dialogue.single_call = cfg.dialogue.single_call
         if quality or cfg.dialogue.quality != "off":
             from .agent.governor import QualityGovernor
 

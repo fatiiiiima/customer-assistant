@@ -197,6 +197,10 @@ class DialogueCfg(_Strict):
     explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
     probe_every_s: float = 20.0                  # voice server: measure the model with a small request of the same shape as a model-written turn this often, only when no turn is using it (0 = off)
     probe_max_in_flight: int = 0                 # ...or when at most this many turns are using the model. 0 = only when none is. The plan (B5) asked for 2; in the scale simulation 2 and 4 recovered no faster after a GPU outage and sent 33-37% more probes to an overloaded model (ARCH_REVIEW section 20), so the default stays 0
+    single_call: bool = False                    # agent engine: for a turn the code cannot route (`_fast_decide` is not sure) and that the governor will have the model write, ONE request returns the action,
+                                                 # its car and the reply ("say": get_car and none only; agent/turn_schema.py), instead of a decision and then a writer call. The reply is checked like any
+                                                 # model text against what the tool returned; anything wrong or malformed falls back to the two-call path. OFF until it has been replayed on the production
+                                                 # server: the decision step then includes the reply, so latency.decide_deadline_ms and dialogue.model_shed_after_ms need re-deriving first
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
     openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
