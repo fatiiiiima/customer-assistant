@@ -679,9 +679,10 @@ class AgentEngine:
             told = s.said_about.get(s.car, [])
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
-        topics = [t for t in A.topics_in(" ".join(ex.tokens_of(text))) if t != "about"]
-        if topics:
-            lines.append("The caller is asking about: " + ", ".join(topics) + ". Answer that first.")
+        words = " ".join(ex.tokens_of(text))
+        topics = [t for t in A.topics_in(words) if t != "about"] + [{"km": "mileage"}.get(k, k) for k, p in _ATTRIBUTE.items() if p.search(words)]
+        if topics:                                      # every aspect named ("the colour, mileage, engine and price": all four, not only the spec-sheet one)
+            lines.append("The caller is asking about: " + ", ".join(topics) + ". Answer all of that first.")
         if s.booking is not None or s.known_bookings:
             lines.append("A test drive is already booked in this call or on the website: do not offer another one.")
         elif booking_step or s.draft_slot or s.offered_slots:

@@ -80,7 +80,16 @@ def test_the_aspect_asked_about_is_named_to_the_model():
     e, model = engine("The boot holds 500 litres.")
     said, s = macan_turn(e)
     list(e.handle_stream(s, "and the boot?"))
-    assert "The caller is asking about: boot" in model.asked[-1]
+    assert "The caller is asking about: boot." in model.asked[-1]
+
+
+def test_every_aspect_asked_for_is_named_not_only_the_spec_sheet_ones():
+    """28 Oct replay: "Tell me everything about it, the colour, mileage, engine and price" was answered with the engine only: only spec-sheet topics were named."""
+    e, model = engine(ENGINE)
+    said, s = macan_turn(e)
+    list(e.handle_stream(s, "Tell me everything about it, the colour, mileage, engine and price"))
+    asked = next(ln for ln in model.asked[-1].splitlines() if ln.startswith("The caller is asking about"))
+    assert all(w in asked for w in ("engine", "mileage", "colour", "price"))
 
 
 def test_what_the_caller_already_heard_is_named_to_the_model():
