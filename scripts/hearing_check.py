@@ -43,6 +43,8 @@ def wer(ref: str, hyp: str) -> tuple[int, int]:
 def load_turns(stem: str, folder: Path, limit: int | None) -> list[np.ndarray]:
     """One clip per tap-to-end-of-turn stretch of the recording (a gap of more than 1 s between chunks starts a new one)."""
     rows = list(csv.DictReader(open(folder / f"{stem}.csv")))
+    if not rows:                                           # a call whose microphone never delivered audio (the index has only its header)
+        return []
     t = np.array([float(r["unix_time"]) for r in rows])
     n = np.array([int(r["bytes"]) for r in rows])
     pcm = np.frombuffer(open(folder / f"{stem}.pcm", "rb").read(), dtype="<i2").astype(np.float32) / 32768

@@ -398,3 +398,51 @@ Everything on the plan's "What not to change" list; `config/default.yaml` and `c
 * Results (MODELLED, stand-in speeds of 120 ms and 300 ms, which are targets, not measurements): the workers needed follow callers / (16 x 0.7): 45, 89, 132 in the simulation against 45, 90, 134 by formula; answer p90 0.88 s at all three sizes with under 0.3% turned away; the manifest's 72 workers hold 1,000 callers but about 87% full; the model needs about 36, 44 and 55 requests in flight at the target speed; with too little model capacity quality gives way first (e.g. 1,000 callers on 10 slots: p90 0.99 s, 0.0% turned away, 44% of model turns shed) and callers are not turned away.
 * Not changed: `deploy/` (`maxReplicas` stays 72; for 1,000 at the 70% target it needs about 90, for 1,500 about 140: see SCALE_MODEL.md, to be set when there is something to test it on). The most likely first failure at scale is the database (720 connections ceiling at 90 workers against PostgreSQL's default 100); pgbouncer is still not added (section 20, B6).
 * Tests: `test_sim_scale.py` (3 added: 72 workers hold 1,000 callers under a second; workers and model in-flight follow callers; too little model capacity sheds quality, not callers). `pytest tests/unit`: 927 passed, 40 skipped.
+
+## 22. Phase 4 on the laptop: hearing and overlap scored on the recorded turns (28 Oct)
+
+Scope (section 21): what can be judged without a GPU. Branch `phase-4`, stacked on `demo-scope`. **Nothing in `src/` changed: the scores did not justify a change.** Machine: the same M3 Pro, AC power, other processes running (the owner's worker and Ollama idle); recognition times are therefore laptop times.
+
+### The tool: `scripts/score_overlap.py` (new)
+
+Every recorded turn (the stretch between a tap and the end of the turn, cut as `hearing_check.py` cuts it) is played through the REAL Silero detector (tap-mode silence 0.6 s), the REAL `SmartEndpointer` and the REAL recogniser service, with Whisper replaced by an engine that only records the audio it is given; once with the early start off and once on. So the audio recognised is exactly what the live path would have recognised, not a slice cut by hand (section 10's early-start replay could not say that). Both are then read with the real model and compared. The endpointer keeps its own audio clock, so the result is the same at 20x speed and in real time (checked on three turns). 77 turns with speech in 17 recordings (10 recordings had no speech or no audio; `hearing_check.load_turns` crashed on an empty recording and now returns no turns). Tests: `test_score_overlap.py` (2), `test_phase0_scripts.py` (1 added).
+
+Truth is thin: only the 27 Oct call (9 turns) has reference text. For the rest the script can use a larger recogniser's reading of the normal segment as a PSEUDO-reference: that tells which of two readings is nearer a better listener, not what was said.
+
+### Hearing (MEASURED, the 9 turns with reference text, f32)
+
+| Recogniser | Hint | Words wrong | Turns exactly right | Median time |
+|---|---|---|---|---|
+| base int8 | on | 4% | 7 of 9 | 263 ms |
+| base int8 | off | 16% | 3 of 9 | 190 ms |
+| small.en int8 | on | 7% | 7 of 9 | 992 ms |
+| small.en int8 | off | 9% | 5 of 9 | 817 ms |
+
+Nine turns: differences of a few points are noise. The hint helps base a lot (4 against 16) and small.en a little; small.en is no better with it and four times slower. Through the repository's own transcription service (`--stt-url`) base scored 3% with the hint. Nothing here supports a bigger model for hearing, as sections 13 and 15 found.
+
+### Overlap: the early start (`voice.early_start_secs`), 77 turns, MEASURED
+
+| Recogniser | Early start after | Turns with a usable start | Extra recognition runs per turn | Same words as the normal reading | Reply could begin sooner (median) | Against the 9 reference turns: normal / early |
+|---|---|---|---|---|---|---|
+| base | 0.2 s of quiet | 68 of 77 | 0.61 | 53 of 68 (9.9% of words differ) | 0.24 s | 4.5% / 4.5% |
+| base | 0.3 s | 66 of 77 | 0.32 | 50 of 66 (9.7%) | 0.24 s | 4.5% / 3.0% |
+| small.en | 0.2 s | 68 of 77 | 0.61 | 57 of 68 (8.1%) | 0.52 s | 7.5% / 6.0% |
+| small.en | 0.3 s | 66 of 77 | 0.31 | 54 of 66 (9.0%) | 0.42 s | 7.5% / 6.0% |
+
+* "Reply could begin sooner" is `min(time the start gained, the recognition run)`: the early start can hide only the part of the recognition that overlaps the endpoint's wait. The gain is 0.52 s (0.2 s start) or 0.42 s (0.3 s) of audio time, from a 0.6 s detector silence. With base (0.25 s per run) almost every usable start hides the whole run; with small.en (1 s per run) none does and about half of it is hidden.
+* **Hearing is not clearly worse.** On the 9 reference turns the early reading is as good or better. Against the pseudo-reference (the other model's reading of the normal segment, 57 to 59 turns) the early reading was nearer on 4, further on 6 (base, 0.2 s), nearer on 2, further on 6 (base, 0.3 s), nearer on 2, further on 3 and nearer on 3, further on 3 (small.en): too few to say. About one turn in four (15 of 68 for base) is read differently, in both directions ("the mic" against "the Macan", "a quick push" against "a quick test", "tell me more about the Macan" against "...the matching").
+* **Why the readings differ was looked for and not found.** The slice starts at the same place as the normal segment (0.00 s into the clip on 14 of 17 aligned turns; the rest 0.02 to 0.5 s, both from the same detector start) and ends about 1.0 s earlier, because the normal segment includes the quiet up to the detector's stop. Appending 0.5 s of digital silence to the slice changed nothing at all (identical agreement, 53 of 68). Whisper pads its input, so what differs is the real room noise in the tail, which the slice does not have. Neither reading is known to be the right one when they differ.
+* **Cost.** Each start the caller then talks over is a wasted recognition run: 0.61 per turn at 0.2 s (47 wasted in 77 turns) and 0.31 at 0.3 s. On this machine recognition shares cores with the calls' detectors, voice and model (section 4 of the first review), so the cost is paid by other callers.
+
+**Left as it is: `voice.early_start_secs` 0 (off).** For one caller on the laptop the numbers favour 0.3 s (the same words as the normal reading on 5 turns in 6, 0.24 s sooner with base and 0.42 s with small.en, 0.3 wasted runs per turn); for many callers they do not, and the choice between them is the owner's. It is `VA__VOICE__EARLY_START_SECS=0.3`.
+
+### Where the plan was off (ARCH_PLAN Phase 4)
+
+* "Effect: 0.7 to 1.0 s per turn, MEASURED as the recognition time in the 28 Oct log": that is small.en's recognition time (0.9 to 1.1 s). An early start can hide only the overlap with the endpoint's wait: 0.42 to 0.52 s of it with small.en on this machine, 0.24 s with base. Hiding all of a 1 s recognition needs recognition that runs WHILE the caller speaks (streaming); no streaming recogniser exists on this machine (Whisper here decodes a finished clip), so that part is untested and stays a GPU-server item.
+* "Treat the end of the tap gesture as the endpoint": needs the page to send the tap time; the page (`voice.js`) is in the website repository, and no recording carries a tap timestamp. Not scored. For reference, the endpoint wait in the replay (turn confirmed over, measured from the first early start at 0.2 s) is about 0.6 to 0.7 s after the last loud sound in tap mode, which is the 0.3 s per turn section 14 priced against the 0.35 s setting.
+* "`?mic=raw` as an A/B on recorded turns": no recording was made with it; nothing to score. "Document the recommended microphone": the evidence is section 15 (the MacBook's own microphone 1 wrong group in 9 turns, the USB adapter 5 in 8; level was not the difference).
+* "Digits": one real phone number exists in the recordings (section 18), so groups of three against a keypad cannot be scored. Unchanged.
+
+### Not changed, on purpose
+
+All of `src/`; the 0.6 s tap silence and the tap-grace join; Smart Turn; `min_rms`, the speak-up thresholds, f32; `early_start_secs` (stays 0).
