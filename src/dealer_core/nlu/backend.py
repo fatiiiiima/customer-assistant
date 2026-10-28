@@ -61,6 +61,11 @@ class NluBackend(ABC):
             user = f"{user}\n(You have already said: \"{prefill.strip()}\". Write only what comes next.)"
         yield self.lead_in(system, user, max_tokens, temperature, deadline_s)
 
+    def structured(self, system: str, user: str, schema: dict, max_tokens: int = 120, deadline_s: float | None = None) -> str | None:
+        """ONE JSON object, as text, that follows `schema` (the single-call turn: agent/turn_schema.py). Raises BackendTimeout past `deadline_s`. None when this backend cannot
+        hold its output to a schema, or its server refused to: the caller then uses the two-call path."""
+        return None
+
     @abstractmethod
     def classify(self, state: State, car: str | None, text: str, last_agent: str = "") -> IntentResult:
         """Production call: grammar-constrained, intent only (~6 tokens). Slots are extracted by code afterwards."""

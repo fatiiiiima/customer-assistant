@@ -116,6 +116,11 @@ class BackendChain:
         b = self.backends[self.active]
         return b.choose(system, user, options, max_tokens, deadline_s) if hasattr(b, "choose") else None
 
+    def structured(self, system: str, user: str, schema: dict, max_tokens: int = 120, deadline_s: float | None = None) -> str | None:
+        """One JSON object that follows `schema` from the active backend; None when it cannot hold its output to a schema (then the two-call path is used)."""
+        b = self.backends[self.active]
+        return b.structured(system, user, schema, max_tokens, deadline_s) if hasattr(b, "structured") else None
+
     def lead_in_stream(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None,
                        deadline_s: float | None = None, prefill: str = "") -> Iterator[str]:
         if prefill:
