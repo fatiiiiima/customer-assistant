@@ -402,3 +402,35 @@ def test_state_machine_every_turn_is_spoken_even_when_the_model_gives_nothing_us
         spoken = [x for x in items if isinstance(x, str)]
         assert spoken and all(x.strip() for x in spoken), f"silent turn for {line!r}"
         assert "FALLBACK" in items[-1].debug.note
+
+
+# ------------------------------------------------------------------------------------------------ a reply that came with the decision (single call, Phase 2)
+class Boom:
+    """A backend that must not be asked."""
+    def lead_in_stream(self, *a, **k):
+        raise AssertionError("the model was asked although the reply was already written")
+
+
+def said_text(text, core=SEARCH_CORE, facts=SEARCH_FACTS, caller="toyota please", awaiting=False):
+    w = ReplyWriter(Boom())
+    return list(w.stream(WriterInput(caller, core, "low", [], facts, awaiting), say=text)), w.last_stream
+
+
+def test_a_written_reply_is_checked_like_the_models_own_and_the_model_is_not_asked():
+    said, info = said_text("Here you go! I have a 2018 Toyota Prado at 105,000 dirhams and a 2021 Toyota Land Cruiser at 148,000 dirhams. Which one catches your eye?")
+    assert said[0] == "Here you go!" and said[-1] == "Which one catches your eye?" and info["sentences"] == 3 and not info["stopped"]
+
+
+def test_a_written_reply_with_an_invented_fact_says_nothing_and_says_why():
+    said, info = said_text("We have a 2019 Lexus at 99,000 dirhams.")
+    assert said == [] and info["stopped"]
+
+
+def test_the_same_rules_complete_a_written_reply_the_system_is_waiting_on():
+    core = "Yes, it's GCC spec. Anything else you'd like to know?"
+    said, info = said_text("Ah, yes!", core=core, facts="What the customer wanted: they asked about a car.", caller="is it gcc spec")
+    assert said == ["Yes!", "It's GCC spec."] and info["appended"]
+
+
+def test_an_empty_written_reply_yields_nothing():
+    assert said_text("")[0] == []

@@ -24,6 +24,7 @@ from difflib import SequenceMatcher
 
 from ..dialogue import templates as T
 from . import answers as A
+from . import turn_prompt, turn_schema
 from . import wording as W
 from ..dialogue import voice_rules
 from ..dialogue.machine import TurnDebug, TurnResult
@@ -272,6 +273,10 @@ class AgentEngine:
         self.stream_high_risk = True
         self.nlu = None
         self.decide_tokens, self.decide_deadline_s = 16, 5.0
+        self.single_call = False                         # dialogue.single_call: for a turn the code cannot route and the governor will have the model write, ONE request returns the
+                                                         # action and the reply (agent/turn_schema.py) instead of a decision and then a writer call. Off: the two-call path, as before
+        self.single_deadline_s = 5.0                     # the one call carries the decision AND the first sentence: latency.first_sentence_deadline_ms (voice sets it)
+        self.single_tokens = 140                         # room for the JSON around a reply of about 30 words
         self.bridge_after_ms = 0.0                       # > 0: when the model's decision is expected to keep the caller waiting longer than this, a short
                                                          # "Let me check." is said at once while it is made (0 = never; voice sets it from voice.bridge_after_ms)
 
@@ -425,12 +430,17 @@ class AgentEngine:
             if bridge:                                                     # the caller hears this while the model decides (and writes)
                 yield bridge
             t_decide = time.perf_counter()
+            decide = self._decide_single if self.single_call and self._wants_say() else self._decide      # ONE request (action and reply) only when the model will write the reply
             if self.governor is not None:
                 with self.governor.using_model():
-                    decision = self._decide(s, text)
-                self.governor.record_decide((time.perf_counter() - t_decide) * 1000)
+                    decision = decide(s, text)
+                self.governor.record_decide((time.perf_counter() - t_decide) * 1000)          # (the decision step now includes the reply: re-derive model_shed_after_ms before using single_call)
             else:
-                decision = self._decide(s, text)
+                decision = decide(s, text)
+            if decision.get("single"):
+                one = decision["single"]
+                dbg.note = (dbg.note + "; " if dbg.note else "") + (f"single call: {one['ms']:.0f} ms" + (f", answer malformed ({one['malformed']}): the two-call decision was asked" if one.get("malformed") else "")
+                                                                   + (f", failed ({one['failed']})" if one.get("failed") else ""))
             if decision.get("error"):                                      # no decision within the deadline: the code decides, nothing waits longer
                 decision, no_model = self._code_decision(s, text), True
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "model too slow: decided by code"
@@ -466,6 +476,11 @@ class AgentEngine:
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
+        # The reply from the single call is for the action and the car THE MODEL chose: if the code changed either (a pick from the list, "your best price", nothing booked to move), it was
+        # written for something else and is not used.
+        say = decision.get("say") or ""
+        say_ok = bool(say) and tool == decision.get("tool") and tool in turn_schema.SAY_ACTIONS and (
+            tool != "get_car" or not decision.get("car_id") or (args.get("car_id") if isinstance(args, dict) else None) == decision["car_id"])
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
         if decision.get("fallback"):                                       # the code could not tell what was asked and the model was not asked
             result["core"] = W.pick(s, "overload", ["Sorry, I didn't quite get that. Are you after a particular make, type of car or budget?",
@@ -488,6 +503,8 @@ class AgentEngine:
             result["core"] = f"{opener} {_lower_first(result['core'], self._proper(s))}"
             prefix, question = self._split_core(result["core"])
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
+        if say and not (say_ok and level == "full"):
+            dbg.note += f"; single call: its reply was not used ({'level ' + level if say_ok else 'the code changed the action or the car'})"
         if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word, at every level
                 spoken.append(part)
@@ -519,19 +536,24 @@ class AgentEngine:
                 if attempt:
                     why = self.reply_writer.last_stream.get("stopped", "")
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
+                one_call = say if (say_ok and attempt == 0) else None   # the reply that came with the decision goes through the same checks, against what the tool really returned;
+                                                                         # if it does not pass, the writer is asked (attempt 1), exactly as on the two-call path
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
-                    for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
+                    for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None, **({} if one_call is None else {"say": one_call})):
                         if lead and len(spoken) == 1:
                             sentence = _after_opener(sentence, self._proper(s), new_sentence=not lead.rstrip().endswith(","))
                             if not sentence:
                                 continue
-                        if len(spoken) == (1 if lead else 0) and self.governor is not None:
-                            self.governor.record_full((time.perf_counter() - t_write) * 1000)
+                        if len(spoken) == (1 if lead else 0) and self.governor is not None and one_call is None:
+                            self.governor.record_full((time.perf_counter() - t_write) * 1000)       # (not for the one call's reply: it cost nothing here, its time was the decision's)
                         spoken.append(sentence)
                         yield sentence
                 info = self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
-                if info.get("stopped"):
+                if one_call is not None:
+                    used = len(spoken) > (1 if lead else 0)
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + ("single call: its reply was used" if used else f"single call: its reply was refused ({info.get('stopped') or 'empty'}), the writer was asked")
+                elif info.get("stopped"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
                 if info.get("stopped") == FIRST_SENTENCE_DEADLINE:        # the model is slow, not wrong: asking again would only double the wait. The code's own wording follows below,
                     if self.governor is not None:                           # and the governor learns at once that the model-written level does not fit right now
@@ -750,9 +772,14 @@ class AgentEngine:
     def _options(self, s: Session, hint_ids: list[str]) -> list[str]:
         """Every answer the decision may give: each tool, and the tools about one car with each car that is in play right now (the code hint,
         the car in focus, the cars just listed). With a server that can constrain its output the model cannot name anything else."""
-        ids = list(dict.fromkeys([*hint_ids, *([s.car] if s.car else []), *(c.stock_id for c in s.shown)]))[:12]
+        ids = self._ids_in_play(s, hint_ids)
         car_tools = ("get_car", "check_slots", "prepare_booking")
         return [*TOOLS, *(f"{t} {i}" for t in car_tools for i in ids)]
+
+    @staticmethod
+    def _ids_in_play(s: Session, hint_ids: list[str]) -> list[str]:
+        """The cars an action may be about this turn: those the caller's words match, the car in focus, the cars just shown."""
+        return list(dict.fromkeys([*hint_ids, *([s.car] if s.car else []), *(c.stock_id for c in s.shown)]))[:12]
 
     def _context(self, s: Session, text: str = "", hint: tuple[dict, list[str]] | None = None) -> str:
         tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
@@ -947,6 +974,84 @@ class AgentEngine:
         car = re.search(r"\b[A-Z]{2}-\d{2,4}\b", raw)
         return {"tool": tool, "car_id": car.group(0) if car else (data.get("args", {}) or {}).get("car_id") if data else None}
 
+    # ------------------------------------------------------------------------------------------------ the single-call turn (dialogue.single_call)
+    def _wants_say(self) -> bool:
+        """Will the governor have the model write this turn's reply? Only then is a reply worth asking for in the same request as the decision (it would be thrown away at the
+        prefix and code levels, and cost the decoding time). The governor's own `choose` is not asked: it counts the turn. This reads what `choose` reads for the usual cases (the mode,
+        and whether the model's measured first-sentence time fits the budget); the caps on turns in flight are not looked at, so it can say yes for a turn that then steps down."""
+        g = self.governor
+        if g is None:
+            return not self.prefix_mode
+        if g.mode != "auto":
+            return g.mode == "full"
+        first = g.stats.full_first_ms
+        return (not g.probed) if first is None else first <= g.budget_ms
+
+    def _dealership_facts(self) -> str:
+        """What is true of the dealership for the whole deployment (from the configuration): the start of the single call's system prompt, so it never changes between callers or turns."""
+        cfg = self.svc.cfg
+        lines = [f"- AGMC sells used cars in the UAE. The assistant is called {cfg.app.agent_name or 'the assistant'}. Prices are in {cfg.app.currency}, distances in {cfg.app.distance_unit}.",
+                 "- Prices are fixed: there is no discount, best price or negotiation."]
+        for b in cfg.branches:
+            hours = list(b.working_hours.items())
+            if not hours:
+                continue
+            same = len({tuple(v) for _, v in hours}) == 1
+            when = f"every day {hours[0][1][0]} to {hours[0][1][1]}" if same else ", ".join(f"{d} {o} to {c}" for d, (o, c) in hours)
+            lines.append(f"- {b.name}: open {when}.")
+        lines.append(f"- A test drive takes {cfg.test_drive.slot_minutes} minutes; booking one is done by the booking actions, never in `say`.")
+        return "\n".join(lines)
+
+    def _single_system(self) -> str:
+        if getattr(self, "_single_sys", None) is None:
+            self._single_sys = turn_prompt.system_prompt(DECIDE_SYSTEM, self._dealership_facts())
+        return self._single_sys
+
+    def _single_user(self, s: Session, text: str, found: dict, hint_ids: list[str]) -> str:
+        """The per-turn part of the single call, in the order docs/PROMPTS.md gives (agent/turn_prompt.py). (The two-call path's `_context` is left as it is: it is the reference.)"""
+        tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
+        now = self.svc.clock().astimezone(tz)
+        focus = self.svc.get_car(s.car) if s.car else None
+        draft = (f"car {s.car or '-'}, name {s.draft_name or '-'}, phone {s.draft_phone or '-'}, "
+                 f"when {T.when_full(s.draft_slot) if s.draft_slot else '-'}, read back to the customer: {'yes, waiting for their yes/no' if s.read_back else 'no'}")
+        shown = "; ".join(f"{i + 1}) {c.stock_id} {c.year} {c.make} {c.model}" for i, c in enumerate(s.shown)) or "none"
+        state = (f"CAR IN FOCUS: {focus.stock_id + ' ' + T.car_name(focus) if focus else 'none'}\nLAST SHOWN: {shown}\n"
+                 f"SEARCH SO FAR: {s.filters or 'nothing'}\nBOOKING DRAFT: {draft}")
+        named = [c for c in (self.svc.get_car(i) for i in hint_ids) if c is not None]
+        cars = list({c.stock_id: c for c in [*([focus] if focus else []), *named, *s.shown]}.values())[:5]
+        car_text = "\n".join(f"- [{c.stock_id}] {line[2:]}" for c, line in zip(cars, self._car_lines(cars)))
+        lines = self.reply_writer.history_lines if self.reply_writer is not None else 6
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-lines:]) or "(start of the call)"
+        hint = (f"the customer's words match make {found['make']}" + (f", model {found['model']}" if found.get("model") else "") + f", ids {hint_ids}") if found.get("make") else ""
+        return turn_prompt.user_message(state, car_text, f"{now:%A %d %B %Y, %H:%M} (Dubai)", convo, hint, text)
+
+    def _decide_single(self, s: Session, text: str) -> dict:
+        """The action AND the reply from one request (`dialogue.single_call`). The same dict as `_decide` gives, plus `say` (the model's reply, not yet checked) and `single` (timing).
+        * the backend cannot hold its output to a schema, or the server refused one: the two-call path's decision, silently.
+        * the answer is not a valid turn (agent/turn_schema.py): treated as an answer that did not come: the two-call path's decision is asked instead.
+        * the call itself times out or fails: {"error": ...}, handled exactly as a timeout of `_decide` (the code decides; no second try that would double the wait)."""
+        structured = getattr(self.backend, "structured", None)
+        if structured is None:
+            return self._decide(s, text)
+        found, hint_ids = self._code_hint(text)
+        ids = self._ids_in_play(s, hint_ids)
+        schema = turn_schema.turn_schema(TOOLS, ids)
+        t0 = time.perf_counter()
+        try:
+            raw = structured(self._single_system(), self._single_user(s, text, found, hint_ids), schema, self.single_tokens, self.single_deadline_s)
+        except Exception as e:                                          # no answer in time, or the model could not be reached: do nothing rather than guess
+            return {"tool": "none", "args": {}, "error": type(e).__name__, "single": {"ms": (time.perf_counter() - t0) * 1000, "failed": type(e).__name__}}
+        ms = (time.perf_counter() - t0) * 1000
+        if raw is None:
+            return self._decide(s, text)
+        try:
+            turn = turn_schema.parse_turn(raw, TOOLS, ids)
+        except turn_schema.MalformedTurn as e:
+            out = self._decide(s, text)
+            out["single"] = {"ms": ms, "malformed": str(e)}
+            return out
+        return {"tool": turn.action, "car_id": turn.car_id, "say": turn.say, "single": {"ms": ms, "say_chars": len(turn.say)}}
+
     def _args_for(self, s: Session, tool: str, car_id: str | None, text: str) -> dict:
         """The tool's arguments, read from the customer's own words by code (the same extractors the state machine trusts)."""
         vocab = self.svc.inventory.vocabulary()
@@ -992,11 +1097,15 @@ class AgentEngine:
         # about 150 tokens read by the model on every turn for nothing). The tool's own weaker price line is dropped in favour of the stronger one below.
         focus = [self.svc.get_car(s.car)] if s.car and self.svc.get_car(s.car) else []
         unique = list({c.stock_id: c for c in focus + list(s.shown)}.values())
-        context = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams{self._spec_facts(c)}" for c in unique][:5]
+        context = self._car_lines(unique)
         out["facts"] = [*[f for f in out.get("facts", []) if not f.startswith("Prices are fixed (no negotiation)")],
                         "Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'.",
                         *(["Cars in this call (true facts you may use):", *context] if context else [])]
         return out
+
+    def _car_lines(self, cars: list[CarView]) -> list[str]:
+        """The true facts of up to five cars, one line each: what the model is given to answer from, in the reply writer's FACTS and in the single call's CARS."""
+        return [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams{self._spec_facts(c)}" for c in cars][:5]
 
     def _spec_facts(self, c: CarView) -> str:
         """The site's spec sheet for a car, for the model to answer from ("is it a good family car?"): seats, drive, economy, boot, warranty."""

@@ -163,8 +163,28 @@ class SendDetailsCfg(_Strict):
     mock: bool = True
 
 
+class LatencyCfg(_Strict):
+    """How long a caller may wait on the model: the three numbers that bound it, in ONE place (they used to be spread over `dialogue` and `voice`).
+
+    WHERE THE VALUES COME FROM. Not from the production hardware. They were set on the owner's laptop (Ollama / OpenVINO on an Intel iGPU or an M3 Pro, 4B model) in the 27-28 Oct
+    reviews (docs/ARCH_REVIEW.md sections 9, 11 and 14). The values that belong here are the ones measured on the model server the deployment really uses, by the procedure in
+    docs/PHASE0_RUNBOOK.md (`scripts/capacity_probe.py`, `scripts/load_test.py`: the first-sentence time at 1 to 100 callers at once, and the governor level each turn ran at).
+    Phase 0 is CLOSED as "no GPU available" (docs/ARCH_REVIEW.md, the scope decision): there are no GPU numbers and none are expected, so these values stay the laptop's and must not
+    be read as production figures. If a card ever exists, run docs/PHASE0_RUNBOOK.md (kept for that day), set the measured values here or with VA__LATENCY__<KEY>, and write the run down.
+
+    The old names (`dialogue.model_budget_ms`, `voice.decide_deadline_ms`, `voice.first_sentence_deadline_ms`) are still read, so an existing overlay or environment keeps working;
+    the new name wins when both are given (`Config._move_latency_keys`)."""
+
+    model_budget_ms: float = 700.0               # governor: time to the model's first sentence that still keeps the reply under ~1 s; a model slower than this is stepped down to the prefix level
+    decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s). With dialogue.single_call it also bounds the
+                                                 # fall-back decision after a malformed one-call answer
+    first_sentence_deadline_ms: int = 1500       # a model-written reply must have its FIRST usable sentence by this time (about twice the budget), else the model is given up on and the code's
+                                                 # own wording is spoken at once, with no second try. With dialogue.single_call it is also the deadline of the one call, which carries the decision
+                                                 # and the first sentence together. 0 = no limit
+
+
 class DialogueCfg(_Strict):
-    variants: bool = False                       # true: use human-approved wording variants (config/phrase_variants.yaml)
+    variants: bool = False                      # true: use human-approved wording variants (config/phrase_variants.yaml)
     reply_mode: Literal["conversational", "hybrid", "template"] = "conversational"   # who writes the spoken reply (see dialogue/writer.py)
     judge: bool = False                          # conversational mode: a second strict yes/no check by the model for made-up statements
     retries: int = 0                             # extra tries when a model reply is rejected (each costs a full generation); speed profile: 0
@@ -173,11 +193,14 @@ class DialogueCfg(_Strict):
     max_reply_tokens: int = 70                   # cap on the model-written reply (the main driver of reply time)
     decision_backend: str | None = "openvino_gpu"   # agent engine: the (smaller, faster) model that picks the tool each turn; None = the reply model
     quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code (agent/governor.py)
-    model_budget_ms: float = 700.0               # auto: time to the model's first sentence that still keeps the reply under ~1 s; slower -> prefix
     model_shed_after_ms: float = 450.0           # auto: past this measured decision time a growing share of turns skip the model (load shedding; 0 = never)
     explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
     probe_every_s: float = 20.0                  # voice server: measure the model with a small request of the same shape as a model-written turn this often, only when no turn is using it (0 = off)
     probe_max_in_flight: int = 0                 # ...or when at most this many turns are using the model. 0 = only when none is. The plan (B5) asked for 2; in the scale simulation 2 and 4 recovered no faster after a GPU outage and sent 33-37% more probes to an overloaded model (ARCH_REVIEW section 20), so the default stays 0
+    single_call: bool = False                    # agent engine: for a turn the code cannot route (`_fast_decide` is not sure) and that the governor will have the model write, ONE request returns the action,
+                                                 # its car and the reply ("say": get_car and none only; agent/turn_schema.py), instead of a decision and then a writer call. The reply is checked like any
+                                                 # model text against what the tool returned; anything wrong or malformed falls back to the two-call path. OFF until it has been replayed on the production
+                                                 # server: the decision step then includes the reply, so latency.decide_deadline_ms and dialogue.model_shed_after_ms need re-deriving first
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
     openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
@@ -191,8 +214,6 @@ class DialogueCfg(_Strict):
 
 class VoiceCfg(_Strict):
     reply_deadline_ms: int = 4500                # model-written reply must be ready by then, else the standard wording is spoken
-    first_sentence_deadline_ms: int = 1500       # ...and its FIRST usable sentence by this time (about twice the governor's budget): else the model is given up on and the code's own wording is spoken at once,
-                                                 # with no second try. Before, a slow model-written turn could keep the caller waiting up to twice the reply deadline. 0 = no limit
     history_lines: int = 6                       # lines of the conversation the model is shown for a reply (the text chat keeps 10)
     reply_max_words: int = 30
     reply_max_tokens: int = 110
@@ -227,7 +248,6 @@ class VoiceCfg(_Strict):
                                                  # (room noise kept): below 0.02 about 80% of the turns were badly wrong with the base model and 65-80% with small.en, and only 6 of 79-87 turns that were
                                                  # heard right were stopped. 0 = off
     speak_up_suspect_below: float = 0.05         # between this and the one above, only when the words look like a recogniser's invention ("please subscribe", "comments below", a lone "okay"). 0 = off
-    decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
     early_start_secs: float = 0.0                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
@@ -243,6 +263,9 @@ class VoiceCfg(_Strict):
     stt_timeout_s: float = 3.0                   # a remote transcription slower than this counts as "not heard" (the caller is asked again)
 
 
+_OLD_LATENCY_KEYS = (("dialogue", "model_budget_ms"), ("voice", "decide_deadline_ms"), ("voice", "first_sentence_deadline_ms"))
+
+
 class Config(_Strict):
     app: AppCfg = Field(default_factory=AppCfg)
     latency_log: LatencyLogCfg = Field(default_factory=LatencyLogCfg)
@@ -256,6 +279,23 @@ class Config(_Strict):
     send_details: SendDetailsCfg = Field(default_factory=SendDetailsCfg)
     dialogue: DialogueCfg = Field(default_factory=DialogueCfg)
     voice: VoiceCfg = Field(default_factory=VoiceCfg)
+    latency: LatencyCfg = Field(default_factory=LatencyCfg)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _move_latency_keys(cls, data: Any) -> Any:
+        """The three latency numbers used to live in `dialogue` and `voice`: an overlay or environment variable that still uses the old name is moved to `latency`
+        (unless the new name is also given, which wins), so nothing that worked stops working."""
+        if not isinstance(data, dict):
+            return data
+        for section, key in _OLD_LATENCY_KEYS:
+            old = data.get(section)
+            if isinstance(old, dict) and key in old:
+                data = {**data, section: {k: v for k, v in old.items() if k != key}}
+                latency = dict(data.get("latency") or {})
+                latency.setdefault(key, old[key])
+                data["latency"] = latency
+        return data
 
     @property
     def cloud_active(self) -> bool:

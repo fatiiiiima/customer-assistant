@@ -119,9 +119,10 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         dialogue = AgentEngine(svc, decide or writer_backend, engine_obj_writer(dialogue))
         dialogue.prefix_mode = cfg.dialogue.agent_prefix if agent_prefix is None else agent_prefix
         dialogue.openers = cfg.dialogue.openers
+        dialogue.single_call = cfg.dialogue.single_call
         if quality or cfg.dialogue.quality != "off":
             from .agent.governor import QualityGovernor
 
-            dialogue.governor = QualityGovernor(quality or cfg.dialogue.quality, cfg.dialogue.model_budget_ms, max_in_flight_model=cfg.dialogue.max_model_turns,
+            dialogue.governor = QualityGovernor(quality or cfg.dialogue.quality, cfg.latency.model_budget_ms, max_in_flight_model=cfg.dialogue.max_model_turns,
                                                 shed_after_ms=cfg.dialogue.model_shed_after_ms, explore_every=cfg.dialogue.explore_every)
     return App(dialogue, svc, inv, bookings, whatsapp, sink, chain, getattr(classifier, "name", type(classifier).__name__))

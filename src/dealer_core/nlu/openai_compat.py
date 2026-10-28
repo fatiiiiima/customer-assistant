@@ -41,6 +41,7 @@ class OpenAICompatBackend(NluBackend):
         self.client = httpx.Client(timeout=cfg.timeout_s, headers={"Authorization": f"Bearer {key}"} if key else {},
                                    limits=httpx.Limits(max_connections=cfg.max_parallel, max_keepalive_connections=cfg.max_parallel))
         self.can_choose = True                     # False once the server refused a constrained choice (then the decision is asked as free text)
+        self.can_structure = True                  # False once the server refused a JSON schema (then the single-call turn is not used on it)
 
     def health(self) -> BackendHealth:
         try:
@@ -120,6 +121,23 @@ class OpenAICompatBackend(NluBackend):
         except BackendError as e:
             if "HTTP 400" in str(e):
                 self.can_choose = False
+                return None
+            raise
+        return re.sub(r"^\s*<think>.*?</think>\s*", "", out["choices"][0]["message"]["content"] or "", flags=re.S).strip()
+
+    def structured(self, system: str, user: str, schema: dict, max_tokens: int = 120, deadline_s: float | None = None) -> str | None:
+        """One JSON object that follows `schema`, asked the portable way (`response_format` json_schema: vLLM, llama.cpp server and TGI honour it, and vLLM turns it into its
+        own structured-output constraint, so the model cannot leave the schema). Greedy. None if the server refuses it (HTTP 400): this server is not asked this way again.
+        NOT checked against a real vLLM server yet (none is available without a GPU): see docs/ARCH_REVIEW.md section 22."""
+        if not self.can_structure:
+            return None
+        body = self._body(system, user, max_tokens, 0.0)
+        body["response_format"] = {"type": "json_schema", "json_schema": {"name": "turn", "schema": schema, "strict": True}}
+        try:
+            out = self._post(body, deadline_s or self.cfg.timeout_s)
+        except BackendError as e:
+            if "HTTP 400" in str(e):
+                self.can_structure = False
                 return None
             raise
         return re.sub(r"^\s*<think>.*?</think>\s*", "", out["choices"][0]["message"]["content"] or "", flags=re.S).strip()

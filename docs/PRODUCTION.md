@@ -216,7 +216,7 @@ never gives up the answer time.
 | Answer time measured | per turn, end of speech -> the answer itself starts (a "Let me check." said first does not count, so it cannot hide a slow model) | `voice/status.py` TurnClock `on_answer`, metric `voice_answer_seconds` |
 | Measured call cap | each worker's cap follows its own 90th percentile: -25% when above 1 s, +1 when under 0.9 s and full. A cut that does not make replies faster is undone (the slowness is not this worker's load) | `server/admission.py`, `voice.admission`, `voice_call_cap` |
 | Model load shedding | when the model's decision time passes 450 ms, a growing share of turns (up to 90%) skip the model: the code decides and speaks. The rest keep measuring it, so it stops by itself when the model recovers | `agent/governor.py` `model_allowed`, `dialogue.model_shed_after_ms` |
-| Decision deadline | the model's decision must come within 1.2 s (was 5 s), else the code decides from the words (a search, the car being discussed, or a guiding question) | `voice.decide_deadline_ms`, `agent/engine.py` `_code_decision` |
+| Decision deadline | the model's decision must come within 1.2 s (was 5 s), else the code decides from the words (a search, the car being discussed, or a guiding question) | `latency.decide_deadline_ms` (was `voice.decide_deadline_ms`), `agent/engine.py` `_code_decision` |
 | Autoscaling on demand | workers are added on (calls in progress + callers just turned away) / measured caps, at 70%; doubles at most every 15 s, shrinks slowly | `deploy/k8s/voice.yaml` HPA, `deploy/prometheus-adapter.yaml`, router `/metrics` |
 | Alerts | answers slower than 1 s, callers turned away, more than 20% of turns without the model, caps shrinking | `deploy/alerts.yml` |
 

@@ -82,7 +82,13 @@ class OllamaBackend(NluBackend):
             return self._chat(system, user, None, max_tokens, temperature=temperature).message.content or ""
         return self._within(system, user, max_tokens, temperature, deadline_s)
 
-    def _within(self, system: str, user: str, max_tokens: int, temperature: float | None, deadline_s: float) -> str:
+    def structured(self, system: str, user: str, schema: dict, max_tokens: int = 120, deadline_s: float | None = None) -> str | None:
+        """One JSON object that follows `schema` (Ollama's `format`: the answer is held to the schema by a grammar). Greedy. Past `deadline_s`: BackendTimeout, and the generation stops."""
+        if not deadline_s:
+            return self._chat(system, user, schema, max_tokens, temperature=0.0).message.content or ""
+        return self._within(system, user, max_tokens, 0.0, deadline_s, schema=schema)
+
+    def _within(self, system: str, user: str, max_tokens: int, temperature: float | None, deadline_s: float, schema: dict | None = None) -> str:
         """The answer, or BackendTimeout when it is not complete within `deadline_s` (28 Oct review, B2: only the 20 s client timeout applied on Ollama, so the 1.2 s decision
         deadline and the reply deadline of the vLLM path were never enforced here). The call runs in a helper thread that reads the reply as a stream and stops reading when told
         to, which closes the connection and so stops the generation on the server; Ollama has one slot here, and a late answer nobody wants would hold up the next turn."""
@@ -92,7 +98,7 @@ class OllamaBackend(NluBackend):
 
         def run() -> None:
             try:
-                for chunk in self._chat(system, user, None, max_tokens, stream=True, temperature=temperature):
+                for chunk in self._chat(system, user, schema, max_tokens, stream=True, temperature=temperature):
                     parts.append(chunk.message.content or "")
                     if stop.is_set():
                         break

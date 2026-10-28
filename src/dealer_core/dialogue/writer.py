@@ -555,7 +555,7 @@ class ReplyWriter:
             feedback = "; ".join(bad)
         return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, "; ".join(bad))
 
-    def stream(self, w: WriterInput, temperature: float | None = None):
+    def stream(self, w: WriterInput, temperature: float | None = None, say: str | None = None):
         """Yield the reply one VERIFIED sentence at a time, as the model produces it, so speech can start after the first sentence.
 
         * Stops (without error) at the first sentence that fails verification, at the deadline, or at the end. A sentence the model did not finish
@@ -565,7 +565,9 @@ class ReplyWriter:
           system is waiting on a question that the model did not ask (or asked about something else) the system's own question is asked.
         * Yields nothing at all if even the first sentence is not usable: the caller then speaks the standard wording.
         `self.last_stream` describes what happened (for the debug trace). `temperature` overrides the writer's own for this reply only
-        (a retry), without touching state other callers' turns read."""
+        (a retry), without touching state other callers' turns read.
+        `say`: the reply is ALREADY written (it came with the decision in the single-call turn, agent/turn_schema.py). It is then checked, sentence by sentence, exactly as
+        text from the model would be, against these facts; the model is not asked. Nothing usable in it: nothing is yielded and `last_stream["stopped"]` says why."""
         t0 = time.perf_counter()
         temperature = self.temperature if temperature is None else temperature
         self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False}
@@ -629,6 +631,9 @@ class ReplyWriter:
 
         def pieces():
             """The model's text as it comes. With a first-sentence deadline, waiting for the first usable sentence is given up after that long."""
+            if say is not None:
+                yield say
+                return
             source = self.backend.lead_in_stream(self.system, user, max_tokens, temperature, deadline)
             if not self.first_deadline_s:
                 yield from source
