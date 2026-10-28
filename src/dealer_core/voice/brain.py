@@ -17,6 +17,11 @@ from ..dialogue.machine import DialogueEngine
 from .services import SPEAK_UP, too_quiet_to_trust
 
 
+def _louder(a: float | None, b: float | None) -> float | None:
+    """The higher of two levels, either of which may be unknown (None)."""
+    return b if a is None else a if b is None else max(a, b)
+
+
 class DealerBrain(FrameProcessor):
     def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, speak_up: tuple[float, float] = (0.0, 0.0), **kwargs) -> None:
         super().__init__(**kwargs)
@@ -35,6 +40,8 @@ class DealerBrain(FrameProcessor):
         # reply is dropped and what they said so far is joined to what comes next, so a sentence cut by a long pause is still one sentence.
         self._open_turn: str | None = None              # the words of the last turn whose reply the caller has not started to hear
         self._carry = ""                                 # words to put in front of the next turn
+        self._carry_level: float | None = None          # the loudest level among those words: a good first half must not be thrown away because of a quiet blip after it
+        self._open_level: float | None = None           # the level of the turn whose reply has not been heard yet
         self._defer_next = False                        # the next transcript is the first half of a sentence that is still being said: keep it, do not answer it
         self._abort = False                             # the turn being answered is to be dropped and carried (see take_back)
         self.continued = 0                              # turns joined to the next one (for tests and the log)
@@ -53,6 +60,7 @@ class DealerBrain(FrameProcessor):
             if self._defer_next:
                 self._defer_next = False
                 self._carry = f"{self._carry} {frame.text}".strip()
+                self._carry_level = _louder(self._carry_level, self._level_of() if self._level_of else None)
                 self.continued += 1
                 return                                              # the caller is still speaking: wait for the rest of the sentence
             await self._answer(frame.text)
@@ -72,7 +80,7 @@ class DealerBrain(FrameProcessor):
         if text is None:                                            # the transcript of the last turn has not arrived yet: keep it when it does
             self._defer_next = True
             return False
-        self._carry = text                                          # (already includes anything carried into it)
+        self._carry, self._carry_level = text, _louder(self._carry_level, self._open_level)       # (already includes anything carried into it)
         self._open_turn = None
         self.continued += 1
         if self._busy.locked():                                     # still being answered: the answer is cancelled and not remembered (see _answer)
@@ -87,9 +95,15 @@ class DealerBrain(FrameProcessor):
         """Runs the turn in a worker thread; every sentence goes to the TTS the moment the engine has verified it."""
         async with self._busy:                                      # one turn at a time per caller
             self._abort = False
-            if self._carry:                                         # the first half of a sentence the caller carried on after
-                text, self._carry = f"{self._carry} {text}".strip(), ""
             level = self._level_of() if self._level_of else None
+            if self._carry:                                         # the first half of a sentence the caller carried on after
+                carried, carried_level = self._carry, self._carry_level
+                self._carry, self._carry_level = "", None
+                if too_quiet_to_trust(text, level, *self._speak_up) and not too_quiet_to_trust(carried, carried_level, *self._speak_up):
+                    text, level = carried, carried_level            # 28 Oct, Test B: "I want to hear more about the Macan." was recognised, then a quiet blip (level 0.018) came while the microphone
+                    logger.debug("brain: a too-quiet piece after a good first half was dropped")      # was held open, and the pair was refused as one: the first half is answered alone
+                else:
+                    text, level = f"{carried} {text}".strip(), _louder(level, carried_level)
             if self._asked_to_speak_up < 2 and too_quiet_to_trust(text, level, *self._speak_up):
                 self._asked_to_speak_up += 1            # the words are not acted on and not remembered: they are probably not what was said
                 self.spoken_up += 1
@@ -99,7 +113,7 @@ class DealerBrain(FrameProcessor):
                 logger.debug(f"brain: too quiet to trust (level {level:.3f}), asked the caller to speak up")
                 return
             self._asked_to_speak_up = 0
-            self._open_turn = text
+            self._open_turn, self._open_level = text, level
             heard = False
             t0 = time.perf_counter()
             loop = asyncio.get_running_loop()
@@ -140,7 +154,7 @@ class DealerBrain(FrameProcessor):
             except asyncio.CancelledError:                       # the caller spoke over us (barge-in): drop the rest of this reply
                 cancelled.set()
                 if self._abort:                                    # ...before hearing any of it: nothing is kept, the words are joined to the next turn
-                    self._abort, self._carry = False, text
+                    self._abort, self._carry, self._carry_level = False, text, level
                     self._open_turn = None
                     raise
                 self.session.remember("customer", text)           # the engine saves a turn only when it finishes: keep what really happened

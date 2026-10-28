@@ -158,3 +158,64 @@ def test_the_pipeline_passes_the_settings_to_the_brain():
     from dealer_core.voice import pipeline
 
     assert "speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below)" in inspect.getsource(pipeline.build_pipeline)
+
+
+# ------------------------------------------------------------------------------------------------ a good first half and a quiet blip (28 Oct, Test B)
+def test_a_good_first_half_is_answered_when_a_quiet_blip_follows_it():
+    """The call: "I want to hear more about the Macan." was recognised (level 0.041); the microphone was held open for the reply and picked up a blip (level 0.018) that came out as
+    "Yeah, I'm going to go ahead and see what happens." The pair was joined and refused as one: the caller heard "speak up" after saying something clearly."""
+    async def go():
+        brain, levels, said, heard, pushed = make(0.041)
+        assert await brain.take_back() is False                           # the caller started again: keep the first half's words
+        await hear(brain, "I want to hear more about the Macan.")
+        assert brain.engine.seen == [] and said == []                     # (held back, not answered yet)
+        levels["now"] = 0.018
+        await hear(brain, "Yeah, I'm going to go ahead and see what happens.")
+        return brain, said
+    brain, said = asyncio.run(go())
+    assert brain.engine.seen == ["I want to hear more about the Macan."] and SPEAK_UP not in said and brain.spoken_up == 0
+
+
+def test_two_halves_that_are_both_clear_are_still_joined():
+    async def go():
+        brain, levels, said, heard, pushed = make(0.09)
+        await brain.take_back()
+        await hear(brain, "I'm looking for a")
+        levels["now"] = 0.08
+        await hear(brain, "Toyota please")
+        return brain
+    assert asyncio.run(go()).engine.seen == ["I'm looking for a Toyota please"]
+
+
+def test_a_quiet_second_half_that_is_not_very_quiet_is_still_joined():
+    async def go():
+        brain, levels, said, heard, pushed = make(0.09)
+        await brain.take_back()
+        await hear(brain, "I'm looking for a")
+        levels["now"] = 0.03                                              # quiet, but above the very-quiet line and not invented-looking
+        await hear(brain, "red Toyota")
+        return brain
+    assert asyncio.run(go()).engine.seen == ["I'm looking for a red Toyota"]
+
+
+def test_a_quiet_first_half_and_a_quiet_second_half_are_still_refused():
+    async def go():
+        brain, levels, said, heard, pushed = make(0.012)
+        await brain.take_back()
+        await hear(brain, "whisper one")
+        await hear(brain, "whisper two")
+        return brain, said
+    brain, said = asyncio.run(go())
+    assert brain.engine.seen == [] and said == [SPEAK_UP]
+
+
+def test_a_quiet_piece_that_looks_invented_after_a_clear_first_half_is_dropped_not_joined():
+    async def go():
+        brain, levels, said, heard, pushed = make(0.09)
+        await brain.take_back()
+        await hear(brain, "Tell me about the Macan.")
+        levels["now"] = 0.045
+        await hear(brain, "Please feel free to ask in the comments below.")
+        return brain, said
+    brain, said = asyncio.run(go())
+    assert brain.engine.seen == ["Tell me about the Macan."] and SPEAK_UP not in said          # (not "Tell me about the Macan. Please feel free to ask...")
