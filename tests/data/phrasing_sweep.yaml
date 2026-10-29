@@ -102,15 +102,15 @@
 - {at: name_q, say: "do you need my surname?", expect: {keeps_booking: true, booked: false, name: ""}}
 
 # ---------------------------------------------------------------------------------------------------- a question in the middle of the booking: answer or not, the booking must go on
-- {at: time_q, say: "does it have a warranty?", expect: {keeps_booking: true}}
-- {at: time_q, say: "how many kilometres has it done?", expect: {keeps_booking: true}}
-- {at: time_q, say: "is the price negotiable?", expect: {keeps_booking: true}}
-- {at: time_q, say: "hmm let me think", expect: {keeps_booking: true}}
-- {at: time_q, say: "one sec", expect: {keeps_booking: true}}
-- {at: time_q, say: "what are your opening hours?", expect: {keeps_booking: true}}
-- {at: time_q, say: "where is the showroom?", expect: {keeps_booking: true}}
+- {at: time_q, say: "does it have a warranty?", expect: {keeps_booking: true, reply_has: ["warranty"]}}
+- {at: time_q, say: "how many kilometres has it done?", expect: {keeps_booking: true, reply_has: ["41,000"]}}
+- {at: time_q, say: "is the price negotiable?", expect: {keeps_booking: true, reply_has: ["fixed"]}}
+- {at: time_q, say: "hmm let me think", expect: {keeps_booking: true, reply_has: ["take your time"]}}
+- {at: time_q, say: "one sec", expect: {keeps_booking: true, reply_has: ["take your time"]}}
+- {at: time_q, say: "what are your opening hours?", expect: {keeps_booking: true, reply_has: ["9 am", "8 pm"]}}
+- {at: time_q, say: "where is the showroom?", expect: {keeps_booking: true, reply_has: ["sheikh zayed", "al quoz"]}}
 - {at: time_q, say: "okay so", expect: {keeps_booking: true}}
-- {at: time_q, say: "is it automatic?", expect: {keeps_booking: true}}
+- {at: time_q, say: "is it automatic?", expect: {keeps_booking: true, reply_has: ["automatic"]}}
 - {at: time_q, say: "sorry what times again?", expect: {keeps_booking: true, reply_has: ["9", "2"]}}
 - {at: time_q, say: "2 pm, and is it automatic?", expect: {slot_hour: 14}}
 - {at: contact_q, say: "Fatima, and what should I bring?", expect: {name: Fatima}}
