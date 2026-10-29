@@ -61,6 +61,9 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
     """{'make': ..., 'model': ...} (either may be absent) found in the tokens, with fuzzy matching on longer names."""
     out: dict = {}
     text = f" {' '.join(tokens)} "
+    # "BMWs", "Audis", "Porsche's": a make said in the plural (29 Oct, a barge-in call: "do you have any BMWs?" found no make, and the Toyota search went on)
+    text = re.sub(r" ([a-z]{2,})(?:'s|s) ", lambda m: f" {m[1]} " if m[1] in vocab or m[1] in WELL_KNOWN_MAKES else m[0], text)
+    text = re.sub(r" ([a-z]{2,})(?:'s|s) ", lambda m: f" {m[1]} " if m[1] in vocab or m[1] in WELL_KNOWN_MAKES else m[0], text)   # (twice: neighbours overlap)
     for alias, make in MAKE_ALIASES.items():
         if f" {alias} " in text and make in vocab:
             out["make"] = make
@@ -83,8 +86,11 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
                 out["make"] = max(scored, key=lambda x: x[1][1])[1][0]
     flat = [(model, make) for make, models in vocab.items() for model in models]
     # Models with digits ("m3", "320i", "c 300") are matched in the form the number normaliser gives the caller's words ("m three"), as well as as written
+    # A two-character model ("X5", "M3", "Q7") counts without its make only after "the" ("tell me about the X5"), and only when one make has it: alone it is too
+    # easily something else ("a four-wheel drive" is not the A4). 29 Oct: "Tell me about the X5" after a Toyota search got the Toyota list.
+    unique = {m for m, _ in flat if sum(1 for x, _ in flat if x == m) == 1}
     hits = [(m, mk) for m, mk in flat if (f" {m} " in text or (any(ch.isdigit() for ch in m) and f" {spoken_form(m)} " in text))
-            and (len(m) > 2 or "make" in out)]
+            and (len(m) > 2 or "make" in out or (m in unique and (f" the {m} " in text or f" the {spoken_form(m)} " in text)))]
     if not hits:                                              # a caller drops the trim: "the GLE" for "GLE 450", "Range Rover" for "Range Rover Sport"
         heads: dict[str, list[tuple[str, str]]] = {}
         for m, mk in flat:

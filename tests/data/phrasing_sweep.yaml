@@ -190,3 +190,8 @@
 # ---------------------------------------------------------------------------------------------------- "the best for a family" within what was asked for (29 Oct, the owner's review of PR 25:
 # "a family SUV under 100,000" got the Kia Carnival, a van at 126,000)
 - {at: search, say: "What's the best family SUV under 100,000?", expect: {reply_has: [RAV4], reply_lacks: [Carnival, Land Cruiser]}}
+
+# ---------------------------------------------------------------------------------------------------- another make, or a model without its make, after the Toyota search (29 Oct, a barge-in call)
+- {at: search, say: "Do you have any BMWs?", expect: {tool: search_cars, reply_has: [BMW], reply_lacks: [Corolla]}}
+- {at: search, say: "Tell me about the X5.", expect: {tool: get_car, car: X5}}
+- {at: search, say: "Actually, do you have any Porsches?", expect: {reply_has: [Macan], reply_lacks: [Corolla]}}
