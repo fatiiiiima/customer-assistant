@@ -672,6 +672,11 @@ class ReplyWriter:
         except Exception as e:                                                   # backend trouble: what was already said stands
             stopped = stopped or f"backend: {type(e).__name__}"
         reply = " ".join(spoken)
+        if spoken and spoken[-1].rstrip().endswith(","):
+            # Cut off after its first clause (a check, the deadline, or an unfinished last sentence): nothing is added after a comma here. The caller of the stream finishes
+            # the sentence (agent/engine.py) and then asks the question. 28 Oct test call: "The 2019 BMW X5 is white, Would you like to come and see it?".
+            self.last_stream.update(sentences=len(spoken), stopped=stopped or "cut after a clause", dangling=True)
+            return
         if spoken:
             # facts the model's reply does not cover are said as they are, BEFORE the closing question
             first_word = reply.split()[0].lower().strip("!.,") if reply else ""

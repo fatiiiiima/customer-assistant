@@ -44,7 +44,7 @@ priced shall let lets i've we've i'm we're you've you'd you'll we'd don't doesn'
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CAPITAL = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-Z][A-Za-z0-9]+\b")
-_CHARS = re.compile("^[A-Za-z0-9 ,'" + chr(0x2019) + ".!?%:;-]+$")
+_CHARS = re.compile("^[A-Za-z0-9 ,'" + chr(0x2019) + chr(0xB0) + ".!?%:;-]+$")      # ° too: the site's own features say "360° camera" and the code says it (28 Oct replay)
 _NEG = re.compile(_NEGATION.pattern + "|" + r"\bno\b|\bnone\b|\bwithout\b", re.I)
 _QUOTED = re.compile(r"(?:^|\s)'([^']{4,}?)'(?=[\s.,!?]|$)")          # 'just show me', not the apostrophes in it's ... you'd
 
@@ -158,6 +158,9 @@ def clean_draft(raw: str) -> str:
     t = re.sub(r"^(?:SAY|REPLY)\s*:\s*", "", t, flags=re.I)
     t = re.sub(r"\s*[–—]\s*", ", ", t)
     t = t.replace("’", "'").replace("‘", "'").replace("“", "").replace("”", "").replace('"', "")
+    # Units written the way a spec sheet writes them, said the way the code says them (28 Oct replay: "8.9 L/100 km" was refused for its slash, cutting the reply).
+    t = re.sub(r"\b(\d+(?:\.\d+)?)\s?(?:L|l|litres?|liters?)\s?/\s?100\s?km\b", r"\1 litres per hundred kilometres", t)
+    t = re.sub(r"\b(\d+)\s?km\s?/\s?h\b", r"\1 kilometres an hour", t)
     return strip_fillers(" ".join(t.split()))
 
 

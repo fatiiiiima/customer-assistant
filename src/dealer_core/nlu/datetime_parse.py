@@ -129,6 +129,10 @@ def _parse_time(t: str) -> tuple[time | None, bool, str]:
             h = _HOURS[m[2]]
             hh, assumed = _apply_period(h, word_period[2] if word_period else None)
             return time(hh, _MINUTES.get(m[3] or "", 0)), assumed, m[0]
+    m = re.search(r"\b(\d{1,2}) (?:in the |at )(morning|afternoon|evening|night)\b", t)
+    if m and 1 <= int(m[1]) <= 12:                                       # "9 in the morning", "2 in the afternoon": how the agent itself offers times (28 Oct: not read at all)
+        hh, assumed = _apply_period(int(m[1]), m[2])
+        return time(hh, 0), assumed, m[0]
     m = re.search(r"\b(?:at|around|about|by) (\d{1,2})\b", t)
     if m and 1 <= int(m[1]) <= 12:
         hh, assumed = _apply_period(int(m[1]), None)
