@@ -29,6 +29,8 @@ SETUP = {                                          # step -> (lines that reach i
     "search": (["I'm looking for a Toyota."], lambda s: bool(s.filters.get("make"))),
     "list": (["I'm looking for a Toyota.", "Any model and any budget is fine."], lambda s: len(s.shown) >= 3 and not s.car),
     "car": (["I'm looking for a Toyota.", "Any model and any budget is fine.", "Tell me about the Corolla."], lambda s: bool(s.car)),
+    "price_q": (["I'm looking for a BMW.", "Tell me about the X5."], lambda s: bool(s.car) and not s.haggles),
+    "haggled": (["I'm looking for a BMW.", "Tell me about the X5.", "Can you do 150,000?"], lambda s: s.haggles.get(s.car or "", {}).get("pushes") == 1),
     "day_q": (["I'm looking for a Toyota.", "Any model and any budget is fine.", "Tell me about the Corolla.", "Yes, I'd like a test drive."],
               lambda s: s.state.value == "slot" and not s.offered_slots),
     "time_q": (["I'm looking for a Toyota.", "Any model and any budget is fine.", "Tell me about the Corolla.", "Yes, I'd like a test drive.", "Tomorrow."],
@@ -108,6 +110,8 @@ def check(expect: dict, intent: str, reply: str, s, e) -> list[str]:
             out.append(f"booking talk dropped (state {s.state.value})")
         elif key == "reply_has" and not any(w.lower() in low for w in want):
             out.append(f"reply has none of {want}")
+        elif key == "reply_has_all" and not all(w.lower() in low for w in want):
+            out.append(f"reply lacks {[w for w in want if w.lower() not in low]}")
         elif key == "reply_lacks" and any(w.lower() in low for w in want):
             out.append(f"reply has {[w for w in want if w.lower() in low]}")
     return out

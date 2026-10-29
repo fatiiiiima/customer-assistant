@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autoscaler walkthrough</title>
+<style>
+:root{--text-primary:#1f1e1d;--text-secondary:#5f5e5a;--surface-0:#faf9f5;--surface-1:#f1efe8;--border:rgba(31,30,29,.15);--border-strong:rgba(31,30,29,.3);--radius:8px}
+@media (prefers-color-scheme: dark){:root{--text-primary:#f1efe8;--text-secondary:#b4b2a9;--surface-0:#1f1e1d;--surface-1:#2c2c2a;--border:rgba(241,239,232,.15);--border-strong:rgba(241,239,232,.3)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-0);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.6}
+main{max-width:720px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;font-weight:500;margin:0 0 4px}
+.sub{font-size:14px;color:var(--text-secondary);margin:0 0 16px}
+button,select{font:inherit;font-size:14px;color:var(--text-primary);background:transparent;border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 12px;cursor:pointer}
+button:hover{background:var(--surface-1)}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.clk{font-variant-numeric:tabular-nums;font-size:14px;color:var(--text-secondary);min-width:44px}
+.cap{margin:12px 0 4px;padding:10px 12px;border-radius:var(--radius);background:var(--surface-1);font-size:14px;line-height:1.5;min-height:44px}
+.tick{font-size:12px;color:var(--text-secondary);min-height:18px;margin:4px 0 0;font-variant-numeric:tabular-nums}
+.fleet{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 0;min-height:60px}
+.wk{display:flex;flex-direction:column;align-items:center;gap:2px}
+.box{display:grid;grid-template-columns:repeat(4,6px);gap:2px;padding:3px;border:0.5px solid var(--border-strong);border-radius:5px}
+.box.st{border:1px dashed #7F77DD}
+.box.dr{border:1px solid #D85A30}
+.c{width:6px;height:6px;border-radius:1px;background:var(--border)}
+.c.on{background:#1D9E75}
+.dr .c.on{background:#D85A30}
+.st .c{background:transparent}
+.lb{font-size:11px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.s{background:var(--surface-1);border-radius:var(--radius);padding:8px 10px}
+.s b{display:block;font-size:18px;font-weight:500;font-variant-numeric:tabular-nums}
+.s span{font-size:12px;color:var(--text-secondary)}
+.key{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin-top:8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.note{font-size:12px;color:var(--text-secondary);margin-top:16px}
+@media (max-width:520px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<main>
+<h1>How the voice workers scale</h1>
+<p class="sub">26 minutes of callers in about 80 seconds: steady growth, a surge, then callers leaving.</p>
+<div class="bar">
+<button id="pp" onclick="toggle()">Pause</button>
+<button onclick="restart()">Restart</button>
+<select id="sp" onchange="speed=+this.value"><option value="10">0.5×</option><option value="20" selected>1×</option><option value="40">2×</option></select>
+<input type="range" id="scrub" min="0" max="1560" step="1" value="0" style="flex:1;min-width:120px" oninput="seek(+this.value)">
+<span class="clk" id="clk">0:00</span>
+</div>
+<div class="cap" id="cap"></div>
+<div style="position:relative;height:150px;margin-top:8px"><canvas id="cv" style="width:100%;height:150px"></canvas></div>
+<div class="key">
+<span><i class="sw" style="background:#1D9E75"></i>Callers in a call</span>
+<span><i class="sw" style="background:#888780"></i>Places (ready workers × 16)</span>
+<span><i class="sw" style="border-top:1.5px dashed #D85A30;height:0;width:12px;border-radius:0"></i>70% of places</span>
+<span><i class="sw" style="background:#E24B4A"></i>Turned away</span>
+</div>
+<div class="tick" id="tick"></div>
+<div class="fleet" id="fleet"></div>
+<div class="key">
+<span><i class="sw" style="border:1px solid var(--border-strong)"></i>Worker, 16 places (green = a call)</span>
+<span><i class="sw" style="border:1px dashed #7F77DD"></i>Starting (45 s)</span>
+<span><i class="sw" style="border:1px solid #D85A30"></i>Draining: no new calls</span>
+</div>
+<div class="stats">
+<div class="s"><b id="a">0</b><span>Callers in a call</span></div>
+<div class="s"><b id="w">0</b><span>Workers ready</span></div>
+<div class="s"><b id="f">0%</b><span>How full</span></div>
+<div class="s"><b id="r">0</b><span>Turned away now</span></div>
+</div>
+<p class="note">A teaching version of the scaling rule in deploy/k8s/voice.yaml (scale on demand at 70% of capacity, minimum 8, double at most every 15 s, wait 5 minutes then remove at most 2 a minute). The 45-second worker start, the 3-minute average call and the caller curve are invented for the demo; nothing here is measured.</p>
+</main>
+<script>
+const T=1560,SLOT=16,TGT=0.7,MINR=8,MAXR=72,START=45;
+function load(t){
+  if(t<60)return 40;
+  if(t<240)return 40+(t-60)/180*160;
+  if(t<330)return 200;
+  if(t<360)return 200+(t-330)/30*140;
+  if(t<480)return 340;
+  if(t<600)return 340-(t-480)/120*290;
+  return 50;
+}
+function rng(s){return function(){s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const R=rng(11);
+let W=[],nid=0,recs=[],lastDown=-999,msg='Autoscaler checks every 15 s.';
+const add=r=>W.push({id:nid++,ready:r,calls:0,drain:false});
+for(let i=0;i<MINR;i++)add(0);
+const snaps=[],fmt=t=>Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
+for(let t=0;t<=T;t++){
+  W=W.filter(w=>!(w.drain&&w.calls===0));
+  for(const w of W){let k=0;for(let i=0;i<w.calls;i++)if(R()<1/200)k++;w.calls-=k;}
+  let active=W.reduce((s,w)=>s+w.calls,0);
+  const tg=Math.round(load(t));
+  while(active>tg){const b=W.filter(w=>w.calls>0);b[Math.floor(R()*b.length)].calls--;active--;}
+  let short=0;
+  for(let i=active;i<tg;i++){
+    const ok=W.filter(w=>w.ready<=t&&!w.drain&&w.calls<SLOT);
+    if(!ok.length){short++;continue}
+    const a=ok[Math.floor(R()*ok.length)],b=ok[Math.floor(R()*ok.length)];
+    (a.calls<=b.calls?a:b).calls++;active++;
+  }
+  if(t>0&&t%15===0){
+    const live=W.filter(w=>!w.drain),rl=live.filter(w=>w.ready<=t),pl=rl.length*SLOT,dem=active+short;
+    const want=Math.min(MAXR,Math.max(MINR,Math.ceil(dem/(SLOT*TGT))));
+    recs.push([t,want]);recs=recs.filter(r=>r[0]>t-300);
+    const n=live.length,head=`${fmt(t)} check: demand ${dem}${short?` (incl. ${short} turned away)`:''} ÷ ${pl} places = ${Math.round(dem/Math.max(1,pl)*100)}% → wants ${want} workers, has ${n}`;
+    if(want>n){const k=Math.min(want-n,n);for(let i=0;i<k;i++)add(t+START);msg=`${head} → starting ${k}${k<want-n?' (limit: double at most)':''}`}
+    else{
+      const hi=Math.max(...recs.map(r=>r[1]));
+      if(hi<n){
+        if(t-lastDown>=60){const k=Math.min(2,n-hi);rl.sort((x,y)=>x.calls-y.calls).slice(0,k).forEach(w=>w.drain=true);lastDown=t;msg=`${head} → draining the ${k} emptiest`}
+        else msg=`${head} → waits (2 removals a minute at most)`;
+      }else if(want<n)msg=`${head} → waits: it wanted ${hi} at some point in the last 5 minutes`;
+      else msg=`${head} → no change`;
+    }
+  }
+  const rd=W.filter(w=>w.ready<=t&&!w.drain).length;
+  snaps.push({t,active,short,places:rd*SLOT,ready:rd,down:lastDown>0&&t-lastDown<75,ws:W.map(w=>[w.calls,w.ready>t?w.ready-t:0,w.drain?1:0]),msg});
+}
+const maxP=Math.max(...snaps.map(s=>s.places),...snaps.map(s=>s.active+s.short))*1.08;
+function caption(s){
+  const st=s.ws.some(w=>w[1]>0),dr=s.ws.some(w=>w[2]);
+  if(s.short>0)return 'Surge: callers arrive faster than new workers can start. The spare 30% is used up, so some callers are turned away until the starting workers are ready (45 s).';
+  if(s.t>=900&&s.ready<=MINR&&!dr)return 'Back to the minimum 8 workers, ready for the next rise.';
+  if(dr||s.down)return 'Fewer callers: at most 2 workers a minute stop taking new calls (orange). Each one leaves only after its last call ends. No call is cut off.';
+  if(st)return 'Workers are about 70% full, so the autoscaler starts more (dashed). Meanwhile, new callers use the spare 30% on the workers already running.';
+  if(s.t>=480&&s.ready*SLOT*TGT>s.active*1.3)return 'Callers are leaving, but nothing is removed yet. The autoscaler waits 5 minutes in case they come back.';
+  if(s.t<60)return 'Quiet: the minimum 8 workers are always on. The router spreads calls evenly, so each worker is a little full.';
+  return 'Steady: every worker sits around 70% full or below. The empty top part of each worker is the spare room.';
+}
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+function chart(i){
+  const dpr=window.devicePixelRatio||1,W2=cv.clientWidth,H=150;
+  cv.width=W2*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W2,H);
+  const L=34,Rr=6,Tp=6,B=18,x=t=>L+t/T*(W2-L-Rr),y=v=>Tp+(1-v/maxP)*(H-Tp-B);
+  const sec=getComputedStyle(document.body).getPropertyValue('--text-secondary')||'#888';
+  ctx.font='11px sans-serif';ctx.fillStyle=sec;ctx.strokeStyle='rgba(136,135,128,.25)';ctx.lineWidth=0.5;
+  for(const v of [0,200,400,600,800]){if(v>maxP)continue;ctx.beginPath();ctx.moveTo(L,y(v));ctx.lineTo(W2-Rr,y(v));ctx.stroke();ctx.fillText(v,4,y(v)+4)}
+  for(const m of [0,5,10,15,20,25])ctx.fillText(m+' min',Math.min(x(m*60)-8,W2-40),H-4);
+  const line=(f,col,w,dash)=>{ctx.beginPath();ctx.setLineDash(dash||[]);ctx.strokeStyle=col;ctx.lineWidth=w;for(let k=0;k<=i;k++){const p=snaps[k];k?ctx.lineTo(x(p.t),y(f(p))):ctx.moveTo(x(p.t),y(f(p)))}ctx.stroke();ctx.setLineDash([])};
+  line(p=>p.places,'#888780',1.5);
+  line(p=>p.places*TGT,'#D85A30',1.2,[4,3]);
+  line(p=>p.active,'#1D9E75',2);
+  ctx.fillStyle='#E24B4A';
+  for(let k=0;k<=i;k++){const p=snaps[k];if(p.short>0)ctx.fillRect(x(p.t)-1,y(p.active+p.short),2,y(p.active)-y(p.active+p.short))}
+  ctx.strokeStyle=sec;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x(snaps[i].t),Tp);ctx.lineTo(x(snaps[i].t),H-B);ctx.stroke();
+}
+let last=-1;
+function render(i){
+  if(i===last)return;last=i;const s=snaps[i];
+  document.getElementById('clk').textContent=fmt(s.t);
+  document.getElementById('scrub').value=s.t;
+  document.getElementById('cap').textContent=caption(s);
+  document.getElementById('tick').textContent=s.msg;
+  let h='';
+  for(const [c,st,dr] of s.ws){
+    let cells='';for(let k=0;k<SLOT;k++)cells+='<i class="c'+(k<c&&!st?' on':'')+'"></i>';
+    h+='<div class="wk"><div class="box'+(st?' st':dr?' dr':'')+'">'+cells+'</div><span class="lb">'+(st?st+' s':c)+'</span></div>';
+  }
+  document.getElementById('fleet').innerHTML=h;
+  document.getElementById('a').textContent=s.active;
+  document.getElementById('w').textContent=s.ready;
+  document.getElementById('f').textContent=Math.round(s.active/Math.max(1,s.places)*100)+'%';
+  document.getElementById('r').textContent=s.short;
+  chart(i);
+}
+let time=0,playing=true,speed=20,prev=null;
+function frame(ts){
+  if(prev!==null&&playing){time+=(ts-prev)/1000*speed;if(time>=T){time=T;setPlay(false)}}
+  prev=ts;render(Math.floor(time));requestAnimationFrame(frame);
+}
+function setPlay(p){playing=p;document.getElementById('pp').textContent=p?'Pause':'Play'}
+function toggle(){if(!playing&&time>=T)time=0;setPlay(!playing)}
+function restart(){time=0;last=-1;setPlay(true)}
+function seek(v){time=v;last=-1;render(v)}
+window.addEventListener('resize',()=>{last=-1});
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

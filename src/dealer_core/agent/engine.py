@@ -1000,7 +1000,8 @@ class AgentEngine:
         if not booking_flow and s.car and "about" in A.topics_in(joined) and self._names_only_this_car(s, words):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "anything else about the car I should know?" / "what else should I know about it?"
         picked = ex.selection(text, s.shown)
-        if not booking_flow and _BOOKING_CUE.search(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
+        cue = re.sub(r"\bcome on\b", "", joined)                                 # "Come on, can you do 150?" is pushing on the price, not a visit
+        if not booking_flow and _BOOKING_CUE.search(cue) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", cue):
             # 28 Oct: "Yes, I want to come and see the Macan." is a booking, not a pick from the list: naming the car must not turn it into "tell me about it" (three times in one call)
             named_car = ex.find_vehicle(words, self.svc.inventory.vocabulary())
             only = list(self.svc.inventory.search(SearchFilters(make=named_car.get("make"), model=named_car["model"]), 2)) if named_car.get("model") else []
@@ -1476,6 +1477,12 @@ class AgentEngine:
         told = s.said_about.setdefault(car.stock_id, [])
         topics = A.topics_in(words)
         if HAGGLE.search(words) or _VALUE.search(words):                 # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
+            rec = s.haggles.setdefault(car.stock_id, {"pushes": 0, "offered": []})
+            if HAGGLE.search(words):
+                rec["pushes"] += 1
+                rec["asked"] = ex.asked_price(words, car.price) or rec.get("asked")     # "any discount at all?" after "can you do 150?": still about 150,000
+                if rec["pushes"] >= 2:                                   # asked again: the price stays, cars near the asked price are offered instead
+                    return self._cheaper_instead(s, car, words, rec, facts, dbg)
             return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask()}", "facts": facts, "awaiting": True}
         if d is not None and topics and set(topics) == {"about"} and not A.asked_feature(words):
             return self._more_about(s, car, d, told, facts, ask)         # "tell me more", "anything else about it?": a group of facts not told yet
@@ -1497,6 +1504,37 @@ class AgentEngine:
                 return self._more_about(s, car, d, told, facts, ask, prefer=("condition",) if _OPINION.search(words) else ())
         s.described = car.stock_id
         return {"core": f"{W.car_line(s, car)} {ask()}", "facts": facts, "awaiting": True}
+
+    def _cheaper_instead(self, s: Session, car: CarView, words: str, rec: dict, facts: list[str], dbg: TurnDebug) -> dict:
+        """The caller asked for a lower price on this car a second time (owner, 29 Oct). The price never changes; cars that cost about what was asked
+        ("can you do 150?") are offered instead, each at its own fixed price: the same type of car first, then the nearest in price. With no amount
+        named, cars somewhat cheaper than this one. Each push names cars not named yet; with none left, the closest ones are named again."""
+        asked = rec.get("asked")
+        target = asked if asked and asked < car.price else round(car.price * 0.85 / 5000) * 5000
+        pool = [v for v in (self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(max_price=car.price - 1), 50))
+                if v is not None and v.stock_id != car.stock_id and v.price < car.price]
+        stays = f"The {T.short_name(car)} stays at {T.money(car.price)}, as our prices are fixed."
+        dbg.tools.append(f"cheaper_instead({car.stock_id}, push {rec['pushes']}, asked {asked or 'nothing'}) -> {len(pool)} cheaper in stock")
+        if not pool:
+            return {"core": f"{stays} It's the lowest-priced car we have. {W.offer_test_drive(s)}", "facts": facts, "awaiting": True}
+        fresh = [c for c in pool if c.stock_id not in rec["offered"]]
+        rank = lambda c: (c.price > target * 1.05, c.body_type != car.body_type, abs(c.price - target))
+        near = sorted(fresh or pool, key=rank)[:2]
+        named = " and ".join(f"the {T.car_name(c)} at {T.money(c.price)}" for c in near)
+        if not fresh:
+            offer = f"The closest I have are still {named}."
+        elif all(c.price > target * 1.05 for c in near):
+            offer = f"The closest I have to {T.money(target)} {'is' if len(near) == 1 else 'are'} {named}."
+        elif rec["offered"]:
+            offer = f"There's also {named}."
+        elif asked:
+            offer = f"If you'd like something nearer {T.money(target)}, there's {named}."
+        else:
+            offer = f"If you'd like something for less, there's {named}."
+        rec["offered"] = list(dict.fromkeys([*rec["offered"], *(c.stock_id for c in near)]))
+        s.shown = near                                                  # "the first one" / "tell me about the Q7" now means one of these
+        close = "Would you like to hear about it?" if len(near) == 1 else "Would you like to hear about one of them?"
+        return {"core": f"{stays} {offer} {close}", "facts": facts + fact_sheet(near, self._branch_name).splitlines(), "awaiting": True}
 
     def _more_about(self, s: Session, car, d, told: list[str], facts: list[str], ask, prefer: tuple[str, ...] = ()) -> dict:
         """The next one or two groups of facts about this car that the caller has not heard; when there are none, say so rather than repeat one."""
