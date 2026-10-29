@@ -842,6 +842,8 @@ class AgentEngine:
             return {"tool": "search_cars", "via": "rules"}
         if s.car:
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}
+        if s.filters or s.shown:                                           # a search is under way (29 Oct: "4 Toyotas... What budget?" then the code asked "a make, a type of car,
+            return {"tool": "search_cars", "via": "rules"}                 # or a budget?" as if nothing had been said): read out what it has found
         return {"tool": "none", "via": "rules", "fallback": True}
 
     def _code_hint(self, text: str) -> tuple[dict, list[str]]:

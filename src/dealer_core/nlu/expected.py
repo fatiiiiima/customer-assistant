@@ -30,7 +30,9 @@ _NOTHING_IN_PARTICULAR = re.compile(
     r"(?:i'?m|i\s+am)\s+not\s+looking\s+for\s+(?:any|anything)\s+(?:specific|particular)(?:\s+(?:make|model|colou?r|brand|one|thing|kind|type))?|"
     r"(?:any|no)\s+(?:budget|limit|price|make|colou?r|mileage|preference|particular|one|range|style|type|size|brand|kind|model)|not\s+(?:really\s+)?(?:fussed|bothered|fussy|sure)|"
     r"(?:it|that)\s+(?:does\s*not|doesnt|doesn't)\s+matter|does\s*not\s+matter|i\s+(?:do\s*not|dont|don't)\s+mind|flexible|open|surprise me)"
-    r"(?:\s+(?:(?:or|of|and|any)\s+)*(?:budget|limit|price|make|colou?r|mileage|preference|one|range|style|type|size|brand|kind|model|is fine|will do|works|for me|really))*$")
+    r"(?:\s+(?:(?:or|of|and|any)\s+)*(?:budget|limit|price|make|colou?r|mileage|preference|one|range|style|type|size|brand|kind|model|is fine|will do|works|for me|really|"
+    # 29 Oct, the owner's call: "any model and any budget is all you need", "any model or any budget is alright" were not understood (asked for a make again)
+    r"is alright|is all right|is ok|is okay|is good|is all i need|is all you need|is all|is fine with me|either way|please|thanks|thank you|at all))*$")
 
 
 def last_question(last_agent: str) -> str:
