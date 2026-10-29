@@ -130,3 +130,31 @@ def test_this_weekend_offers_the_weekend():
     e, s = at("day_q")
     intent, reply = say(e, s, "this weekend")
     assert "Saturday" in reply or "Sunday" in reply
+
+
+# ------------------------------------------------------------------------------------------------ C: a yes is a yes
+@pytest.mark.parametrize("text", ["that's correct", "sounds good", "please do", "absolutely", "sure, go for it", "lock it in", "that works for me",
+                                  "all correct, thanks", "yes that's all correct", "of course"])
+def test_the_ordinary_ways_to_agree_book_at_the_read_back(text):
+    e, s = at("readback")
+    intent, _ = say(e, s, text)
+    assert intent == "confirm_booking" and s.booking is not None
+
+
+@pytest.mark.parametrize("text", ["that's not correct", "sounds good but at 5", "no that's wrong", "not yet"])
+def test_but_not_a_disagreement_or_a_condition(text):
+    e, s = at("readback")
+    say(e, s, text)
+    assert s.booking is None
+
+
+def test_yes_and_a_question_books_and_answers():
+    e, s = at("readback")
+    intent, reply = say(e, s, "yes and does it have a warranty?")
+    assert intent == "confirm_booking" and s.booking is not None and "warranty" in reply
+
+
+@pytest.mark.parametrize("text", ["sure, why not", "sounds good", "let's do it", "absolutely"])
+def test_agreeing_to_an_invitation_starts_the_booking(text):
+    e, s = at("car")
+    assert say(e, s, text)[0] == "prepare_booking"

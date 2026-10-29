@@ -46,6 +46,13 @@ _PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay
 _BOOK_YES = re.compile(r"(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|right|correct)(?: please)? )*(?:please )?"
                        r"(?:go ahead(?: and (?:book|confirm)(?: it| that)?)?|(?:book|confirm)(?: it| that| me in| the (?:test drive|booking)| a test drive| the test drive)?)"
                        r"(?: please| for me| thanks| thank you)*")
+# The other ordinary ways to agree (29 Oct sweep: "that's correct", "sounds good", "absolutely", "lock it in", "sure, why not" were not a yes for the code). Whole utterances only:
+# "that's not correct" or "sounds good but at 5" do not match.
+_AGREE = re.compile(r"(?:(?:yes|yeah|yep|yup|ok(?:ay)?|sure|great|perfect|lovely|alright)(?: please)? )*"
+                    r"(?:that'?s (?:all )?(?:correct|right|fine|perfect|good|great)|(?:all|that'?s all) (?:correct|good|right|fine)|"
+                    r"sounds? (?:good|great|perfect|right|fine)|please do|absolutely|definitely|of course|go for it|do it|lock it in|"
+                    r"(?:that )?works(?: for me)?|that works(?: for me)?|that'?s it|(?:sure )?why not|let'?s do (?:it|that)|go on then|i'?d (?:like|love) that|yes please)"
+                    r"(?: (?:thanks|thank you|please|go ahead|cheers))*")
 # "I want to see the car" right after an invitation to come and see it (same call): a visit, not more facts. Alone it can mean the photos (section 12), so only after one.
 _SEE_CAR = re.compile(r"\b(?:see|look at|view|check out) (?:the car|this car|that car|it|her|the (?!(?:photos?|pictures?|pics|images?|videos?)\b)\w+)\b(?! (?:photos?|pictures?|pics|images?|videos?)\b)")
 _CHANGE = re.compile(r"\b(?:no|not|change|different|another|other|cancel|wait|actually|instead|but)\b")
@@ -486,6 +493,8 @@ class AgentEngine:
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
+        if decision.get("also") and s.car:
+            result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
         if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
             rest = _REACTION_LEAD.sub("", result["core"], count=1)
             result["core"] = "You're welcome. " + rest[:1].upper() + rest[1:]
@@ -717,24 +726,27 @@ class AgentEngine:
         ask = _REACTION_LEAD.sub("", W.ask_missing(s, missing, s.draft_name), count=1)
         return ask[:1].upper() + ask[1:]
 
-    def _t_booking_aside(self, s, args, text, dbg) -> dict:
-        """A side answer in the middle of a booking, then the booking's own question again. Nothing about the booking changes."""
+    def _side_answer(self, s: Session, text: str, kind: str | None) -> str:
+        """The answer to a side remark in the middle of a booking, from the data only ("" when there is nothing to say)."""
         words = " ".join(ex.tokens_of(text))
         car = self.svc.get_car(s.car) if s.car else None
         d = self.svc.site.cars.get(s.car) if (car is not None and getattr(self.svc, "site", None) is not None) else None
-        kind = args.get("kind")
         if kind == "think":
-            answer = "No problem, take your time."
-        elif kind == "showroom":
-            answer = " ".join(A.showroom_answer(self.svc.site, words) or [])
-        elif car is not None and (HAGGLE.search(words) or _VALUE.search(words)):
-            answer = f"Our prices are fixed, so it's {T.money(car.price)}."
-        elif car is not None:
-            parts = A.detail_answer(car, d, words) or [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."),
-                                                                       ("price", f"It's {T.money(car.price)}."), ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
-            answer = " ".join(parts)
-        else:
-            answer = ""
+            return "No problem, take your time."
+        if kind == "showroom":
+            return " ".join(A.showroom_answer(self.svc.site, words) or [])
+        if car is None:
+            return ""
+        if HAGGLE.search(words) or _VALUE.search(words):
+            return f"Our prices are fixed, so it's {T.money(car.price)}."
+        parts = A.detail_answer(car, d, words) or [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."),
+                                                                   ("price", f"It's {T.money(car.price)}."), ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
+        return " ".join(parts)
+
+    def _t_booking_aside(self, s, args, text, dbg) -> dict:
+        """A side answer in the middle of a booking, then the booking's own question again. Nothing about the booking changes."""
+        kind = args.get("kind")
+        answer = self._side_answer(s, text, kind)
         dbg.tools.append(f"booking_aside({kind})")
         prompt = self._booking_prompt(s)
         return {"core": f"{answer or 'Let me check that at the showroom for you.'} {prompt}", "risk": "high", "awaiting": True,
@@ -752,7 +764,7 @@ class AgentEngine:
     @staticmethod
     def _confirms(words: str) -> bool:
         """A yes to the read-back: "yes", "yes please", and also "yes, please book it", "go ahead", "book it", "confirm it"."""
-        return bool(_PLAIN_YES.fullmatch(words) or _BOOK_YES.fullmatch(words))
+        return bool(_PLAIN_YES.fullmatch(words) or _BOOK_YES.fullmatch(words) or _AGREE.fullmatch(words))
 
     @staticmethod
     def _invited_recently(s: Session) -> bool:
@@ -1059,7 +1071,7 @@ class AgentEngine:
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "tomorrow at four" right after "want to book a test drive?"
         offered = _OFFERED_DRIVE.search(q) or (s.described == s.car and q and not re.search(
             r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
-        if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and _PLAIN_YES.fullmatch(joined) and offered:
+        if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and offered:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
         if _THANKS.fullmatch(joined) and (s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules", "thanked": True}   # mid-booking (29 Oct: "Thank you." after the number dropped the question for the name)
@@ -1092,6 +1104,9 @@ class AgentEngine:
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or detail)
                 and not _BOOKING_CUE.search(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
+        if s.read_back and (both := re.match(r"(yes(?: please)?|yeah|yep|sure|ok(?:ay)?|correct|that'?s right|perfect)(?: and| but| also| oh and)? (.+)", joined)) \
+                and self._confirms(both[1]) and self._aside_kind(s, both[2], both[2].split(), both[2]) == "car":
+            return {"tool": "confirm_booking", "also": both[2], "via": "rules"}       # "yes, and does it have a warranty?": booked, and answered (29 Oct sweep)
         if s.state is State.CONFIRM and s.read_back and self._confirms(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
         if s.read_back and self._new_time_in(s, text, joined):
