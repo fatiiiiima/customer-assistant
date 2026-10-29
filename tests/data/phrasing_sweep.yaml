@@ -11,9 +11,11 @@
 #   name_q     the number given, "And your name, please?"
 #   readback   "So that's the 2020 Corolla on Friday, 30 October at 2:00 PM ... for Fatima, on ... Shall I book it?"
 #   booked     after "Done, you're booked for tomorrow at 2 PM."
+#   price_q    the BMW X5 (209,000 dirhams) described, no price asked about yet
+#   haggled    the X5, after one push ("Can you do 150,000?") answered with the fixed price
 #
 # `expect` (all given must hold): tool / not_tool (the action), state, booked (a booking exists), name, slot_hour (the time chosen or booked), phone (digits it ends
-# with), car (the car in focus), keeps_booking (the booking talk goes on: a booking step, the read-back, or a booking made), reply_has (any of), reply_lacks (none of).
+# with), car (the car in focus), keeps_booking (the booking talk goes on: a booking step, the read-back, or a booking made), reply_has (any of), reply_has_all (all of), reply_lacks (none of).
 # Behaviour only: wording is never checked beyond reply_has / reply_lacks.
 
 # ---------------------------------------------------------------------------------------------------- a yes to the read-back
@@ -168,3 +170,19 @@
 - {at: booked, say: "cancel it", expect: {reply_has: ["cancel"]}}
 - {at: booked, say: "bye", expect: {tool: end_call}}
 - {at: booked, say: "can I change it to 9?", expect: {reply_lacks: ["particular make", "a make, a type"]}}
+
+# ---------------------------------------------------------------------------------------------------- haggling (owner, 29 Oct): the price never moves; from the second push on the same car,
+# cars near the asked price are offered instead, each at its own price. The first push gets the fixed price alone.
+- {at: price_q, say: "What's your best price?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan, Wrangler, Patrol, Land Cruiser]}}
+- {at: price_q, say: "Can you do 150,000?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan, Wrangler, Patrol, Land Cruiser]}}
+- {at: price_q, say: "Any discount?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan, Wrangler, Patrol, Land Cruiser]}}
+- {at: price_q, say: "Is the price negotiable?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan, Wrangler, Patrol, Land Cruiser]}}
+- {at: price_q, say: "Come on, can you do 180?", expect: {tool: get_car, not_tool: prepare_booking, reply_has: ["209,000"]}}
+- {at: haggled, say: "Come on, can you do 150?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "What's your best price?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "Any discount at all?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "Can you knock a bit off?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "Is that your final price?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "Can you do 150k?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
+- {at: haggled, say: "Can you do 120,000?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", RX 350]}}
+- {at: haggled, say: "Is that a good price?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan]}}

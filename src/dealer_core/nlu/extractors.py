@@ -187,6 +187,23 @@ def offer_amount(text: str) -> int | None:
     return amounts[-1] if amounts else None
 
 
+def asked_price(text: str, list_price: int) -> int | None:
+    """The price the caller asks for a car listed at `list_price`: a full amount ("150,000"), or thousands said short ("can you do 150?", "150k"),
+    read as thousands only when that lands between 30% and 150% of the list price (so "the 2 of us" or "5 seats" is not a price)."""
+    full = offer_amount(text)
+    if full is not None:
+        return full
+    toks = tokens_of(text)
+    for v, i, j in reversed(number_spans(toks)):
+        nxt = toks[j] if j < len(toks) else ""
+        if v.isdigit() and 10 <= int(v) <= 999 and nxt not in KM_TOKENS and 0.3 * list_price <= int(v) * 1000 <= 1.5 * list_price:
+            return int(v) * 1000
+    m = re.search(r"\b(\d{2,3})\s*k\b", " ".join(toks))
+    if m and 0.3 * list_price <= int(m[1]) * 1000 <= 1.5 * list_price:
+        return int(m[1]) * 1000
+    return None
+
+
 def selection(text: str, shown: list[CarView]) -> str | None:
     """Which of the shown cars the caller means: ordinal ('the second one'), name ('the Patrol'), or 'the cheapest'."""
     if not shown:

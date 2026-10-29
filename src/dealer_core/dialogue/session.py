@@ -70,6 +70,7 @@ class Session:
     said_about: dict[str, list[str]] = field(default_factory=dict)   # agent engine: per car, the groups of facts already told (agent/answers.py FACT_GROUPS), so "tell me more" gives a new one
     day_asks: int = 0                                        # agent engine: times in a row the agent asked which day; the second time it offers real times instead
     makes_said: list[str] = field(default_factory=list)      # agent engine: makes already named in a stock overview (so "the others" means the rest)                                      # agent engine: the car whose full line was just read out
+    haggles: dict[str, dict] = field(default_factory=dict)   # agent engine: per car, {"pushes": times the caller asked for a lower price, "offered": cheaper cars named instead, "asked": the price last asked for}
 
     def remember(self, who: str, text: str) -> None:
         """Keep the conversation so far (this call only; never written to a log). The reply writer and the intent call read it."""
