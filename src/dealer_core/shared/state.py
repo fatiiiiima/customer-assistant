@@ -185,6 +185,7 @@ def snapshot(session) -> dict:
         "makes_said": list(s.makes_said), "last_variant": dict(s.last_variant), "day_asks": s.day_asks,
         "no_invite_until": s.no_invite_until, "said_about": {k: list(v) for k, v in s.said_about.items()},
         "haggles": {k: {**v, "offered": list(v["offered"])} for k, v in s.haggles.items()},
+        "forgotten": s.forgotten,
     })
 
 
@@ -216,6 +217,7 @@ def restore(data: dict, session, service) -> None:
     s.day_asks = d.get("day_asks", 0)
     s.no_invite_until, s.said_about = d.get("no_invite_until", 0), {k: list(v) for k, v in (d.get("said_about") or {}).items()}
     s.haggles = {k: {**v, "offered": list(v["offered"])} for k, v in (d.get("haggles") or {}).items()}
+    s.forgotten = d.get("forgotten", 0)
 
 
 class CallStore:

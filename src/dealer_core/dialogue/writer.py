@@ -441,6 +441,13 @@ class WriterInput:
     history: list[tuple[str, str]]
     facts: str = ""                # everything the system knows for this turn, as plain lines
     awaiting: bool = True          # the system is waiting for a specific answer (pending yes/no or a booking step)
+    stable: str = ""               # facts that stay the same over several turns (the car in focus, the price rule): put before the conversation, so the model server
+                                   # can reuse what it already read for the previous turn (its prompt cache matches the longest common start of two prompts)
+    history_base: int = 0          # how many lines of the call came before history[0] (the call keeps only its last 16), for a window that does not slide every turn
+
+    @property
+    def all_facts(self) -> str:
+        return f"{self.stable}\n{self.facts}".strip()
 
 
 def drop_started_question(draft: str, question: str) -> str:
@@ -555,6 +562,18 @@ class ReplyWriter:
             feedback = "; ".join(bad)
         return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, "; ".join(bad))
 
+    def window(self, w: WriterInput) -> list[tuple[str, str]]:
+        """The lines of the conversation the model is shown: the last `history_lines` or more, starting at a line number that moves only every
+        `history_lines` lines (6 to 11 lines are shown with 6). A window that moved every turn changed the prompt right after the instructions, so the model
+        server could reuse nothing of the conversation it had read the turn before."""
+        n = self.history_lines
+        if n <= 0:
+            return []
+        end = w.history_base + len(w.history)
+        start = max(0, end - n)
+        start = max(w.history_base, start - start % n)
+        return w.history[start - w.history_base:]
+
     def stream(self, w: WriterInput, temperature: float | None = None):
         """Yield the reply one VERIFIED sentence at a time, as the model produces it, so speech can start after the first sentence.
 
@@ -572,7 +591,7 @@ class ReplyWriter:
         if w.risk == "high" and not self.high_risk:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
             return
-        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in w.history[-self.history_lines:])
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in self.window(w))
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
         closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
         last_core = (voice_rules.sentences(w.core) or [""])[-1]
@@ -581,7 +600,8 @@ class ReplyWriter:
         words = (self.max_words * 2 if high else self.max_words) if self.max_words else 0      # a read-back needs more room than a quick answer
         max_tokens = self.max_tokens * 2 if high else self.max_tokens
         deadline = self.deadline_s * 1.6 if (high and self.deadline_s) else self.deadline_s
-        user = (f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
+        user = ((f"FACTS THAT HOLD FOR THIS PART OF THE CALL:\n{w.stable}\n\n" if w.stable else "")
+                + f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
                 f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
                    "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
@@ -605,7 +625,7 @@ class ReplyWriter:
                 sentence = sentence[:1].lower() + sentence[1:]                    # the rest of a sentence started on its first clause keeps its lower case
             if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
-            bad = verify_sentence(sentence, w.caller, w.core, w.facts, history_text) + (self.extra_check(sentence) if self.extra_check else [])
+            bad = verify_sentence(sentence, w.caller, w.core, w.all_facts, history_text) + (self.extra_check(sentence) if self.extra_check else [])
             if bad:
                 stopped = "; ".join(bad)
                 return None
@@ -705,7 +725,7 @@ class ReplyWriter:
                 yield asked
         self.last_stream.update(sentences=len(spoken), stopped=stopped)
         if spoken:                                                               # diagnostics only: the whole-reply checks, for the debug trace
-            whole = verify_reply(reply, w.caller, w.core, w.facts, history_text, w.risk, last_agent, True)
+            whole = verify_reply(reply, w.caller, w.core, w.all_facts, history_text, w.risk, last_agent, True)
             self.last_stream["whole_reply_issues"] = "; ".join(whole)
 
     def _write_chat(self, w: WriterInput, t0: float) -> LeadInOutcome:

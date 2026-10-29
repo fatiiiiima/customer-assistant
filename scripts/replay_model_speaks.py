@@ -88,9 +88,9 @@ def main() -> int:
     real_input = e._speaking_input
 
     def recording_input(s, text, result):
-        core, awaiting, facts = real_input(s, text, result)
-        seen["allowed"] = f"{facts}\n{core}\n{text}"
-        return core, awaiting, facts
+        core, awaiting, facts, stable = real_input(s, text, result)
+        seen["allowed"] = f"{stable}\n{facts}\n{core}\n{text}"
+        return core, awaiting, facts, stable
 
     e._speaking_input = recording_input
     conversations = [("mix%d" % i, [(t, None) for t in c]) for i, c in enumerate(MIX)] + [("tell-me-more", TELL_ME), ("testcall", [(t, None) for t in TEST_CALL])] + \
@@ -126,6 +126,8 @@ def main() -> int:
                     fell = e.fidelity["fell_back"] - before["fell_back"] if not a.off else int("FALLBACK" in (dbg.note or ""))
                     stats["fell_back"] += fell
                     stats["guard_stops"] += e.fidelity["leaks"] - before["leaks"]
+                    if e.fidelity["leaks"] > before["leaks"] and len(stats.setdefault("guard_examples", [])) < 10:
+                        stats["guard_examples"].append({"caller": text, "said": reply, "why": re.findall(r"fact guard: [^;]*", dbg.note or "")})
                     if fell:
                         why = re.sub(r"\[.*?\]|'[^']*'", "", (dbg.note or "").split("stream")[-1])[:60]
                         stats["fallback_reasons"][why] = stats["fallback_reasons"].get(why, 0) + 1

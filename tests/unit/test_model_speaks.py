@@ -161,14 +161,14 @@ def test_a_booking_step_keeps_its_question_and_a_clarifying_question_stays():
     e, _ = engine(ENGINE)
     s = e.new_session()
     s.state = State.SLOT
-    core, awaiting, _ = e._speaking_input(s, "yes", {"core": "Sure. What day would you like to come in?", "facts": [], "awaiting": True})
+    core, awaiting, _, _ = e._speaking_input(s, "yes", {"core": "Sure. What day would you like to come in?", "facts": [], "awaiting": True})
     assert core.endswith("What day would you like to come in?") and awaiting
     s.state = State.ANSWERING
-    core, awaiting, _ = e._speaking_input(s, "the black one", {"core": "Which car do you mean?", "facts": [], "awaiting": True})
+    core, awaiting, _, _ = e._speaking_input(s, "the black one", {"core": "Which car do you mean?", "facts": [], "awaiting": True})
     assert core == "Which car do you mean?" and awaiting                       # nothing else to say: the question is the reply
-    core, awaiting, facts = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Anything else you'd like to know about it?", "facts": [], "awaiting": True})
+    core, awaiting, facts, _ = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Anything else you'd like to know about it?", "facts": [], "awaiting": True})
     assert core == "It has 340 horsepower." and not awaiting and "end on a statement" in facts      # the generic closer is dropped
-    core, awaiting, _ = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Would you like to come and see it?", "facts": [], "awaiting": True})
+    core, awaiting, _, _ = e._speaking_input(s, "ok", {"core": "It has 340 horsepower. Would you like to come and see it?", "facts": [], "awaiting": True})
     assert core.endswith("Would you like to come and see it?") and awaiting                            # an invitation is given only when due: it stays
 
 

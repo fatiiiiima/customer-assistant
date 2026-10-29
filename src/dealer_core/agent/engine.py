@@ -543,12 +543,13 @@ class AgentEngine:
                 spoken.append(sentence)
                 yield sentence
         elif self.reply_writer is not None and not s.ended:
-            facts = "\n".join(result["facts"])
+            facts, stable = "\n".join(result["facts"]), ""
             core, awaiting = result["core"], result["awaiting"]
             if speaks:
-                core, awaiting, facts = self._speaking_input(s, text, result)
-            w = WriterInput(caller=text, core=core, risk=result["risk"], history=list(s.history), facts=facts, awaiting=awaiting)
-            allowed = f"{facts}\n{core}\n{text}"
+                core, awaiting, facts, stable = self._speaking_input(s, text, result)
+            w = WriterInput(caller=text, core=core, risk=result["risk"], history=list(s.history), facts=facts, awaiting=awaiting, stable=stable,
+                            history_base=s.forgotten)
+            allowed = f"{stable}\n{facts}\n{core}\n{text}"
             dbg.risk = result["risk"]
             t_write = time.perf_counter()
             if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
@@ -779,26 +780,45 @@ class AgentEngine:
             self._car_word_set = guards.car_names(self.svc.inventory.vocabulary())
         return self._car_word_set
 
-    def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str]:
-        """(standard wording, awaiting an answer, facts) for a reply the model writes whole (ARCH_PLAN Phase 3, `model_speaks`).
+    def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str, str]:
+        """(standard wording, awaiting an answer, facts for this turn, facts that hold for this part of the call) for a reply the model writes whole
+        (ARCH_PLAN Phase 3, `model_speaks`).
 
         * Only the generic "anything else?" closer is dropped (the model may end on a statement). An invitation to visit stays: `wording.offer_test_drive` gives one only when
           it is due (none after a no, never two answers running, at most one in three), otherwise the generic closer, so the pacing decides. The booking steps and a
           clarifying question ("Which car do you mean?") keep theirs. (First version dropped invitations too: 0 in 1,000 replies, and 2% of replies asked anything.)
         * The facts are the whole spec sheet of the car in focus, not the next one or two groups, with what the caller has already heard and what they asked about, so a
           follow-up ("and the boot?", "what about the colour") can land on the aspect asked.
-        * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked."""
+        * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked.
+        * Each fact once, and the ones that do not change while one car is discussed (its line and spec sheet, the price rule) apart from this turn's, so the writer
+          puts them before the conversation and the model server reuses them (section 30, 29 Oct: the car in focus was given three times, about 300 of the 707 tokens
+          read fresh on every turn; the other cars' spec sheets were given too)."""
         core, awaiting = result["core"], result["awaiting"]
         facts_part, question = self._split_core(core)
         booking_step = s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back
         if question and not booking_step and is_generic_closer(question) and facts_part:
             core, awaiting = facts_part, False
-        lines = list(result["facts"])
         car = self.svc.get_car(s.car) if s.car else None
         d = self.svc.site.cars.get(s.car) if (s.car and getattr(self.svc, "site", None) is not None) else None
-        if car is not None and d is not None:
-            lines.append(f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
-                         + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS))
+        stable, lines = [], []
+        focus = f"- {T.car_name(car)}:" if car is not None and d is not None else None
+        for line in result["facts"]:
+            if line.startswith("Prices are fixed"):
+                stable.append(line)
+            elif focus and line.startswith(focus):
+                continue                                 # given once, in the stable part below
+            elif line.startswith("Answered from the spec sheet: ") and line.split(": ", 1)[1] in core:
+                continue                                 # the standard wording says it already
+            elif line.startswith("- ") and " dirhams" in line and line.startswith(tuple(f"- {T.car_name(c)}:" for c in s.shown)):
+                lines.append(line[:line.index(" dirhams") + len(" dirhams")])      # another car in the call: name, colour and price
+            else:
+                lines.append(line)
+        if lines and lines[-1] == "Cars in this call (true facts you may use):":
+            lines.pop()
+        if focus:
+            stable[:0] = [fact_sheet([car], self._branch_name),
+                          f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
+                          + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS) + f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}."]
             told = s.said_about.get(s.car, [])
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
@@ -812,7 +832,7 @@ class AgentEngine:
             lines.append("A test drive is being arranged: do not say it is booked or confirmed, and do not suggest times; the system asks for those.")
         if not awaiting:
             lines.append("The call is not waiting for an answer: end on a statement unless a question is really needed.")
-        return core, awaiting, "\n".join(lines)
+        return core, awaiting, "\n".join(lines), "\n".join(stable)
 
     def handle(self, s: Session, text: str) -> TurnResult:
         out = list(self.handle_stream(s, text))
