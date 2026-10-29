@@ -599,6 +599,13 @@ class ReplyWriter:
             feedback = "; ".join(bad)
         return LeadInOutcome(None, (time.perf_counter() - t0) * 1000, "; ".join(bad))
 
+    def prompt_start(self, w: WriterInput) -> str:
+        """The part of the reply's prompt that comes before the caller's new words: the facts that hold for this part of the call and the conversation so far.
+        The same for a reply and for `AgentEngine.prefetch`, which sends it ahead of time so the model server has read it when the reply is asked for."""
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in self.window(w))
+        return ((f"FACTS THAT HOLD FOR THIS PART OF THE CALL:\n{w.stable}\n\n" if w.stable else "")
+                + f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): ")
+
     def window(self, w: WriterInput) -> list[tuple[str, str]]:
         """The lines of the conversation the model is shown: the last `history_lines` or more, starting at a line number that moves only every
         `history_lines` lines (6 to 11 lines are shown with 6). A window that moved every turn changed the prompt right after the instructions, so the model
@@ -628,7 +635,6 @@ class ReplyWriter:
         if w.risk == "high" and not self.high_risk:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
             return
-        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in self.window(w))
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
         closing = voice_rules.sentences(last_agent)[-1] if last_agent else ""
         last_core = (voice_rules.sentences(w.core) or [""])[-1]
@@ -637,8 +643,7 @@ class ReplyWriter:
         words = (self.max_words * 2 if high else self.max_words) if self.max_words else 0      # a read-back needs more room than a quick answer
         max_tokens = self.max_tokens * 2 if high else self.max_tokens
         deadline = self.deadline_s * 1.6 if (high and self.deadline_s) else self.deadline_s
-        user = ((f"FACTS THAT HOLD FOR THIS PART OF THE CALL:\n{w.stable}\n\n" if w.stable else "")
-                + f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
+        user = (self.prompt_start(w) + f"{w.caller}\n\n"
                 f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
                    "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")

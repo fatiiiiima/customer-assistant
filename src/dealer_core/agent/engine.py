@@ -155,6 +155,9 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     return text[0].lower() + text[1:]
 
 
+PRICE_RULE = "Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'."
+
+
 def _rounding_off(said: str) -> str:
     """A short sentence before the facts of a reply the caller has heard cut in the middle of a word: it starts over politely. (After a comma, see `_unheard`.)"""
     return "Let me put that properly."
@@ -296,6 +299,12 @@ class AgentEngine:
         self.model_only = False
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
+        self.prefetch_on = False                         # dialogue.prefetch (see prefetch); app.py sets it from config
+        self.prefetched = 0
+        self._prefetch_turn: dict[int, int] = {}
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch")
         self.openers = False                             # start fact replies with a short spoken acknowledgement ("Sure,") that plays at once (voice/kokoro_tts.py)
         self.model_speaks = False                        # ARCH_PLAN Phase 3 (config dialogue.model_speaks): at the full level the model writes the whole reply; see _speaking_input
         self.fidelity = {"sentences": 0, "leaks": 0, "replies": 0, "fell_back": 0}     # model_speaks: sentences checked by agent/guards.py and how many it stopped (for replays)
@@ -403,6 +412,7 @@ class AgentEngine:
         `predecided`: a future holding the decision already made for these words (see `predecide`), used instead of asking the model now.
         `uncertain`: the words came from a very quiet segment (room noise can be recognised as words): they may not end the call."""
         t0 = time.perf_counter()
+        self._prefetch_turn.pop(id(s), None)                     # the caller spoke: prefetches still queued for this call are not sent
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
             dbg.note = "session already ended"
@@ -640,6 +650,7 @@ class AgentEngine:
         dbg.about = s.focus
         dbg.violations = voice_rules.check(reply, max_sentences=voice_rules.MAX_SENTENCES + 2, max_words=90)
         dbg.total_ms = (time.perf_counter() - t0) * 1000
+        self.prefetch(s)                                         # the next reply's prompt start, read by the model server while this one is spoken
         yield TurnResult(reply, dbg, s.ended)
 
     def _proper(self, s: Session) -> set[str]:
@@ -793,6 +804,46 @@ class AgentEngine:
             self._car_word_set = guards.car_names(self.svc.inventory.vocabulary())
         return self._car_word_set
 
+    def _car_facts(self, car: CarView, d) -> list[str]:
+        """The facts that hold while this car is discussed: its line and its whole spec sheet (the start of the model's prompt, see _speaking_input and prefetch)."""
+        return [fact_sheet([car], self._branch_name),
+                f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
+                + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS) + f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}."]
+
+    def prefetch(self, s: Session) -> int:
+        """While the agent speaks, send the start of the next likely prompt to the model server, which keeps what it reads (29 Oct, the owner's call: the first
+        question about a new car waited up to 3 s, most of it the model reading that car's facts). The car being discussed, or else up to three cars just listed,
+        each with the conversation so far: exactly what the next reply's prompt starts with (ReplyWriter.prompt_start). One token is asked for and thrown away.
+        In the background, one at a time; stops when the caller has started the next turn, and is skipped while another call is using the model.
+        Returns how many prompts were queued."""
+        if not (self.prefetch_on and self.model_speaks and self.reply_writer is not None) or s.ended or s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back:
+            return 0
+        site = getattr(self.svc, "site", None)
+        ids = [s.car] if s.car else [c.stock_id for c in s.shown[:3]]
+        starts = []
+        for cid in ids:
+            car, d = self.svc.get_car(cid), (site.cars.get(cid) if site is not None else None)
+            if car is not None and d is not None:
+                stable = "\n".join([*self._car_facts(car, d), PRICE_RULE])
+                starts.append(self.reply_writer.prompt_start(WriterInput(caller="", core="", risk="low", history=list(s.history), stable=stable, history_base=s.forgotten)))
+        if not starts:
+            return 0
+        turn = self._prefetch_turn[id(s)] = len(s.history)
+        writer = self.reply_writer
+
+        def run():
+            for user in starts:
+                if self._prefetch_turn.get(id(s)) != turn or (self.governor is not None and self.governor.snapshot()["in_flight"] > 0):
+                    return                                       # the caller has moved on, or a reply needs the model now
+                try:
+                    writer.backend.lead_in(writer.system, user, 1, None, 5.0)
+                    self.prefetched += 1
+                except Exception:
+                    return                                       # the server is busy or down: a prefetch is never worth an error
+
+        self._prefetcher.submit(run)
+        return len(starts)
+
     def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str, str]:
         """(standard wording, awaiting an answer, facts for this turn, facts that hold for this part of the call) for a reply the model writes whole
         (ARCH_PLAN Phase 3, `model_speaks`).
@@ -829,9 +880,7 @@ class AgentEngine:
         if lines and lines[-1] == "Cars in this call (true facts you may use):":
             lines.pop()
         if focus:
-            stable[:0] = [fact_sheet([car], self._branch_name),
-                          f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
-                          + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS) + f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}."]
+            stable[:0] = self._car_facts(car, d)
             told = s.said_about.get(s.car, [])
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
@@ -1241,7 +1290,7 @@ class AgentEngine:
         unique = list({c.stock_id: c for c in focus + list(s.shown)}.values())
         context = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams{self._spec_facts(c)}" for c in unique][:5]
         out["facts"] = [*[f for f in out.get("facts", []) if not f.startswith("Prices are fixed (no negotiation)")],
-                        "Prices are fixed: there is no discount, best price or negotiation, and you must not say 'offer' or 'deal'.",
+                        PRICE_RULE,
                         *(["Cars in this call (true facts you may use):", *context] if context else [])]
         return out
 

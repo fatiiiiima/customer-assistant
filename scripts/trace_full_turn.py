@@ -38,9 +38,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", default="gpu_server")
     ap.add_argument("--portal-data", type=Path, default=ROOT.parent / "bmw-portal" / "site" / "data.js")
-    ap.add_argument("--only", default="", help="testcall or tell-me-more")
+    ap.add_argument("--only", default="", help="testcall, tell-me-more or family")
     ap.add_argument("--no-audio", action="store_true", help="skip hearing and voice (steps 2 and 7)")
     ap.add_argument("--show", action="store_true", help="print each turn's reply")
+    ap.add_argument("--speak", action="store_true", help="after each turn, wait as long as the reply takes to say (about 2.5 words a second), as a call does: the model is idle then "
+                    "(and dialogue.prefetch uses that time)")
+    ap.add_argument("--no-prefetch", action="store_true", help="dialogue.prefetch off, to compare")
     ap.add_argument("--out", type=Path, default=ROOT / "logs" / "trace_full_turn.json")
     a = ap.parse_args()
 
@@ -56,6 +59,8 @@ def main() -> int:
     start(app, quiet=True)
     apply_voice_profile(app, cfg)
     e = app.engine
+    if a.no_prefetch:
+        e.prefetch_on = False
     live = {"decide_s": e.decide_deadline_s, "first_s": e.reply_writer.first_deadline_s, "reply_s": e.reply_writer.deadline_s}
     e.decide_deadline_s = 15.0
     e.reply_writer.first_deadline_s, e.reply_writer.deadline_s = None, 15.0
@@ -63,6 +68,11 @@ def main() -> int:
     calls: list[dict] = []                      # every request to the model server, in order
     phase = {"now": ""}
     turn_marks: dict = {}
+
+    import threading
+
+    def _phase() -> str:
+        return "prefetch" if threading.current_thread().name.startswith("prefetch") else (phase["now"] or "other")
 
     def wrap_backend(b):
         for inner in getattr(b, "backends", []):              # a chain of backends: each one that talks to a server
@@ -74,13 +84,13 @@ def main() -> int:
         def post(body, timeout):
             t0 = time.perf_counter()
             out = real_post(body, timeout)
-            calls.append({"phase": phase["now"] or "other", "stream": False, "body": body, "ms": (time.perf_counter() - t0) * 1000,
+            calls.append({"phase": _phase(), "stream": False, "body": body, "ms": (time.perf_counter() - t0) * 1000,
                           "first_ms": None, "usage": out.get("usage") or {}, "text": (out.get("choices") or [{}])[0].get("message", {}).get("content", "")})
             return out
 
         def stream(body, deadline_s):
             t0 = time.perf_counter()
-            rec = {"phase": phase["now"] or "other", "stream": True, "body": body, "ms": None, "first_ms": None, "usage": {}, "pieces": 0, "text": ""}
+            rec = {"phase": _phase(), "stream": True, "body": body, "ms": None, "first_ms": None, "usage": {}, "pieces": 0, "text": ""}
             calls.append(rec)
             try:
                 for piece in real_stream(body, deadline_s):
@@ -146,7 +156,9 @@ def main() -> int:
         def speak(text: str) -> float:
             return tts.first_audio_ms(text)                           # as live: the sentence is split and its short first piece is played while the rest is made
 
-    conversations = [("testcall", TEST_CALL), ("tell-me-more", [t for t, _ in TELL_ME])]
+    from sample_calls import CALLS
+
+    conversations = [("testcall", TEST_CALL), ("tell-me-more", [t for t, _ in TELL_ME]), ("family", CALLS["Family SUV, haggling, booking"])]
     conversations = [c for c in conversations if c[0].startswith(a.only)]
     print(f"machine: this Mac; model {cfg.llm.backends[a.backend].model} at {cfg.llm.backends[a.backend].host}; Whisper {cfg.voice.stt_model} on {cfg.voice.stt_device}; "
           f"Kokoro {cfg.tts.kokoro_voice}; model_speaks {'on' if e.model_speaks else 'off'}; live deadlines lifted (were decide {live['decide_s']} s, "
@@ -190,6 +202,8 @@ def main() -> int:
                   + (f"hearing {row['hearing']:4.0f}  voice {row['voice']:4.0f}  " if stt else "") + f"| first heard {row['first_heard'] or 0:5.0f}  total {total:5.0f} ms", flush=True)
             if a.show:
                 print(f"   -> {row['reply']}")
+            if a.speak:
+                time.sleep(len(row["reply"].split()) / 2.5)
 
     # Prompt sizes: the same request again with one token to write, for the server's own count (a repeated prompt is answered from its cache, so its time is not used).
     from dealer_core.nlu.openai_compat import OpenAICompatBackend
@@ -212,7 +226,8 @@ def main() -> int:
         return round(statistics.median(v)) if v else None
 
     model_turns = [t for t in turns if t["decide_calls"] or t["write_calls"]]
-    print(f"\n{len(turns)} turns, {sum(1 for t in turns if t['decide_calls'])} decided by the model, {sum(1 for t in turns if t['write_calls'])} written by the model")
+    print(f"\nprefetch {'on' if e.prefetch_on else 'off'}: {sum(1 for c in calls if c['phase'] == 'prefetch')} prompt starts sent ahead")
+    print(f"{len(turns)} turns, {sum(1 for t in turns if t['decide_calls'])} decided by the model, {sum(1 for t in turns if t['write_calls'])} written by the model")
     summary = {k: med(k, turns) for k in ("hearing", "rules", "tool_ms", "voice", "first_heard", "total")}
     summary.update({k: med(k, [t for t in turns if t["decide_calls"]]) for k in ("decide", "decide_prompt_tokens")})
     summary.update({k: med(k, [t for t in turns if t["write_calls"]]) for k in ("write_prefill", "write_first", "write_all", "write_prompt_tokens", "write_pieces")})

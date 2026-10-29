@@ -181,6 +181,8 @@ class DialogueCfg(_Strict):
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
     openers: bool = False                        # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once.
                                                  # OFF (owner, 29 Oct): heard on 17 of 30 replies ("Okay,", "So,", "Right,"), it sounded scripted; a clean answer about 1 s later is preferred
+    prefetch: bool = True                        # agent engine with model_speaks: while the agent speaks, the start of the next likely prompt (the car being discussed, or the cars
+                                                 # just listed, and the conversation so far) is sent to the model server, which keeps what it read; the next reply then reads less (section 32)
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
     model_speaks: bool = False                   # agent engine, ARCH_PLAN Phase 3, behind this flag: at the FULL level the model writes the reply from all of the car's facts, with no opener said first and no
                                                  # closing question forced on it outside the booking steps; every sentence also passes agent/guards.py (facts of this turn only). Off: the full level as before
