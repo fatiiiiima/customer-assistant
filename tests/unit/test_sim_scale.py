@@ -63,3 +63,27 @@ def test_a_healthy_cluster_does_not_probe_workers_whose_own_turns_are_timing_the
 def test_workers_return_to_the_full_level_soon_after_the_model_server_recovers_even_when_skipping_fresh_probes():
     r = probes("outage", model_slots_at=[(180, 2), (240, 160)], probe_skip_fresh=True)
     assert r["seconds to recover"] is not None and r["seconds to recover"] <= 120      # 60 s measured at 500 callers
+
+
+# ------------------------------------------------------------------------------------------------ 1,000 and 1,500 callers (docs/SCALE_MODEL.md)
+def test_the_manifests_72_workers_hold_1000_callers_with_the_answer_time_under_a_second():
+    from dealer_core.sim.scale import RAMP_1000
+
+    r = run(Scenario("1000", FAST, RAMP_1000, max_workers=72, adaptive=True))
+    assert r["busy %"] < 1 and r["answer p90"] < 1.0 and r["answers > 2 s %"] == 0 and r["workers max"] <= 72
+
+
+def test_more_callers_need_more_workers_and_more_model_in_flight_and_the_workers_follow_the_formula():
+    from dealer_core.sim.scale import model_capacity_sweep
+
+    rows = {n: model_capacity_sweep(n, [160], 180)[0] for n in (500, 1000, 1500)}
+    assert rows[500]["model peak in flight"] < rows[1000]["model peak in flight"] < rows[1500]["model peak in flight"]
+    for n, r in rows.items():
+        assert abs(r["workers max"] - n / (16 * 0.7)) <= 4                  # SCALE_MODEL.md: callers / (16 x 0.7): 45, 90, 134 (the simulation reached 45, 89, 132)
+
+
+def test_with_too_little_model_capacity_callers_keep_getting_through_and_answers_stay_near_a_second():
+    from dealer_core.sim.scale import model_capacity_sweep
+
+    r = model_capacity_sweep(1000, [10], 120)[0]
+    assert r["busy %"] < 1 and r["answer p90"] < 1.3 and r["shed %"] > 20          # wording and shedding give way first, not the callers

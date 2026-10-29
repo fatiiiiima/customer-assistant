@@ -378,3 +378,23 @@ No GPU needed, nothing spent. Branch `phase-1`, stacked on `phase-0`. Machine fo
 ### Not changed, on purpose
 
 Everything on the plan's "What not to change" list; `config/default.yaml` and `config/portal.yaml`; the governor's budgets, deadlines and thresholds; the router's mechanisms; the 500-caller capacity (no GPU number was taken); `deploy/` (no pgbouncer, see B6).
+
+## 21. Scope decision: a laptop demo that can be shown to scale, not a GPU deployment (28 Oct, owner)
+
+**Decision.** There will be no GPU to measure on. The product is a demo that runs on one laptop, built so that growing it to 500 and then 1,000+ callers is a matter of adding machines and a model server, and so that this can be shown on paper and in simulation. Anything that needs hardware nobody has stays unknown and is labelled so.
+
+**Consequences for the plan (`docs/ARCH_PLAN.md`; the plan file itself is unchanged).**
+
+* **Phase 0** is closed as "no GPU available". The baseline is the laptop's (section 19). `docs/PHASE0_RUNBOOK.md` is kept for the day a card exists.
+* **Phase 1** is done as built (section 20; B8 and C5 deliberately not).
+* **Phases 2 and 3**: their targets (first sentence under 300 ms, 90% of turns at the full level at 16 callers per worker) cannot be tested on a laptop whose model needs 0.6 to 1.2 s. What can be built and judged here is what does not depend on speed: one model call per turn, the MLX server as the local default, and the "model speaks, code guards" path behind a flag, judged on correctness and fact-safety by replays, not on latency. Not started.
+* **Phase 4**: hearing and overlap can be scored on the recorded turns. Not started.
+* **Phase 5** is replaced by `docs/SCALE_MODEL.md`: the scale policy is shown by the simulation and by arithmetic, with the unknowns listed.
+
+**What was done for this decision.**
+
+* `docs/SCALE_MODEL.md`: what the demo machine measures (section 1), the formulas and the simulation at 500, 1,000 and 1,500 callers (section 2), the unknowns (section 3), what each phase becomes (section 4).
+* `sim/scale.py`, `scripts/simulate_scale.py`: three scenarios (1,000 callers with the manifest's 72 workers and with up to 120, 1,500 callers with up to 180) and `--model-capacity`, which reruns the cluster with less and less model capacity to find what each size needs.
+* Results (MODELLED, stand-in speeds of 120 ms and 300 ms, which are targets, not measurements): the workers needed follow callers / (16 x 0.7): 45, 89, 132 in the simulation against 45, 90, 134 by formula; answer p90 0.88 s at all three sizes with under 0.3% turned away; the manifest's 72 workers hold 1,000 callers but about 87% full; the model needs about 36, 44 and 55 requests in flight at the target speed; with too little model capacity quality gives way first (e.g. 1,000 callers on 10 slots: p90 0.99 s, 0.0% turned away, 44% of model turns shed) and callers are not turned away.
+* Not changed: `deploy/` (`maxReplicas` stays 72; for 1,000 at the 70% target it needs about 90, for 1,500 about 140: see SCALE_MODEL.md, to be set when there is something to test it on). The most likely first failure at scale is the database (720 connections ceiling at 90 workers against PostgreSQL's default 100); pgbouncer is still not added (section 20, B6).
+* Tests: `test_sim_scale.py` (3 added: 72 workers hold 1,000 callers under a second; workers and model in-flight follow callers; too little model capacity sheds quality, not callers). `pytest tests/unit`: 927 passed, 40 skipped.
