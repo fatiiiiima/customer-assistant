@@ -104,6 +104,9 @@ def speech_text(text: str, numbers_as_words: bool | None = None) -> str:
     t = re.sub(r"\bhp\b", "horsepower", t)
     t = re.sub(r"\bkm/h\b", "kilometres per hour", t, flags=re.I)
     t = re.sub(r"\bkm\b", "kilometres", t)
+    # amounts and distances written with thousands separators, always as words: the voice's own reading breaks when the piece it is given ends on a comma
+    # ("at 119,000 dirhams," was said "one hundred nineteen, zero zero zero"; owner's call, 29 Oct). Years and codes have no separators and are left as they are.
+    t = re.sub(r"(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d|\.\d|,\d)", lambda m: int_to_words(int(m[0].replace(",", ""))), t)
     if words:                                                    # optional: every number as words ("two hundred and nine thousand")
         t = re.sub(r"\b\d{1,3}(?:,\d{3})+\b|\b\d{4,9}\b", lambda m: int_to_words(int(m[0].replace(",", ""))), t)
     # editable respellings (config/pronunciations.yaml): dirhams, letter names, ...
