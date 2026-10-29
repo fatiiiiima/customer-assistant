@@ -1,4 +1,5 @@
 """Kokoro's pieces: a short first piece so the first sound comes quickly, then clauses."""
+import numpy as np
 from dealer_core.voice.kokoro_tts import first_piece_split, kokoro_runtime
 
 
@@ -70,3 +71,35 @@ def test_the_setting_chooses_between_b_and_a_and_b_keeps_its_openings_ready():
     rendered.clear()
     a.preload([])
     assert rendered == [] and a._pinned == {}
+
+
+# ------------------------------------------------------------------------------------------------ joins (voice.join_silence_ms, owner 29 Oct: "the pauses are awful")
+from dealer_core.voice.kokoro_tts import trim_join  # noqa: E402
+
+
+def _piece(lead_ms, speech_ms, tail_ms, rate=24000):
+    n = lambda ms: rate * ms // 1000
+    return np.concatenate([np.zeros(n(lead_ms)), np.sin(np.arange(n(speech_ms)) / 5) * 0.3, np.zeros(n(tail_ms))]).astype(np.float32)
+
+
+def test_the_silence_at_a_join_is_cut_and_the_speech_kept():
+    x = _piece(40, 500, 90)
+    both = trim_join(x, 24000, True, True, 30)
+    assert 500 <= len(both) / 24 <= 500 + 10 + 30 + 10                      # the speech, about 10 ms before it and 30 ms after (to the 10 ms frame)
+    assert np.allclose(trim_join(x, 24000, False, False, 30), x)             # the sentence's own start and end are left alone
+    assert len(trim_join(x, 24000, False, True, 30)) / 24 >= 540             # its start untouched
+
+
+def test_only_the_joins_inside_a_sentence_are_trimmed():
+    class Stub(KokoroOV):
+        def __init__(self):
+            self._cache, self._cache_size, self.opening_first, self._pinned, self.join_silence_ms = {}, 300, False, {}, 30
+            self.sample_rate = 24000
+
+        def _say(self, piece):
+            return _piece(40, 500, 90)
+
+    first, middle, last = list(Stub()._joined(["a", "b", "c"]))
+    assert len(first) / 24 > 570 - 1 and len(last) / 24 > 590 - 1          # the sentence starts and ends with its full silence
+    assert len(middle) / 24 < 560                                            # in between, both ends cut
+    assert len(list(Stub()._joined(["one piece"]))[0]) / 24 >= 629          # a sentence of one piece is not touched

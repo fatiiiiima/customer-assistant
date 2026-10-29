@@ -892,3 +892,22 @@ The owner asked for NVIDIA Magpie-TTS Multilingual ("Kokoro has too many pauses"
 | Magpie (speech-server) | 3,445 / 8,372 ms | 0.35 x | 135 | 1,050 ms |
 
 Magpie's pauses are its own (one synthesis per sentence, no joins): it speaks 35 to 40% slower than Kokoro (67 to 111 words a minute against 91 to 181) with gaps up to a second inside a sentence (the X5 line: 13.5 s, 14 pauses, against 8.4 s, 5). Samples of both in `logs/voice_samples/compare/` (local, not committed). **Not switched** on the Mac. On NVIDIA GPUs (the deployment) Magpie runs natively and streams (NVIDIA's own server); that is unmeasured. What would answer "too many pauses" with Kokoro: trimming the silence each piece carries at its ends, so the joins are shorter (Kokoro's pauses here: median 150 to 220 ms, mostly at the joins).
+
+## 38. Kokoro's joins trimmed, and Chatterbox Turbo, against the pauses (29 Oct, the owner's boss: "the pauses are awful")
+
+Branch `voice/compare-chatterbox` (on top of `measure/canary-magpie`, PR 31). Most of Kokoro's pauses were ours: the worker cuts a sentence into pieces to start speaking sooner (section 33), and each piece comes with its own silence, MEASURED on 50 pieces: about 40 ms at the start and 90 ms at the end (median), so about 130 ms of dead air at every join.
+
+* **Trimmed joins** (`voice.join_silence_ms`, now 40; `kokoro_tts.trim_join`): where a piece joins another of the same sentence, its silence is cut to about 13 ms before and 40 ms after the speech; the sentence's own start and end are left alone. Tests: `test_kokoro_tts.py` (2).
+* **Chatterbox Turbo** (Resemble AI, MIT; `mlx-community/chatterbox-turbo-8bit`, 0.68 GB, through mlx-audio 0.6.3 on the Mac's GPU, installed in the MLX environment only, its versions of mlx and mlx-lm unchanged; its built-in voice). `scripts/score_chatterbox.py` (new) runs it whole and streamed (mlx-audio sends audio every `interval` seconds of speech made).
+
+MEASURED, M3 Pro, the 18 first sentences of section 33 (numbers in words, as the voice is given them), `scripts/score_voices.py --extra ...`:
+
+| | first sound, median / worst | made in (x its length) | pauses of 120 ms+ in 18 sentences | longest |
+|---|---|---|---|---|
+| Kokoro (as it was) | 0 / 378 ms | 0.18 x | 61 | 550 ms |
+| **Kokoro, joins trimmed (now)** | **0 / 418 ms** | 0.18 x | **30** | 560 ms |
+| Chatterbox Turbo, whole sentence | 1,527 / 3,698 ms | 0.28 x | 31 | 620 ms |
+| Chatterbox Turbo, streamed every 0.4 s | 322 / 369 ms | 0.98 x | 27 | 620 ms |
+| Chatterbox Turbo, streamed every 1.0 s | 450 / 463 ms | 0.55 x | 30 | 610 ms |
+
+Trimming halves Kokoro's pauses at no cost to its first sound. Chatterbox Turbo has about as many pauses as trimmed Kokoro; streamed every second it starts in about 0.45 s and makes speech in about half the time it takes to say. Every 0.4 s it starts sooner but makes speech barely faster than it plays (0.98 x), so any hiccup would leave a gap in the middle of a sentence. Not measured: how they sound (samples of three sentences, three ways, in `logs/voice_samples/for_boss/`, local); Chatterbox with several calls at once (it runs on the GPU beside the language model; Kokoro runs on the CPU); a voice of our own choosing (Chatterbox can copy one from a 5 to 10 s sample). Chatterbox is not wired into the worker: it would be a server in the MLX environment, as Canary is (section 36), if the listening favours it. `python -m pytest tests/unit`: 1,317 passed, 40 skipped.

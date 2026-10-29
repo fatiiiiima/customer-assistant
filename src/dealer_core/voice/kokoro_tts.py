@@ -143,11 +143,27 @@ def opening_first_split(text: str, openings: tuple[str, ...] = OPENINGS, max_wor
     return [" ".join(words[:cut])] + _clauses(words[cut:], max_words)
 
 
+def trim_join(audio: np.ndarray, rate: int, start: bool, end: bool, keep_ms: int) -> np.ndarray:
+    """The silence Kokoro puts at a piece's start (about 40 ms) and end (about 90 ms) cut to `keep_ms` (a third of it at the start) where the piece joins
+    another of the same sentence (`start` / `end`): about 130 ms of dead air at every join became about 40 ms (owner, 29 Oct: "the pauses are awful")."""
+    f = max(1, rate // 100)
+    n = len(audio) // f
+    if not n or keep_ms <= 0:
+        return audio
+    lvl = np.sqrt(np.mean(audio[: n * f].reshape(n, f) ** 2, axis=1))
+    voiced = np.where(lvl > max(0.004, 0.05 * float(lvl.max())))[0]
+    if not len(voiced):
+        return audio
+    a = max(0, voiced[0] * f - rate * keep_ms // 3000) if start else 0
+    b = min(len(audio), (voiced[-1] + 1) * f + rate * keep_ms // 1000) if end else len(audio)
+    return audio[a:b]
+
+
 class KokoroOV:
     sample_rate = 24000
 
     def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto", threads: int | None = None,
-                 opening_first: bool = False) -> None:
+                 opening_first: bool = False, join_silence_ms: int = 0) -> None:
         from kokoro_onnx import Kokoro
 
         d = models / "kokoro-v1.0"
@@ -166,6 +182,7 @@ class KokoroOV:
         self._cache_size = cache_size
         self._lock = threading.Lock()
         self.opening_first = opening_first                # B: OPENINGS played first (see opening_first_split); A: first_piece_split as before
+        self.join_silence_ms = join_silence_ms            # > 0: the silence at the joins between a sentence's pieces cut to this (see trim_join)
         self._pinned: dict[str, np.ndarray] = {}           # the openings: kept for the life of the process, never pushed out of the cache by a long call
 
     def pieces(self, text: str) -> list[str]:
@@ -207,8 +224,15 @@ class KokoroOV:
     def warm_up(self) -> None:
         self._say("Warm up.")
 
+    def _joined(self, pieces: list[str]) -> Iterator[np.ndarray]:
+        """Each piece's audio, with the silence at its joins to the others cut (join_silence_ms)."""
+        last = len(pieces) - 1
+        for i, piece in enumerate(pieces):
+            audio = self._say(piece)
+            yield trim_join(audio, self.sample_rate, i > 0, i < last, self.join_silence_ms) if self.join_silence_ms and last else audio
+
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:
-        return np.concatenate([self._say(p) for p in self.pieces(text)])
+        return np.concatenate(list(self._joined(self.pieces(text))))
 
     def stream(self, text: str, speed: float = 1.0) -> Iterator[np.ndarray]:
         """Piece by piece: the short first piece is ready quickly; the next ones are made while it plays."""
@@ -216,8 +240,8 @@ class KokoroOV:
 
         def run():
             try:
-                for piece in self.pieces(text):
-                    q.put(self._say(piece))
+                for audio in self._joined(self.pieces(text)):
+                    q.put(audio)
             finally:
                 q.put(None)
 
