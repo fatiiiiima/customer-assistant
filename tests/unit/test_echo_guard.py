@@ -64,3 +64,18 @@ def test_the_pipeline_listens_through_the_guard_for_the_turn_and_for_the_early_r
     src = inspect.getsource(pipeline.build_pipeline)
     assert "OpenVinoWhisperSTTService(engine=hear" in src and "hear.transcribe(pcm, stt.prompt_for())" in src
     assert "parts.stt_engine.transcribe(" not in src
+
+
+# ------------------------------------------------------------------------------------------------ C5: the plan's looser test was scored on the recorded turns and not adopted
+def test_real_answers_that_share_words_with_the_agents_question_are_not_thrown_away():
+    """ARCH_PLAN C5 proposed a plain overlap test (60% of the heard words in any sentence the agent said, 4+ words, no matching start). Scored on the 79 recorded segments
+    (scripts/score_echo_guard.py) it flagged 4: the one real echo and these three real answers. The test in the code flags only the echo."""
+    from dealer_core.voice.services import echoes_agent
+
+    answers = [
+        ("I want to know something else about the Macan.", "It uses about 9.8 litres per hundred kilometres. Would you like to know anything else about the Macan?"),
+        ("I want to sure know about the Macan.", "It passed 149 of our 150 checks. Would you like to know anything else about the Macan?"),
+        ("Two in the afternoon.", "The soonest is today: 2 in the afternoon or 5 in the evening. Which would you prefer?"),
+    ]
+    assert not any(echoes_agent(heard, said) for heard, said in answers)
+    assert echoes_agent("Would you like to come and see it?", "It uses about 9.8 litres per hundred kilometres. Would you like to come and see it?")

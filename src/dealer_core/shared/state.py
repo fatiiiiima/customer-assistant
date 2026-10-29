@@ -21,6 +21,15 @@ class StateStore:
     def delete(self, key: str) -> None: ...
     def keys(self, prefix: str) -> list[str]: ...
 
+    def items(self, prefix: str) -> dict[str, str]:
+        """Every live key with this prefix and its value. The default asks for each value in turn (N + 1 reads); stores that can do it in one read override it."""
+        out = {}
+        for k in self.keys(prefix):
+            v = self.get(k)
+            if v is not None:
+                out[k] = v
+        return out
+
 
 class MemoryStore(StateStore):
     def __init__(self) -> None:
@@ -73,15 +82,22 @@ class RedisStore(StateStore):
     def keys(self, prefix):
         return [k for k in self.r.scan_iter(match=prefix + "*", count=500)]
 
+    def items(self, prefix):
+        ks = self.keys(prefix)
+        return {k: v for k, v in zip(ks, self.r.mget(ks) if ks else []) if v is not None}
+
 
 class PgStore(StateStore):
     """The same store in PostgreSQL (an UNLOGGED table: fast, and nothing in it needs to survive a database crash). With PostgreSQL already
     holding the bookings, production needs no separate Redis: 500 calls saving a snapshot every ~15 s is ~35 small writes a second."""
 
-    def __init__(self, url: str) -> None:
-        from ..repos.pg_store import PgDb
+    TIDY_EVERY_S = 30.0
 
-        self.db = PgDb(url, size=4)
+    def __init__(self, url: str, size: int = 4) -> None:
+        from ..repos.pg_store import shared_db
+
+        self.db = shared_db(url, size)                     # the process's one pool for this database (bookings share it)
+        self._tidied = 0.0
         with self.db.tx() as c:
             c.run("SELECT pg_advisory_xact_lock(424202)")
             c.run("CREATE UNLOGGED TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at TIMESTAMPTZ)")
@@ -100,18 +116,32 @@ class PgStore(StateStore):
         with self.db.tx() as c:
             c.run("DELETE FROM kv WHERE key = :k", k=key)
 
-    def keys(self, prefix):
+    def _tidy(self) -> None:
+        """Delete long-expired rows, at most every TIDY_EVERY_S: the router reads the registry every 0.5 s, and a DELETE per read was a write per read."""
+        now = time.monotonic()
+        if now - self._tidied < self.TIDY_EVERY_S:
+            return
+        self._tidied = now
         with self.db.tx() as c:
-            c.run("DELETE FROM kv WHERE expires_at IS NOT NULL AND expires_at < now() - interval '1 minute'")   # tidy up as we go
+            c.run("DELETE FROM kv WHERE expires_at IS NOT NULL AND expires_at < now() - interval '1 minute'")
+
+    def keys(self, prefix):
+        self._tidy()
         return [r["key"] for r in self.db.rows("SELECT key FROM kv WHERE key LIKE :p AND (expires_at IS NULL OR expires_at > now())", p=prefix + "%")]
 
+    def items(self, prefix):
+        """Keys and values in ONE read (the registry used to read a key list and then each worker's row in turn: 1 + N queries every 0.5 s per router)."""
+        self._tidy()
+        return {r["key"]: r["value"] for r in self.db.rows(
+            "SELECT key, value FROM kv WHERE key LIKE :p AND (expires_at IS NULL OR expires_at > now())", p=prefix + "%")}
 
-def open_store(url: str = "") -> StateStore:
+
+def open_store(url: str = "", pool_size: int = 4) -> StateStore:
     """redis://... -> Redis; postgresql://... -> PostgreSQL; empty -> in-process memory (one process only)."""
     if url.startswith(("redis://", "rediss://")):
         return RedisStore(url)
     if url.startswith(("postgresql://", "postgres://")):
-        return PgStore(url)
+        return PgStore(url, pool_size)
     return MemoryStore()
 
 
@@ -284,8 +314,7 @@ class WorkerRegistry:
 
     def workers(self) -> list[dict]:
         out = []
-        for k in self.store.keys("worker:"):
-            raw = self.store.get(k)
+        for raw in self.store.items("worker:").values():
             if raw:
                 try:
                     out.append(json.loads(raw))

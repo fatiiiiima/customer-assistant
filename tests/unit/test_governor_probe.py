@@ -232,3 +232,58 @@ def test_the_defaults_and_the_environment():
     assert d.probe_every_s == 0 and d.explore_every == 8
     app = build_app(load_config(environ={}), inventory="demo", classifier=Scripted(), reply_mode="conversational", engine="agent", lead_backend=Scripted())
     assert app.engine.governor.explore_every == 0
+
+
+# ------------------------------------------------------------------------------------------------ B5: no probe for a worker whose live turns are timing the model
+class Clock:
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_a_live_full_turn_makes_the_measure_fresh_and_a_probe_does_not():
+    clock = Clock()
+    g = QualityGovernor("auto", budget_ms=700, clock=clock)
+    assert not g.measured_within(20)                    # nothing timed yet
+    g.record_probe(500)
+    assert not g.measured_within(20)                    # a probe is not a caller's turn: it must not keep the next probe away
+    g.record_full(400)
+    assert g.measured_within(20)
+    clock.t += 19.9
+    assert g.measured_within(20)
+    clock.t += 0.2
+    assert not g.measured_within(20)                    # stale again: probe
+
+
+class FreshGov(Gov):
+    def __init__(self, fresh, in_flight=0):
+        super().__init__(in_flight)
+        self.fresh = fresh
+
+    def measured_within(self, seconds):
+        return self.fresh
+
+
+def test_the_loop_skips_a_round_when_the_workers_own_turns_just_timed_the_model():
+    eng = Eng()
+    run_loop(eng, FreshGov(True), rounds=3)
+    assert eng.calls == 0                                # a worker writing at the full level has nothing to be probed back up to
+    eng = Eng()
+    run_loop(eng, FreshGov(False), rounds=3)
+    assert eng.calls == 3                                # stepped down (or idle): the probe is the only way back
+
+
+def test_the_loop_can_be_told_to_probe_with_turns_in_flight_but_by_default_waits_for_none():
+    def run(max_in_flight):
+        eng, slept = Eng(), []
+
+        async def sleep(s):
+            slept.append(s)
+
+        asyncio.run(probe_loop(eng, Gov(2), 20.0, sleep=sleep, rounds=1, tries=3, max_in_flight=max_in_flight))
+        return eng.calls, slept
+
+    assert run(0) == (0, [20.0, 1.0, 1.0, 1.0])          # the old rule: two turns in flight, never a gap
+    assert run(2) == (1, [20.0])                         # allowed with two in flight: probes at once

@@ -86,15 +86,19 @@ def browser_of(user_agent: str) -> str:
     return "unknown"
 
 
-async def probe_loop(engine, governor, every_s: float, sleep=asyncio.sleep, rounds: int | None = None, tries: int = 10) -> None:
-    """Keeps the governor's measure of the model fresh without using a caller's turn: every `every_s` seconds, at a moment when no turn is using the model
-    (looked for for up to `tries` seconds), one small request of the same shape as a model-written turn. A probe that cannot run is skipped, never an error."""
+async def probe_loop(engine, governor, every_s: float, sleep=asyncio.sleep, rounds: int | None = None, tries: int = 10, max_in_flight: int = 0) -> None:
+    """Keeps the governor's measure of the model fresh without using a caller's turn: every `every_s` seconds, at a moment when at most `max_in_flight` turns are using
+    the model (looked for for up to `tries` seconds), one small request of the same shape as a model-written turn. A probe that cannot run is skipped, never an error.
+    A round is skipped when a caller's model-written turn timed the model within `every_s`: the probe is the way back up from prefix, and that worker is not below it.
+    (`max_in_flight` 0, the default, waits for a moment when no turn is using the model; 2 was tried in the scale simulation and recovered no faster: ARCH_REVIEW section 20.)"""
     done = 0
     while rounds is None or done < rounds:
         await sleep(every_s)
         done += 1
+        if getattr(governor, "measured_within", lambda s: False)(every_s):
+            continue
         for _ in range(tries):
-            if governor.snapshot()["in_flight"] == 0:
+            if governor.snapshot()["in_flight"] <= max_in_flight:
                 try:
                     await asyncio.to_thread(engine.probe_model)
                 except Exception as e:
@@ -139,7 +143,7 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         gov = getattr(engine, "governor", None)
         every = getattr(getattr(state.cfg, "dialogue", None), "probe_every_s", 0) or 0
         if gov is not None and getattr(gov, "probed", False) and every > 0 and hasattr(engine, "probe_model"):
-            asyncio.get_running_loop().create_task(probe_loop(engine, gov, every))
+            asyncio.get_running_loop().create_task(probe_loop(engine, gov, every, max_in_flight=getattr(state.cfg.dialogue, "probe_max_in_flight", 0)))
 
     @api.on_event("shutdown")
     async def _leave() -> None:

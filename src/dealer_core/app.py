@@ -64,9 +64,9 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
 
     db_url = cfg.app.database_url or os.environ.get("DATABASE_URL", "")
     if db_url:                                   # production: one PostgreSQL shared by every voice worker on every machine
-        from .repos.pg_store import PgBookingRepo, PgDb, PgInventoryRepo
+        from .repos.pg_store import PgBookingRepo, PgInventoryRepo, shared_db
 
-        db = PgDb(db_url)
+        db = shared_db(db_url, cfg.app.db_pool_size)
         inv = PgInventoryRepo(db)
     else:
         db = SqliteDb(":memory:")

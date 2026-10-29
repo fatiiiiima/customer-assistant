@@ -323,3 +323,58 @@ All of `src/`; `config/default.yaml` and `config/portal.yaml`; the governor budg
 ### Still to do for Phase 0 (needs the GPU)
 
 Run `docs/PHASE0_RUNBOOK.md`: the 7 to 8B candidates on vLLM, the real recogniser, the same three scripts, repeats, the knee at 4/12/20/24/32 callers, and the decision gate (first sentence under 300 ms at the design load). Until then Phases 2 and 3 are not unblocked.
+
+## 20. Phase 1: the small open bugs from the second review (28 Oct; B5, B6, B7 built, B8 and C5 not, with the reasons)
+
+No GPU needed, nothing spent. Branch `phase-1`, stacked on `phase-0`. Machine for every number: the same Apple M3 Pro laptop (36 GB, AC); the scale numbers are from the simulation (`scripts/simulate_scale.py`, deterministic given a seed), the AudioTap and database numbers from real runs on this machine. `pytest tests/unit` at the end of the phase: 924 passed, 40 skipped.
+
+**Where the plan was wrong or overstated (found reading the code; each is explained under its item).** (1) B5: "probe at in_flight <= 2" recovered no faster and loads an overloaded model more; the expected 2.5k tokens/s saving belongs to the other option, not this one. (2) B7: the recorder is already off unless `VA_DUMP_AUDIO_DIR` is set, and its cost was about 0.3% of the loop at 16 calls, so it does not explain the 32-caller collapse. (3) B8: `voice_rules` does not check promises, the line is not 562, and "check at MAX" would flag 40% of ordinary replies. (4) C5: the plan's looser echo test throws away real answers, as section 16 had warned. The plan's "Done when" for Phase 1 ("no worker stuck at the prefix level while the model server is idle") is not a clean pass or fail in the simulation; what can be read is the time to recover, below.
+
+### B5, probe starvation (PARTLY DONE)
+
+* **Done:** a probe round is skipped when a caller's model-written turn timed the model within the interval (`QualityGovernor.measured_within`, `server/app.py: probe_loop`). The probe is the only way back UP from prefix; a worker writing at the full level is not below it, and its live turns keep the measure fresh. Idle workers and workers at prefix are probed as before.
+* **Not adopted, the plan's other half:** probing when `in_flight <= 2`. It exists as `dialogue.probe_max_in_flight` (and `probe_loop(max_in_flight=...)`), default 0 (the old rule). In the scale simulation, mean of 5 seeds, protection on: after a GPU outage and return, workers were back under their budget in 66 s (skip only), 90 s (in flight <= 2, no skip), 66 s (as the plan: <= 2 plus skip) against 60 s with the old rule; with every turn on the model 126, 108, 132 against 132 s: no gain, differences of one 30 s sample. On a slow GPU, probes sent while the model already had more requests than slots rose from 659 to 872 to 904 (<= 2 and <= 4): +33 to 37%. The mechanism the plan inferred (a busy worker never finds a gap) is real only when a worker nearly always has a turn in flight, and that needs a model slow enough to be above the budget anyway.
+* **Numbers (simulation, seed 7, protection on, 500 callers, 10 simulated minutes; "before" = `--old-probe`):**
+
+| Scenario | Probe requests before / after | Answer p90 before / after | Seconds to recover before / after |
+|---|---|---|---|
+| fast GPUs | 1,257 / 61 | 0.88 / 0.88 s | n/a |
+| weak worker CPUs | 1,546 / 118 | 0.96 / 0.95 s | n/a |
+| spike 500 to 800 | 1,569 / 107 | 0.88 / 0.88 s | n/a |
+| cold start | 1,110 / 48 | 0.88 / 0.88 s | n/a |
+| GPU lost at 5 min, back at 7 | 1,372 / 409 | 0.88 / 0.88 s | 60 / 90 (5-seed mean 60 / 66) |
+| every turn on the model, GPU lost and back | 1,539 / 577 | 1.37 / 1.37 s | 120 / 120 (5-seed mean 132 / 126) |
+| slow GPU (never reaches the budget) | 1,197 / 1,188 | 0.83 / 0.82 s | n/a |
+
+  The saving is the probe load of a healthy cluster: about 95% fewer probe requests (INFERRED to be about 95% of the plan's ~2.5k tokens/s: 45 workers x ~1,100 tokens / 20 s; tokens were not measured). The simulation reproduces the plan's worker-stuck-at-prefix only as the recovery delay after an outage: the column "workers held down while model idle %" is 10 to 36% in the outage scenarios under both rules, which is that delay, and 20 to 60% on the slow GPU, which is a model that is correctly held down. Read the recovery time, not that column.
+* **The simulation changed.** `sim/scale.py` now runs the probe, counts the governor's in-flight turns as the engine does (`using_model`), starts every worker with `probed = True` as the server does, and reports probe load, probes sent while the model is overloaded, and seconds to recover; two scenarios (outage with recovery) were added. Its earlier numbers (`docs/PRODUCTION.md`, earlier sections) are not directly comparable.
+* Tests: `test_governor_probe.py` (3 added: a live full turn makes the measure fresh and a probe does not; the loop skips a fresh round and probes a stale one; the in-flight limit), `test_sim_scale.py` (2 added: 5x fewer probes with the same answer time; recovery within 120 s). Two mutations each fail a test.
+
+### B6, database connections (DONE, pgbouncer not added)
+
+* A worker opened `PgDb` (pool 8: bookings, stock) and `PgStore`'s own `PgDb` (pool 4: call snapshots, registry): up to 12 connections, a ceiling of ~540 for 45 workers (INFERRED; a pool opens a connection only when a thread needs one, so how many are really open is unknown and was not measured). Now `repos/pg_store.py: shared_db(url, size)` gives a process one pool per database, `app.db_pool_size` (default 8) sets it, and `build_app`, `open_store` and `PgStore` use it: ceiling 8 per worker, ~360 at 45. That is still more than PostgreSQL's default 100.
+* The router's registry read was a DELETE, a key list and one query per worker, every 0.5 s per router copy. `StateStore.items()` reads keys and values in one query (Redis: one MGET) and the clean-up DELETE runs at most every 30 s. MEASURED on a local PostgreSQL with 40 workers: 42 transactions per read before, 2 on the first read and 1 after. At 45 workers and two routers that is about 190 transactions a second before and 4 after (INFERRED by arithmetic). The router already cached its view (`Assigner.refresh_s` 0.5 s); the plan's "cache the registry view for a few seconds" was not needed.
+* **pgbouncer was NOT added to `deploy/k8s`.** A manifest needs a pinned image tag and its settings, and I cannot check either offline; an unchecked manifest in the deployment folder is worse than none. Needed before 45 workers: pgbouncer in transaction mode (the code uses explicit `BEGIN`/`COMMIT` and transaction-scoped advisory locks, which that mode allows; I did not test it against pgbouncer) or `max_connections` raised. An owner decision.
+* Tests: `test_pg_connections.py` (6; three mutations each fail some). `tests/unit/test_shared_state.py` is skipped on this machine (no `fakeredis`), so its memory/Redis/registry cases did not run here; the new tests cover the PostgreSQL store directly.
+
+### B7, AudioTap (DONE, but the reason is smaller than the plan says)
+
+* `voice/audiotap.py`: `record()` and `note()` now queue the chunk with the time it arrived and a thread of the tap's own writes, flushing about once a second and at the end of the call. Before: write + flush of the audio and of the index per 20 ms frame, on the loop. MEASURED (5,000 frames, 3 runs): 4.1 to 4.2 us per `record()` call before, 0.1 us after (p99 9.5 us before, 0.3 to 0.5 us after).
+* **The plan's effect claim is not supported.** At 16 calls that is 800 frames a second x 4 us = 0.3% of the loop. The recorder is off unless `VA_DUMP_AUDIO_DIR` is set (`pipeline.py:166`, pinned by an existing test), and the 32-caller collapse in `docs/SCALING.md` (23 Oct) was measured before the recorder existed (27 Oct). B7 only matters in a development run with the recorder on, and then only a little on this SSD; a slower disk would show more. Test: `test_audiotap.py` (1 added; fails with the old tap).
+
+### B8, voice_rules at MAX+2 (NOT DONE: the plan describes it wrongly; proposal)
+
+* The check is `agent/engine.py:571` (not 562): `voice_rules.check(reply, max_sentences=MAX_SENTENCES + 2, max_words=90)`. `voice_rules` checks sentence count, word count, markdown, URLs, more than 3 cars and line breaks. It does **not** check forbidden promises: that is `dialogue/writer.py` (a new first-person promise is rejected sentence by sentence before it is spoken). The result is `dbg.violations`, shown by the CLI trace and the replay tool; nothing acts on it. The plan's Phase 3 line "Forbidden promises: `dialogue/voice_rules.py` as today, checked at the limit" points at the wrong module too.
+* MEASURED on the 77 agent replies in the words logs: 1 sentence 1, 2 sentences 45, 3 sentences 13, 4 sentences 16, 5 sentences 2; median 18 words, none over 55. Checking at `MAX_SENTENCES` (2) would flag 31 of 77 (40%): every reply that is an opener, a fact group and a question, which is the design. The present limit (4) flags 2 of 77 and equals the writer's own `MAX_SENTENCES` = 4.
+* **Proposed correction, not built:** leave the check where it is (it already matches the writer's limit), and make Phase 3's promise guard a function of `writer.py`'s existing checks. If a stricter diagnostic is wanted, set the limit per reply type (a fact reply is 3 to 4 sentences by design, a booking line 1 to 2).
+
+### C5, the hint echo (NOT ADOPTED: scored, and the plan's rule loses)
+
+* `scripts/score_echo_guard.py` replays the "stt" and "said" lines of `logs/audio_dump/*_in.txt` (79 recognised segments, 16 calls) through an echo test; it recognises nothing again, so it is free and repeatable. The agent's line for a segment is everything it said since the previous one.
+* The test in the code (`echoes_agent`, first three words and 70% of the words): flags 1, a real echo ("Would you like to come and see it?"). The plan's rule (60% of the heard words in any one sentence the agent said, 4 or more words, no matching start): flags 4, the same echo and **three real answers**: "I want to know something else about the Macan." and "I want to sure know about the Macan." (to "Would you like to know anything else about the Macan?"), and "Two in the afternoon." (to "2 in the afternoon or 5 in the evening. Which would you prefer?"), the case section 16 predicted. Three wrong flags in 79 (3.8%) against none now; the plan's own exit (a day or time signal) would exempt only the last.
+* The plan's second part, a plausibility exit in `_fast_decide`'s SLOT branch: the logs hold 12 answers to a day or time question. Four were garbled ("I would do and time otherwise at the moment.", "Needed.", "What days are we allowed to?", "Any days from."); the agent offered the next free times after each, which is the right recovery, and no garbled answer was routed into a booking. Asking again instead would be a worse reply than offering times. The review's example is not an echo at all: it shares 2 of its 9 words with the question, so no overlap rule at 0.6 could catch it. It is a hint-induced misreading, the thing Fix 8 tried to remove and could not.
+* Nothing in `src/` changed. `test_echo_guard.py` gains a test pinning the three real answers as not echoes. Not tried: re-recognising the audio (the 28 Oct recordings have no reference lines, so a word-error score is not possible beyond the one 27 Oct call).
+
+### Not changed, on purpose
+
+Everything on the plan's "What not to change" list; `config/default.yaml` and `config/portal.yaml`; the governor's budgets, deadlines and thresholds; the router's mechanisms; the 500-caller capacity (no GPU number was taken); `deploy/` (no pgbouncer, see B6).
