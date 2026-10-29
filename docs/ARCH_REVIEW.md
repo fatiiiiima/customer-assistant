@@ -969,3 +969,43 @@ Not measured:
 * Other voices: this build has only "alba". Kyutai's own release can copy a voice, but it is not in this server.
 
 `python -m pytest tests/unit`: 1,324 passed, 40 skipped.
+
+## 41. Pocket-TTS with the voice "eve", through Kyutai's own package (29 Oct, the owner's request)
+
+Same branch as section 40. The speech toolkit's build has only "alba". Kyutai's own release has 27 built-in voices. The owner chose "eve" to try.
+
+What was installed (about 375 MB downloaded, as quoted to the owner beforehand):
+* A separate environment, `~/pocketenv` (Python 3.12, `pocket-tts` 4.0.1 and PyTorch 2.15, 778 MB on disk). The project's environment is untouched.
+* Kyutai's English model and the eve and alba voices, from `kyutai/pocket-tts-without-voice-cloning` (not gated; CC-BY-4.0). That is 219 MB of model plus 6 MB per voice.
+
+`scripts/pocket_server.py` (new) serves it with the same API as the Chatterbox server, on port 8040, with eve as the default voice. It runs on the CPU through PyTorch, not the CoreML build of section 40.
+
+First measured, eve sent its first audio in 35 ms. But Whisper's check showed each sentence began with about 0.4 s of quiet (median 416 ms), so the caller would have heard the first word about 0.45 s after asking. Two fixes:
+* The server now drops the quiet before the first sound, all but 30 ms (`from_first_sound`; `--keep-lead` turns this off).
+* `scripts/score_voices.py` now shows **first heard** for every voice: the first sound plus the quiet at the start of the audio.
+
+Tests: `test_voice_compare.py` (4).
+
+MEASURED, M3 Pro, the same 18 sentences:
+
+| | first sound, median / worst | **first heard**, median / worst | made in (x its length) | pauses of 120 ms+ | longest |
+|---|---|---|---|---|---|
+| Kokoro, joins trimmed | 0 / 342 ms | 40 / 375 ms | 0.17 x | 30 | 560 ms |
+| Pocket alba (speech toolkit, CoreML) | 51 / 57 ms | 116 / 137 ms | 0.20 x | 24 | 510 ms |
+| **Pocket eve (Kyutai's package, quiet dropped)** | 78 / 89 ms | **98 / 119 ms** | 0.14 x | 30 | 900 ms |
+| Chatterbox Turbo, streamed every 1.0 s | 450 / 463 ms | 553 / 617 ms | 0.55 x | 30 | 610 ms |
+
+With the GPU kept fully busy (`scripts/gpu_load.py`), eve's first sound had a median of 122 ms (worst 155 ms), made in 0.21 x. Whisper small.en heard eve's samples with 4.1% of words wrong (alba through the same package: 4.7%).
+
+Eve's long pauses all fall in the four longest sentences, the lists of prices (sentences 1, 4, 16 and 17). Two causes:
+* Its pauses at the commas in a list are longer.
+* The package cuts any text of more than 50 tokens into pieces.
+
+Made in one piece (`--max-tokens 200`), the longest pause in those sentences fell from 840 to 550 ms. Pauses overall went from 28 to 26. That is one run each, and the model samples at random, so it is INFERRED, not settled.
+
+Not measured:
+* How eve sounds against Chatterbox and alba (samples of sentences 00, 05, 09 and 17 in `logs/voice_samples/for_boss/`, local).
+* A real call (Pocket is not wired into the worker).
+* Several calls at once: the package is not thread-safe, so the server makes one sentence at a time, and a second call would mean a second model (about 0.5 GB of memory, INFERRED).
+
+`python -m pytest tests/unit`: 1,328 passed, 40 skipped.

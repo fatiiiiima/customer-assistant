@@ -6,6 +6,7 @@ starts, how long it takes to make against how long it is, and the pauses inside 
 
 Kokoro: each sentence cut into pieces and made piece by piece, as voice/kokoro_tts.py does live (B, openings ready in advance), the pieces' audio played back to back.
 A server voice: the whole sentence in one request (soniqo's server does not stream Magpie), so its first sound is when the whole sentence is ready.
+A streaming server (`--stream`): the first sound is the first chunk of audio to arrive; first heard adds the quiet at the start of the audio (section 41).
 Pauses: silent stretches of 120 ms or more inside the sentence. The audio is written to logs/voice_samples/compare/ to listen to.
 """
 from __future__ import annotations
@@ -47,6 +48,16 @@ def pauses(x: np.ndarray, rate: int, min_ms: int = 120) -> list[int]:
                 out.append(run * 10)
             run = 0
     return out
+
+
+def lead_ms(path: Path, level: float = 0.02) -> float:
+    """The quiet at the start of a saved sentence, before its first sample at `level` or louder: first heard = first sound + this (29 Oct: Pocket's "eve"
+    sent its first audio in 35 ms, but the audio began with about 0.4 s of quiet)."""
+    with wave.open(str(path)) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        rate = w.getframerate()
+    loud = np.flatnonzero(np.abs(x) >= level)
+    return loud[0] / rate * 1000 if len(loud) else 0.0
 
 
 def save(path: Path, x: np.ndarray, rate: int) -> None:
@@ -165,12 +176,14 @@ def main() -> int:
         name, url = spec.split("=", 1)
         results[name] = server_rows(name, url.rstrip("/"), a.voice, a.out)
     print(f"{len(SENTENCES)} sentences; audio in {a.out.relative_to(ROOT)}\n")
-    print(f"{'voice':10s} {'first sound: median / worst':>28s} {'made in (x its length)':>24s} {'pauses >= 120 ms':>18s} {'longest pause':>14s}")
+    print(f"{'voice':10s} {'first sound: median / worst':>28s} {'first heard: median / worst':>28s} {'made in (x its length)':>24s} {'pauses >= 120 ms':>18s} {'longest pause':>14s}")
     for name, rows in results.items():
         firsts = [r["first"] for r in rows]
+        heard = [r["first"] + lead_ms(a.out / f"{i:02d}_{name}.wav") for i, r in enumerate(rows)]
         ratio = [r["made"] / r["length"] for r in rows if r["length"]]
         ps = [p for r in rows for p in r["pauses"]]
-        print(f"{name:10s} {statistics.median(firsts):13.0f} / {max(firsts):5.0f} ms {statistics.median(ratio):20.2f} x {len(ps):12d} in {len(rows)} {max(ps) if ps else 0:10d} ms")
+        print(f"{name:10s} {statistics.median(firsts):13.0f} / {max(firsts):5.0f} ms {statistics.median(heard):17.0f} / {max(heard):5.0f} ms "
+              f"{statistics.median(ratio):20.2f} x {len(ps):12d} in {len(rows)} {max(ps) if ps else 0:10d} ms")
     return 0
 
 
