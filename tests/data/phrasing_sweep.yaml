@@ -1,0 +1,170 @@
+# Caller phrasings at each step of a call, with what must happen. Replayed by scripts/phrasing_sweep.py (docs/ARCH_REVIEW.md section 27).
+#
+# `at` names the point in the call the phrase is said at (the set-ups are in the script; the website's Toyota stock, the clock at 21:00 on Thu 29 Oct, so the next
+# times offered are tomorrow, Fri 30 Oct, 9 AM and 2 PM):
+#   search     after "There are 4 Toyotas... What budget, or is there a model you like?"
+#   list       after the Corolla, Camry and RAV4 were read out
+#   car        the Corolla described, "Shall I set up a test drive for you?"
+#   day_q      "What day would you like to come in?"
+#   time_q     "Tomorrow I can do 9 in the morning or 2 in the afternoon. Which suits you better?"
+#   contact_q  2 PM chosen, "Can I take your name and mobile number?"
+#   name_q     the number given, "And your name, please?"
+#   readback   "So that's the 2020 Corolla on Friday, 30 October at 2:00 PM ... for Fatima, on ... Shall I book it?"
+#   booked     after "Done, you're booked for tomorrow at 2 PM."
+#
+# `expect` (all given must hold): tool / not_tool (the action), state, booked (a booking exists), name, slot_hour (the time chosen or booked), phone (digits it ends
+# with), car (the car in focus), keeps_booking (the booking talk goes on: a booking step, the read-back, or a booking made), reply_has (any of), reply_lacks (none of).
+# Behaviour only: wording is never checked beyond reply_has / reply_lacks.
+
+# ---------------------------------------------------------------------------------------------------- a yes to the read-back
+- {at: readback, say: "yes go ahead", expect: {booked: true}}
+- {at: readback, say: "yes that's right", expect: {booked: true}}
+- {at: readback, say: "that's correct", expect: {booked: true}}
+- {at: readback, say: "yep book it", expect: {booked: true}}
+- {at: readback, say: "sounds good", expect: {booked: true}}
+- {at: readback, say: "perfect, confirm it", expect: {booked: true}}
+- {at: readback, say: "please do", expect: {booked: true}}
+- {at: readback, say: "absolutely", expect: {booked: true}}
+- {at: readback, say: "sure, go for it", expect: {booked: true}}
+- {at: readback, say: "yes please confirm the booking", expect: {booked: true}}
+- {at: readback, say: "lock it in", expect: {booked: true}}
+- {at: readback, say: "that works for me", expect: {booked: true}}
+- {at: readback, say: "all correct, thanks", expect: {booked: true}}
+- {at: readback, say: "yes that's all correct", expect: {booked: true}}
+- {at: readback, say: "correct, please book it", expect: {booked: true}}
+- {at: readback, say: "yes and does it have a warranty?", expect: {booked: true}}
+
+# ---------------------------------------------------------------------------------------------------- not a yes, or a correction, at the read-back
+- {at: readback, say: "no, the name is Fatma", expect: {booked: false, keeps_booking: true, name: Fatma}}
+- {at: readback, say: "actually can we make it 9 instead", expect: {booked: false, keeps_booking: true, slot_hour: 9}}
+- {at: readback, say: "the number is wrong", expect: {booked: false, keeps_booking: true}}
+- {at: readback, say: "wait, wrong day", expect: {booked: false, keeps_booking: true}}
+- {at: readback, say: "no", expect: {booked: false}}
+- {at: readback, say: "not yet, let me think", expect: {booked: false}}
+- {at: readback, say: "can you repeat that?", expect: {booked: false, keeps_booking: true}}
+
+# ---------------------------------------------------------------------------------------------------- choosing one of the two times offered
+- {at: time_q, say: "2", expect: {slot_hour: 14}}
+- {at: time_q, say: "two", expect: {slot_hour: 14}}
+- {at: time_q, say: "the afternoon one", expect: {slot_hour: 14}}
+- {at: time_q, say: "2 pm please", expect: {slot_hour: 14}}
+- {at: time_q, say: "let's do 9", expect: {slot_hour: 9}}
+- {at: time_q, say: "nine works", expect: {slot_hour: 9}}
+- {at: time_q, say: "the morning one", expect: {slot_hour: 9}}
+- {at: time_q, say: "the first one", expect: {slot_hour: 9}}
+- {at: time_q, say: "the later one", expect: {slot_hour: 14}}
+- {at: time_q, say: "9 am", expect: {slot_hour: 9}}
+- {at: time_q, say: "afternoon please", expect: {slot_hour: 14}}
+- {at: time_q, say: "two o'clock", expect: {slot_hour: 14}}
+- {at: time_q, say: "make it 9 in the morning", expect: {slot_hour: 9}}
+- {at: time_q, say: "I'll take the 2 o'clock", expect: {slot_hour: 14}}
+- {at: time_q, say: "either is fine", expect: {keeps_booking: true, booked: false}}
+- {at: time_q, say: "you choose", expect: {keeps_booking: true, booked: false}}
+- {at: time_q, say: "can we do 3 instead", expect: {keeps_booking: true, reply_lacks: ["9 am it is", "2 pm it is", "9 am. can i", "2 pm. can i"]}}
+- {at: time_q, say: "half two", expect: {keeps_booking: true, reply_lacks: ["9 am it is", "9 am. can i"]}}
+
+# ---------------------------------------------------------------------------------------------------- answering "what day?"
+- {at: day_q, say: "tomorrow", expect: {keeps_booking: true, reply_has: ["tomorrow"]}}
+- {at: day_q, say: "Saturday", expect: {keeps_booking: true, reply_has: ["saturday"]}}
+- {at: day_q, say: "this weekend", expect: {keeps_booking: true, reply_has: ["saturday", "sunday"]}}
+- {at: day_q, say: "tomorrow afternoon", expect: {keeps_booking: true, reply_has: ["tomorrow"]}}
+- {at: day_q, say: "the day after tomorrow", expect: {keeps_booking: true, reply_has: ["saturday", "31"]}}
+- {at: day_q, say: "next Monday", expect: {keeps_booking: true, reply_has: ["monday"]}}
+- {at: day_q, say: "as soon as possible", expect: {keeps_booking: true, reply_has: ["tomorrow", "soonest"]}}
+- {at: day_q, say: "any day", expect: {keeps_booking: true, reply_has: ["tomorrow", "soonest"]}}
+- {at: day_q, say: "Friday morning", expect: {keeps_booking: true, reply_has: ["9", "friday", "tomorrow"]}}
+- {at: day_q, say: "whenever suits you", expect: {keeps_booking: true, reply_has: ["tomorrow", "soonest"]}}
+- {at: day_q, say: "today", expect: {keeps_booking: true, reply_has: ["tomorrow", "nothing free today", "closed"]}}
+- {at: day_q, say: "can I come Saturday at 10", expect: {keeps_booking: true, slot_hour: 10}}
+
+# ---------------------------------------------------------------------------------------------------- name and number
+- {at: contact_q, say: "Fatima, 050 793 2546", expect: {name: Fatima, phone: "507932546"}}
+- {at: contact_q, say: "it's Fatima", expect: {name: Fatima, keeps_booking: true}}
+- {at: contact_q, say: "my name is Omar Hassan", expect: {name: Omar Hassan}}
+- {at: contact_q, say: "put it under Ahmed", expect: {name: Ahmed}}
+- {at: contact_q, say: "the name is Layla Ahmed", expect: {name: Layla Ahmed}}
+- {at: contact_q, say: "under the name Sara", expect: {name: Sara}}
+- {at: contact_q, say: "it's for my brother Ahmed", expect: {name: Ahmed}}
+- {at: contact_q, say: "Fatima Masood", expect: {name: Fatima Masood}}
+- {at: contact_q, say: "050 793 2546", expect: {phone: "507932546", keeps_booking: true}}
+- {at: contact_q, say: "zero five zero seven nine three two five four six", expect: {phone: "507932546"}}
+- {at: contact_q, say: "my number is 0507932546", expect: {phone: "507932546"}}
+- {at: contact_q, say: "+971 50 793 2546", expect: {phone: "507932546"}}
+- {at: contact_q, say: "my name's Fatima and my number is 050 793 2546", expect: {name: Fatima, phone: "507932546"}}
+- {at: contact_q, say: "Fatima. 0507932546.", expect: {name: Fatima, phone: "507932546"}}
+- {at: contact_q, say: "thank you", expect: {keeps_booking: true, reply_lacks: ["anything else"]}}
+- {at: contact_q, say: "why do you need my number?", expect: {keeps_booking: true, booked: false}}
+- {at: name_q, say: "Fatima", expect: {name: Fatima}}
+- {at: name_q, say: "it's Fatima", expect: {name: Fatima}}
+- {at: name_q, say: "Fatima Masood", expect: {name: Fatima Masood}}
+- {at: name_q, say: "under Fatima", expect: {name: Fatima}}
+- {at: name_q, say: "thank you", expect: {keeps_booking: true, reply_lacks: ["anything else"]}}
+- {at: name_q, say: "do you need my surname?", expect: {keeps_booking: true, booked: false}}
+
+# ---------------------------------------------------------------------------------------------------- a question in the middle of the booking: answer or not, the booking must go on
+- {at: time_q, say: "does it have a warranty?", expect: {keeps_booking: true}}
+- {at: time_q, say: "how many kilometres has it done?", expect: {keeps_booking: true}}
+- {at: time_q, say: "is the price negotiable?", expect: {keeps_booking: true}}
+- {at: time_q, say: "hmm let me think", expect: {keeps_booking: true}}
+- {at: time_q, say: "one sec", expect: {keeps_booking: true}}
+- {at: time_q, say: "what are your opening hours?", expect: {keeps_booking: true}}
+- {at: time_q, say: "where is the showroom?", expect: {keeps_booking: true}}
+- {at: time_q, say: "okay so", expect: {keeps_booking: true}}
+- {at: time_q, say: "is it automatic?", expect: {keeps_booking: true}}
+- {at: time_q, say: "sorry what times again?", expect: {keeps_booking: true, reply_has: ["9", "2"]}}
+- {at: time_q, say: "2 pm, and is it automatic?", expect: {slot_hour: 14}}
+- {at: contact_q, say: "Fatima, and what should I bring?", expect: {name: Fatima}}
+
+# ---------------------------------------------------------------------------------------------------- the search: "what budget, or is there a model you like?"
+- {at: search, say: "any model is fine", expect: {reply_has: ["corolla"]}}
+- {at: search, say: "whatever you have", expect: {reply_has: ["corolla"]}}
+- {at: search, say: "show me everything", expect: {reply_has: ["corolla"]}}
+- {at: search, say: "the cheapest one", expect: {reply_has: ["corolla"]}}
+- {at: search, say: "something under 80000", expect: {reply_has: ["corolla"], reply_lacks: ["rav4"]}}
+- {at: search, say: "a family car", expect: {reply_lacks: ["particular make", "a make, a type"]}}
+- {at: search, say: "not too expensive", expect: {reply_lacks: ["particular make", "a make, a type"]}}
+- {at: search, say: "doesn't matter", expect: {reply_has: ["corolla"]}}
+- {at: search, say: "what do you recommend?", expect: {reply_lacks: ["particular make", "a make, a type"]}}
+- {at: search, say: "any hybrid", expect: {reply_has: ["corolla", "camry", "rav4"]}}
+- {at: search, say: "budget around 70 thousand", expect: {reply_has: ["corolla"], reply_lacks: ["rav4"]}}
+- {at: search, say: "I don't mind", expect: {reply_has: ["corolla"]}}
+
+# ---------------------------------------------------------------------------------------------------- pointing at a car just read out
+- {at: list, say: "the cheaper one", expect: {car: Corolla}}
+- {at: list, say: "the second one", expect: {car: Camry}}
+- {at: list, say: "the RAV4", expect: {car: RAV4}}
+- {at: list, say: "not the Camry, the Corolla", expect: {car: Corolla}}
+- {at: list, say: "tell me about the first one", expect: {car: Corolla}}
+- {at: list, say: "the Camry please", expect: {car: Camry}}
+- {at: list, say: "what about the RAV4?", expect: {car: RAV4}}
+- {at: list, say: "the middle one", expect: {car: Camry}}
+
+# ---------------------------------------------------------------------------------------------------- a visit, or not, after "Shall I set up a test drive for you?"
+- {at: car, say: "I want to see it", expect: {tool: prepare_booking}}
+- {at: car, say: "can I come see it?", expect: {tool: prepare_booking}}
+- {at: car, say: "I'd like to test drive it", expect: {tool: prepare_booking}}
+- {at: car, say: "book me in", expect: {tool: prepare_booking}}
+- {at: car, say: "let's go see it", expect: {tool: prepare_booking}}
+- {at: car, say: "when can I see it?", expect: {tool: prepare_booking}}
+- {at: car, say: "yes please", expect: {tool: prepare_booking}}
+- {at: car, say: "sure, why not", expect: {tool: prepare_booking}}
+- {at: car, say: "can I see the photos?", expect: {not_tool: prepare_booking}}
+- {at: car, say: "maybe later", expect: {not_tool: prepare_booking}}
+- {at: car, say: "book it and is the price negotiable?", expect: {tool: prepare_booking}}
+
+# ---------------------------------------------------------------------------------------------------- questions about the car in focus
+- {at: car, say: "how many km?", expect: {reply_has: ["41,000"]}}
+- {at: car, say: "what colour is it?", expect: {reply_has: ["grey"]}}
+- {at: car, say: "is it automatic?", expect: {reply_has: ["automatic"]}}
+- {at: car, say: "does it have a warranty?", expect: {reply_has: ["warranty"]}}
+- {at: car, say: "has it been in an accident?", expect: {reply_has: ["accident"]}}
+- {at: car, say: "how much is it?", expect: {reply_has: ["62,500"]}}
+- {at: car, say: "tell me more about the engine", expect: {reply_has: ["engine", "horsepower"]}}
+- {at: car, say: "is the price negotiable?", expect: {reply_has: ["fixed"]}}
+
+# ---------------------------------------------------------------------------------------------------- after the booking
+- {at: booked, say: "thank you", expect: {tool: none, reply_has: ["welcome"]}}
+- {at: booked, say: "what did I book?", expect: {reply_has: ["corolla"]}}
+- {at: booked, say: "cancel it", expect: {reply_has: ["cancel"]}}
+- {at: booked, say: "bye", expect: {tool: end_call}}
+- {at: booked, say: "can I change it to 9?", expect: {reply_lacks: ["particular make", "a make, a type"]}}
