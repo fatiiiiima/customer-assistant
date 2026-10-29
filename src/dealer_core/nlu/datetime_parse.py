@@ -84,6 +84,14 @@ def _parse_day(t: str, today: date) -> tuple[date | None, str]:
         if delta == 0 and m[1] == "next":
             delta = 7
         return today + timedelta(days=delta), m[0]
+    m = re.search(r"\b(?:(next|this|the|coming|over the|at the|on the) )?weekend\b", t)
+    if m:                                                                # the UAE weekend is Saturday and Sunday: its first day still to come (29 Oct sweep: offered Friday)
+        delta = (5 - today.weekday()) % 7
+        if today.weekday() == 6:
+            delta = 7 if m[1] == "next" else 0
+        elif delta == 0 and m[1] == "next":
+            delta = 7
+        return today + timedelta(days=delta), m[0]
     return None, ""
 
 

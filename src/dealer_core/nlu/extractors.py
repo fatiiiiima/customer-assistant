@@ -199,6 +199,8 @@ def selection(text: str, shown: list[CarView]) -> str | None:
         return shown[ordinal[m[1]]].stock_id
     if re.search(r"\blast\b", joined):
         return shown[-1].stock_id
+    if re.search(r"\bmiddle\b", joined) and len(shown) % 2 == 1:      # "the middle one" of three (29 Oct sweep)
+        return shown[len(shown) // 2].stock_id
     if re.search(r"\b(cheapest|cheaper|lowest price)\b", joined):
         return min(shown, key=lambda c: c.price).stock_id
     if re.search(r"\b(newest|most recent)\b", joined):
@@ -278,6 +280,10 @@ _UNDER_NAME = re.compile(r"\bunder(?: the name(?: of)?)?\s+([A-Za-z][A-Za-z' ]*?
                          r"(?=\s+(?:and|my|phone|number|mobile|please|thanks|thank you)\b|[,.;:!?\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)", re.I)
 _NOT_A_NAME = {"ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "k", "grand", "dirhams", "dirham",
                "aed", "budget", "price", "km", "kilometres", "kilometers", "miles", "the", "a", "an", "it", "that", "this", "me", "my"}
+# "it's for my brother Ahmed": the booking is for someone else, named after who they are (29 Oct sweep: the name was "For")
+_FOR_SOMEONE = re.compile(r"\bfor (?:my |our )?(?:brother|sister|wife|husband|son|daughter|friend|father|mother|dad|mum|mom|colleague|boss|cousin|uncle|aunt|partner|"
+                          r"fianc[eé]e?)(?:,)? (?:called |named )?([A-Z][a-z']+(?: [A-Z][a-z']+)?)")
+_QUESTION_START = {"do", "does", "did", "can", "could", "would", "will", "should", "shall", "what", "why", "how", "where", "when", "who", "which", "is", "are", "was", "were", "may"}
 _STOP = {"yes", "no", "ok", "okay", "yeah", "yep", "yup", "yea", "ya", "nope", "nah", "alright", "right", "cool", "awesome", "absolutely",
         "definitely", "certainly", "actually", "sounds", "lovely", "excellent", "exactly", "correct", "hey", "hmm", "er", "erm", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
         "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh",
@@ -327,14 +333,20 @@ def contact(text: str) -> Contact:
     name = None
     m = _NAME_CUE.search(text)
     under = _UNDER_NAME.search(text)
-    if m:
+    someone = _FOR_SOMEONE.search(text)
+    if someone:
+        name = someone[1].strip()
+    elif m and m[1].strip().split()[0].lower() in ("for", "the", "a", "not", "just"):
+        name = None                                                     # "it's for ..." with no name after the relation: not a name at all
+    elif m:
         name = m[1].strip()
     elif under and not any(w.lower() in _NOT_A_NAME or w.lower() in _STOP for w in under[1].split()):
         name = under[1].strip()
     else:                                   # "Mohammed Al Mansoori, zero five zero ..." : the leading words before the number
         lead = re.split(r"[,.;:\d]| (?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b| and | my ", text, maxsplit=1, flags=re.I)[0]
         words = [w for w in lead.strip().split() if re.fullmatch(r"[A-Za-z']+", w)]
-        if 1 <= len(words) <= 4 and not any(w.lower() in _STOP for w in words):
+        question = bool(words) and words[0].lower() in _QUESTION_START              # "do you need my surname?" is not the name "Do You Need" (29 Oct sweep)
+        if 1 <= len(words) <= 4 and not question and not any(w.lower() in _STOP for w in words):
             name = " ".join(words)
     if name:
         name = " ".join(w for w in name.split() if w.lower() not in {"and", "my"})

@@ -603,3 +603,53 @@ The owner's next call booked the Corolla for Friday 30 Oct at 2 PM, but the name
 * Not a logic fault, left as it is: the number was misheard twice ("5-050-7932546" and "050, 0790, 2546", both 11 digits) and the agent rightly asked again; the third try was right. That is the open digits decision of section 18.
 
 After: "Thank you." → "You're welcome. Who should I put the booking under?"; "No but the booking under Fatima." → the read-back with Fatima; "yes" → booked, Friday 30 Oct 14:00, Fatima. Tests: 15 (each of the three changes fails some when removed). `pytest tests/unit`: 1,060 passed, 40 skipped.
+
+## 27. A phrasing sweep: 131 ways of saying things at each step of a call (29 Oct)
+
+Owner's question after sections 24 to 26: what other bugs like these are waiting, and would a better model avoid them? Branch `test/phrasing-sweep`. `tests/data/phrasing_sweep.yaml` holds 131 caller phrasings across nine points of a call (the search, a list read out, a car described, "what day?", "which time?", name and number, the name alone, the read-back, after the booking), each with what must happen: the action, whether the booking talk goes on, the name, time and phone recorded, the car in focus. `scripts/phrasing_sweep.py` replays each on a fresh copy of the website's stock (clock 21:00 Thu 29 Oct) in two modes: **code fallback** (the model never answers in time, as often on this laptop) and **model decides** (the real model, Qwen3-4B on MLX, with its decision deadline lifted, a stand-in for hardware that always answers in time). Wording is the code's in both: this measures understanding, not wording.
+
+| | Code fallback | Model decides |
+|---|---|---|
+| Passed / failed of 131 | 114 / 17 | 120 / 11 |
+
+**What the model avoids (8):** ten other ways to say yes to the read-back were not a yes for the code ("that's correct", "sounds good", "please do", "absolutely", "sure, go for it", "lock it in", "that works for me", "all correct, thanks", "yes that's all correct"; the code reads the details back again, which is safe but needless), "the middle one" (not resolved), "sure, why not" to an invitation.
+
+**What the model cannot avoid (6), because a rule decides first or the code reads the detail:**
+
+1. **"hmm let me think" while times are on offer cancels the booking draft** ("No problem, I won't book anything."): the "never mind / let me think" rule treats thinking as giving up. The most serious one.
+2. **"it's for my brother Ahmed" records the name "For"** ("Thanks, For."): the name reader takes the words after "it's".
+3. **"actually can we make it 9 instead" at the read-back** asks "What should I change?" instead of taking the time given.
+4. **"this weekend"** at "what day?" offers tomorrow (Friday), not Saturday or Sunday.
+5. **"show me everything"** after "4 Toyotas" lists the other makes instead of the Toyotas.
+6. **"yes and does it have a warranty?"** at the read-back is not booked (two things at once: the model answers the warranty).
+
+**What the model makes worse (5):** asked "does it have a warranty?", "how many kilometres has it done?", "is the price negotiable?", "is it automatic?" while choosing a time, the model picks "tell me about the car": the answer is right, but `_t_get_car` sets the call back to "answering" and the times on offer are dropped ("...Would you like to come and see it?"). With the code fallback the booking goes on but the question is not answered. Neither is right: the question should be answered and the booking question asked again. Also with the model: "whatever you have" was answered "Is there anything else I can help with?" (the model chose "nothing").
+
+**Reading.** A model that always answers in time would avoid about half of what fails for the code alone, and would bring its own failures (a question in the middle of a booking ends the booking). Half of the faults are in rules that run before the model is asked, or in the code reading details from the words, and need fixing whatever the model. Nothing was changed in this section; the fixes are proposed in batches below. Run again after each: `python scripts/phrasing_sweep.py` and `--model gpu_server`.
+
+**Proposed fix batches, most serious first:**
+
+* **A, never lose a booking by mistake:** thinking ("let me think", "one sec") is not cancelling; a car question during a booking step is answered and the booking question asked again (both modes).
+* **B, read what was said:** "for my brother Ahmed" gives Ahmed; "make it 9 instead" at the read-back changes the time; "this weekend" offers Saturday and Sunday.
+* **C, a yes is a yes:** the ordinary ways of saying yes to the read-back and to an invitation; "yes, and does it have a warranty?" books and answers.
+* **D, the search:** "show me everything" and "whatever you have" read out the search under way; "the middle one".
+
+### 27a. The four batches fixed (29 Oct)
+
+Same branch, in order, the sweep run in both modes after each (same 131 phrasings; the expectations for nine cases were tightened along the way so that they check the answer, not only that the booking went on, and the five cases that once let a question through as a name now check that no name is recorded):
+
+| After | Code fallback | Model decides |
+|---|---|---|
+| nothing (section 27) | 114 | 120 |
+| A, never lose a booking by mistake | 115 | 125 |
+| B, read what was said | 118 | 128 |
+| C, a yes is a yes | 129 | 129 |
+| D, the search | **131** | **131** |
+
+* **A.** A side remark while a booking is being filled in or read back gets a side answer and the step's own question again (`booking_aside`, a code rule that runs before the model: the times already offered, the missing detail, "Shall I book it?"); thinking out loud ("hmm let me think", "one sec") is not cancelling; "either is fine" proposes one of the offered times; "can we do 3 instead" is checked instead of the day being asked again; a question is never read as a name (found here: "do you need my surname?" was read back as the name "Do You Need").
+* **B.** "it's for my brother Ahmed" gives Ahmed ("it's for me" gives nothing; it had given "For", and the first fix gave "For Me", caught by its own test); a new day or time at the read-back changes the time and reads back again; "this weekend" is the next Saturday (or today's Sunday).
+* **C.** The ordinary ways to agree count as a yes at the read-back and to an invitation, whole utterances only ("that's not correct" and "sounds good but at 5" are not a yes, tested); "yes, and does it have a warranty?" books and answers.
+* **D.** "show me everything", "whatever you have" read out the search under way; "the middle one" of three.
+* **A guard.** `test_sweep_fixes.py: test_the_whole_sweep_passes_with_the_code_alone` replays all 131 phrasings with the code alone (2 s); with the side answers switched off it fails, so a regression in any batch is caught. Tests: 56 in `test_sweep_fixes.py`. `pytest tests/unit`: 1,116 passed, 40 skipped.
+
+What this does and does not show. 131 of 131 means the phrasings in the file are handled, in both modes; it does not mean every phrasing is: the file is what I could think of, and the next real call will find others. Add each one to the file when it does. The model run used Qwen3-4B on MLX with its decision deadline lifted; with the live 1.2 s deadline on this laptop most turns the rules do not route are decided by the code, which is the first column.

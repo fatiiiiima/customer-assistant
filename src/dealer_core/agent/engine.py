@@ -46,6 +46,13 @@ _PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay
 _BOOK_YES = re.compile(r"(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|right|correct)(?: please)? )*(?:please )?"
                        r"(?:go ahead(?: and (?:book|confirm)(?: it| that)?)?|(?:book|confirm)(?: it| that| me in| the (?:test drive|booking)| a test drive| the test drive)?)"
                        r"(?: please| for me| thanks| thank you)*")
+# The other ordinary ways to agree (29 Oct sweep: "that's correct", "sounds good", "absolutely", "lock it in", "sure, why not" were not a yes for the code). Whole utterances only:
+# "that's not correct" or "sounds good but at 5" do not match.
+_AGREE = re.compile(r"(?:(?:yes|yeah|yep|yup|ok(?:ay)?|sure|great|perfect|lovely|alright)(?: please)? )*"
+                    r"(?:that'?s (?:all )?(?:correct|right|fine|perfect|good|great)|(?:all|that'?s all) (?:correct|good|right|fine)|"
+                    r"sounds? (?:good|great|perfect|right|fine)|please do|absolutely|definitely|of course|go for it|do it|lock it in|"
+                    r"(?:that )?works(?: for me)?|that works(?: for me)?|that'?s it|(?:sure )?why not|let'?s do (?:it|that)|go on then|i'?d (?:like|love) that|yes please)"
+                    r"(?: (?:thanks|thank you|please|go ahead|cheers))*")
 # "I want to see the car" right after an invitation to come and see it (same call): a visit, not more facts. Alone it can mean the photos (section 12), so only after one.
 _SEE_CAR = re.compile(r"\b(?:see|look at|view|check out) (?:the car|this car|that car|it|her|the (?!(?:photos?|pictures?|pics|images?|videos?)\b)\w+)\b(?! (?:photos?|pictures?|pics|images?|videos?)\b)")
 _CHANGE = re.compile(r"\b(?:no|not|change|different|another|other|cancel|wait|actually|instead|but)\b")
@@ -97,7 +104,8 @@ _FLEXIBLE = re.compile(
     r"when\s+(?:are\s+you|is\s+it)\s+(?:free|open|available)|when\s+can\s+i\s+(?:come|visit|see|drive|try|stop))\b")
 # the caller leaves the choice to us (as opposed to asking what is free): with times on the table, the earlier one is taken
 _DELEGATES = re.compile(r"\b(?:any\s+(?:day|days|time|times|date)|every\s+day|when\s*ever|whatever|you\s+(?:choose|pick|decide)|up\s+to\s+you|your\s+choice|"
-                        r"no\s+preference|(?:does\s*not|doesn'?t)\s+matter|don'?t\s+mind)\b")
+                        r"no\s+preference|(?:does\s*not|doesn'?t)\s+matter|don'?t\s+mind|"
+                        r"either(?:\s+(?:one|of\s+them|is\s+fine|works|will\s+do))?|whichever|both\s+(?:are\s+fine|work))\b")    # 29 Oct sweep: "either is fine" asked the day again
 # a bare request for more, right after an answer about a car
 _MORE_ABOUT = re.compile(r"(?:ok(?:ay)? |yes |yeah |and )?(?:tell me )?(?:something|anything|what) else(?: please| about it)?|(?:tell me )?more(?: please| about it)?|go on|keep going|and what else")
 _CHEAPER = re.compile(r"\b(?:something|anything|any|options?|cars?|models?)\b.*\b(?:cheaper|less expensive|lower price)\b|"
@@ -110,7 +118,8 @@ _BYE = re.compile(r"\b(?:bye|goodbye|good bye|that's all|that is all|that's ever
 _WHAT_STOCK = re.compile(r"\b(?:i need a car|i'm looking for a car|looking for a car|i want (?:a|to buy a) car|buy a car|what cars do you have|what (?:cars|vehicles|models) have you got|what do you have|what have you got|what's in stock|"
                          r"what is in stock|what do you sell|show me (?:what you have|your cars|everything)|what are my options)\b")
 # "what do you have?" while a search is under way (after "Any specific model?") asks for what matches THAT search, not for the whole showroom
-_ASKS_TO_SEE = re.compile(r"\b(?:what do you have|what have you got|what are my options|show me what you have)\b")
+_ASKS_TO_SEE = re.compile(r"\b(?:what do you have|what have you got|what are my options|show me what you have|show me everything|everything you have|"
+                          r"show me (?:them )?all|all of them|whatever you(?:'ve)? (?:have|got)|list them)\b")    # 29 Oct sweep: "show me everything" after "4 Toyotas" listed other makes
 _FUEL = re.compile(r"\b(electric|ev|hybrid|petrol|diesel|plug in hybrid)\b")
 _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) (?:kilomet\w*|km|miles)|barely (?:used|driven))\b")
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")
@@ -166,6 +175,9 @@ def _after_opener(sentence: str, proper: frozenset[str] | set[str] = frozenset()
 _FACT_TOOLS = ("search_cars", "browse_makes", "compare_cars", "best_of", "my_bookings", "showroom_info", "colours")   # replies that are lists or figures
 _HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 _GREETING = re.compile(r"(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening)|salaam|salam|assalamu alaikum|marhaba)(?: there| wazir| everyone| again)?")
+# Thinking out loud is not giving up (29 Oct sweep: "hmm let me think" while times were on offer cancelled the booking draft).
+_THINKING = re.compile(r"\b(?:let me think|let me see|one sec(?:ond)?|just a (?:sec(?:ond)?|moment|minute)|give me a (?:sec(?:ond)?|minute|moment)|hold on|hang on|"
+                       r"wait a (?:sec(?:ond)?|minute|moment)|hmm+|umm+|uhh+)\b")
 _NEVER_MIND = re.compile(r"\b(?:never mind|nevermind|maybe later|not now|another time|i'll think about it|i will think about it|let me think|"
                          r"no thanks|no thank you|not right now|i'm just looking|just looking|just browsing)\b")
 _FAMILY = re.compile(r"\b(?:family|families|kids|children|child seats?|school run)\b")
@@ -190,7 +202,7 @@ explore options option choose pick decide start continue ahead take try talk dis
 CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
-EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call")
+EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call", "booking_aside")
 TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
@@ -448,7 +460,7 @@ class AgentEngine:
                 decision, no_model = self._code_decision(s, text), True
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "model too slow: decided by code"
         tool = decision.get("tool", "none")
-        if tool not in TOOLS:
+        if tool not in TOOLS and tool != "booking_aside":
             tool = "none"
         if tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
             # 28 Oct: nothing is booked yet, a booking is only being arranged. "Do." (for "two") and "I want to change the time", said while times were on offer, went to the tools
@@ -470,6 +482,8 @@ class AgentEngine:
             yield TurnResult(line, dbg, False)
             return
         args = self._args_for(s, tool, decision.get("car_id"), text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
+        if tool == "booking_aside":
+            args = {"kind": decision.get("kind")}
         if tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
         picked = ex.selection(text, s.shown) if decision.get("via") != "rules" else None      # code's own routing already looked at this
@@ -480,6 +494,8 @@ class AgentEngine:
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
+        if decision.get("also") and s.car:
+            result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
         if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
             rest = _REACTION_LEAD.sub("", result["core"], count=1)
             result["core"] = "You're welcome. " + rest[:1].upper() + rest[1:]
@@ -671,6 +687,72 @@ class AgentEngine:
                 return o
         return ""
 
+    def _aside_kind(self, s: Session, text: str, words: list[str], joined: str) -> str | None:
+        """While a booking is being filled in or read back: is this a side remark rather than a booking answer? "think" (one sec, let me think), "car" (a question
+        about the car in focus or its price), "showroom" (hours, where). None when the words carry anything for the booking (a day or time, a name or number, a yes or
+        no), or nothing a side answer can serve. 29 Oct sweep: such questions either ended the booking (the model's choice) or were not answered (the code's)."""
+        if not s.car or parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found:
+            return None
+        c = ex.contact(text)
+        if c.phone or c.heard_digits or ex.names_someone(text) or self._confirms(joined) or re.match(r"(?:no|nope|yes|yeah|actually|wait|cancel|change)\b", joined):
+            if not (_THINKING.search(joined) and re.match(r"(?:wait|hmm|umm|uhh)\b", joined)):
+                return None
+        if _THINKING.search(joined) and len(words) <= 6:
+            return "think"
+        topics = [t for t in A.topics_in(joined) if t != "about"]
+        if topics or A.asked_feature(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or any(p.search(joined) for p in _ATTRIBUTE.values()):
+            return "car"
+        if getattr(self.svc, "site", None) is not None and A.showroom_topics(joined):
+            return "showroom"
+        return None
+
+    def _new_time_in(self, s: Session, text: str, joined: str) -> bool:
+        """At the read-back: do the words give a different day or time ("actually can we make it 9 instead", "Saturday instead")?"""
+        w = parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id))
+        if w.day or w.time:
+            return True
+        return bool(re.search(r"\b(?:make it|do|how about|what about|change (?:it )?to|move (?:it )?to) (\d{1,2}|" + "|".join(_HOUR_WORDS) + r")\b(?! (?:days?|weeks?))", joined))
+
+    def _booking_prompt(self, s: Session) -> str:
+        """The question the booking was waiting on, asked again after a side answer: the times already offered, the missing detail, or the read-back's question."""
+        if s.read_back:
+            return "Shall I book it?"
+        if s.offered_slots:
+            return f"For the test drive, I can do {self._slot_text(s.offered_slots, self.svc.clock())}. Which suits you better?"
+        if s.state is State.SLOT:
+            return "Which day would suit you for the test drive?"
+        missing = [x for x, have in (("name", s.draft_name), ("mobile number", s.draft_phone)) if not have]
+        if not missing:
+            return "Shall I book it?"
+        ask = _REACTION_LEAD.sub("", W.ask_missing(s, missing, s.draft_name), count=1)
+        return ask[:1].upper() + ask[1:]
+
+    def _side_answer(self, s: Session, text: str, kind: str | None) -> str:
+        """The answer to a side remark in the middle of a booking, from the data only ("" when there is nothing to say)."""
+        words = " ".join(ex.tokens_of(text))
+        car = self.svc.get_car(s.car) if s.car else None
+        d = self.svc.site.cars.get(s.car) if (car is not None and getattr(self.svc, "site", None) is not None) else None
+        if kind == "think":
+            return "No problem, take your time."
+        if kind == "showroom":
+            return " ".join(A.showroom_answer(self.svc.site, words) or [])
+        if car is None:
+            return ""
+        if HAGGLE.search(words) or _VALUE.search(words):
+            return f"Our prices are fixed, so it's {T.money(car.price)}."
+        parts = A.detail_answer(car, d, words) or [x for key, x in (("km", f"It has {car.km:,} kilometres."), ("colour", f"It's {car.color}."),
+                                                                   ("price", f"It's {T.money(car.price)}."), ("year", f"It's a {car.year}.")) if _ATTRIBUTE[key].search(words)]
+        return " ".join(parts)
+
+    def _t_booking_aside(self, s, args, text, dbg) -> dict:
+        """A side answer in the middle of a booking, then the booking's own question again. Nothing about the booking changes."""
+        kind = args.get("kind")
+        answer = self._side_answer(s, text, kind)
+        dbg.tools.append(f"booking_aside({kind})")
+        prompt = self._booking_prompt(s)
+        return {"core": f"{answer or 'Let me check that at the showroom for you.'} {prompt}", "risk": "high", "awaiting": True,
+                "facts": [f"A side question in the middle of the booking, answered from the data: {answer}", f"Then the booking's question again: {prompt}"]}
+
     def _slow_writer(self) -> bool:
         """Will the caller wait noticeably for the model's first sentence? The governor's live measure of it against `bridge_after_ms`, the same line the
         "Let me check." bridge uses. Phase 3 dropped the opener said while the model writes ("Sure," is rendered in advance and plays at once) because said every time
@@ -683,7 +765,7 @@ class AgentEngine:
     @staticmethod
     def _confirms(words: str) -> bool:
         """A yes to the read-back: "yes", "yes please", and also "yes, please book it", "go ahead", "book it", "confirm it"."""
-        return bool(_PLAIN_YES.fullmatch(words) or _BOOK_YES.fullmatch(words))
+        return bool(_PLAIN_YES.fullmatch(words) or _BOOK_YES.fullmatch(words) or _AGREE.fullmatch(words))
 
     @staticmethod
     def _invited_recently(s: Session) -> bool:
@@ -889,6 +971,9 @@ class AgentEngine:
         if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):   # the answer to "which one?" comes first, whatever it names
             return {"tool": "cancel_booking" if s.pending.kind == "cancel_which" else "reschedule_booking", "via": "rules"}
         booking_flow = s.read_back or s.state in (State.SLOT, State.CONTACT)          # a booking is being filled in or read back
+        aside = self._aside_kind(s, text, words, joined) if booking_flow else None
+        if aside:                                                                # "is it automatic?", "one sec" while times are on offer: answer, and the booking goes on
+            return {"tool": "booking_aside", "kind": aside, "car_id": s.car, "via": "rules"}
         if not booking_flow and _COLOUR_Q.search(joined) and not ex.search_filters(text, self.svc.inventory.vocabulary()).get("color"):
             if s.car and _SINGULAR_REF.search(joined) and not _PLURAL_REF.search(joined):
                 return {"tool": "get_car", "car_id": s.car, "via": "rules"}       # "what colour is it?": the car just discussed
@@ -965,8 +1050,10 @@ class AgentEngine:
         if not booking_flow and not s.car and _FAMILY.search(joined):
             return {"tool": "best_of", "via": "rules"}                           # "something for my family": the roomiest we have
         if _NEVER_MIND.search(joined) and len(words) <= 10:
-            if booking_flow:
+            if booking_flow and not (_THINKING.search(joined) and not re.search(r"\b(?:never mind|nevermind|not now|another time|maybe later|i'll think about it|i will think about it)\b", joined)):
                 return {"tool": "cancel_draft", "via": "rules"}
+            if booking_flow:
+                return {"tool": "booking_aside", "kind": "think", "car_id": s.car, "via": "rules"}
             return {"tool": "none", "via": "rules"}                              # "never mind, maybe later": no pressure, nothing to change
         if A.superlative_topic(joined) and (s.shown or s.car):
             return {"tool": "best_of", "via": "rules"}                           # "which one is the fastest / cheapest / newest?": from the data
@@ -985,7 +1072,7 @@ class AgentEngine:
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "tomorrow at four" right after "want to book a test drive?"
         offered = _OFFERED_DRIVE.search(q) or (s.described == s.car and q and not re.search(
             r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
-        if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and _PLAIN_YES.fullmatch(joined) and offered:
+        if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and offered:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
         if _THANKS.fullmatch(joined) and (s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules", "thanked": True}   # mid-booking (29 Oct: "Thank you." after the number dropped the question for the name)
@@ -1018,8 +1105,13 @@ class AgentEngine:
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or detail)
                 and not _BOOKING_CUE.search(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
+        if s.read_back and (both := re.match(r"(yes(?: please)?|yeah|yep|sure|ok(?:ay)?|correct|that'?s right|perfect)(?: and| but| also| oh and)? (.+)", joined)) \
+                and self._confirms(both[1]) and self._aside_kind(s, both[2], both[2].split(), both[2]) == "car":
+            return {"tool": "confirm_booking", "also": both[2], "via": "rules"}       # "yes, and does it have a warranty?": booked, and answered (29 Oct sweep)
         if s.state is State.CONFIRM and s.read_back and self._confirms(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
+        if s.read_back and self._new_time_in(s, text, joined):
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # "actually can we make it 9 instead": the time changes and is read back again (29 Oct sweep)
         if s.read_back and re.match(r"(?:no|nope|not quite|wrong|that's wrong|actually)\b", joined):
             return {"tool": "fix_booking", "via": "rules"}                         # "no, the name is Omer" / "no, it's 055..." / "no"
         if s.state in (State.SLOT, State.CONTACT):
@@ -1527,14 +1619,17 @@ class AgentEngine:
                 first = sorted(s.offered_slots)[0]                      # "any day suits me" / "you choose" right after two times were offered: take the earlier one
                 day, tm = first.date(), first.time()
                 delegated = True
-            if tm is None and day is None and s.offered_slots:
-                bare = re.fullmatch(r"(?:at |around |about )?(\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", " ".join(ex.tokens_of(text)))
+            if tm is None and day is None and (s.offered_slots or s.draft_slot):
+                said = " ".join(ex.tokens_of(text))
+                bare = re.fullmatch(r"(?:at |around |about )?(\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", said) or (
+                    len(said.split()) <= 8 and re.search(r"\b(?:do|make it|at|how about|what about|rather|instead)\b", said)        # "can we do 3 instead" (29 Oct sweep: asked the day again)
+                    and re.search(r"\b(?:do|make it|at|how about|what about) (\d{1,2}|" + "|".join(_HOUR_WORDS) + r")\b(?! (?:days?|weeks?|people|seats?|cars?))", said))
                 if bare:
                     h = int(bare.group(1)) if bare.group(1).isdigit() else _HOUR_WORDS[bare.group(1)]
                     from datetime import time as _time
                     tm = _time(h + 12 if h < 9 else h, 0)                 # a bare "2" in opening hours (9 AM - 8 PM) is 2 PM
-            if tm is not None and day is None and (s.slot_day or s.offered_slots):   # "2 PM" right after "tomorrow I can do 9 AM or 2 PM"
-                day = s.slot_day or s.offered_slots[0].date()
+            if tm is not None and day is None and (s.slot_day or s.offered_slots or s.draft_slot):   # "2 PM" right after "tomorrow I can do 9 AM or 2 PM"; "make it 9" at the read-back: that day
+                day = s.slot_day or (s.offered_slots[0].date() if s.offered_slots else s.draft_slot.date())
             if day and tm:
                 chosen = combine(day, tm, tz)
                 reason = self.svc.slots.invalid_reason(car.branch_id, chosen)
