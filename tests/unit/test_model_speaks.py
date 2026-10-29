@@ -237,3 +237,49 @@ def test_a_commercial_term_the_facts_give_may_be_said():
     facts = FACTS + "\nIt's had 2 previous owners, and comes with an AGMC warranty of 6 months or 10,000 km."
     assert guards.leaks("It comes with an AGMC warranty of 6 months.", facts, NAMES) == []
     assert guards.leaks("You can return it within a week.", facts, NAMES)
+
+
+# ------------------------------------------------------------------------------------------------ an acknowledgement only while the model is slow (29 Oct)
+def slow(e, ms):
+    e.bridge_after_ms = 450.0                                                  # voice.bridge_after_ms, as apply_voice_profile sets it
+    e.governor.record_full(ms)
+
+
+def test_a_slow_model_gets_a_quick_acknowledgement_said_while_it_writes():
+    from dealer_core.agent.wording import OPENERS
+
+    e, _ = engine(ENGINE)
+    slow(e, 1500)
+    said, _ = macan_turn(e)
+    assert said[0] in OPENERS and said[1] == "it has a 3.0-litre V6 twin-turbo engine with 340 horsepower."    # "Sure," then the model's words, carried on in lower case
+
+
+def test_a_fast_model_gets_none():
+    e, _ = engine(ENGINE)
+    slow(e, 300)
+    said, _ = macan_turn(e)
+    assert said == [ENGINE]
+
+
+def test_no_acknowledgement_when_the_bridge_is_off_or_nothing_is_measured():
+    e, _ = engine(ENGINE)
+    e.governor.record_full(1500)                                               # bridge_after_ms stays 0 (text chat): never
+    assert macan_turn(e)[0] == [ENGINE]
+    e2, _ = engine(ENGINE)
+    e2.bridge_after_ms = 450.0                                                 # nothing measured yet
+    assert macan_turn(e2)[0] == [ENGINE]
+
+
+def test_the_acknowledgement_is_not_the_same_twice_running():
+    from dealer_core.agent.wording import OPENERS
+
+    e, _ = engine(ENGINE)
+    slow(e, 1500)
+    s = e.new_session()
+    list(e.handle_stream(s, "Porsche."))
+    firsts = []
+    for t in ("Yes, talk about the Macan.", "Tell me about the engine.", "And the boot?", "What about the interior?", "And the economy?"):
+        out = [x for x in e.handle_stream(s, t) if isinstance(x, str)]
+        firsts.append(out[0] if out[0] in OPENERS else None)
+    acks = [f for f in firsts if f]
+    assert len(acks) >= 4 and all(a != b for a, b in zip(acks, acks[1:]))

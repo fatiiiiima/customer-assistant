@@ -495,7 +495,8 @@ class AgentEngine:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
         speaks = self.model_speaks and level == "full"
-        opener, lead = ("", bridge) if bridge else ("" if speaks else self._opener(s, tool, result["core"]), "")
+        quiet = speaks and not self._slow_writer()             # model_speaks: an acknowledgement only while the model is slow to its first sentence
+        opener, lead = ("", bridge) if bridge else ("" if quiet else self._opener(s, tool, result["core"]), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
@@ -666,6 +667,15 @@ class AgentEngine:
             if not set(o.lower().strip(",.").split()) & set(first.lower().replace(",", "").split()[:8]):
                 return o
         return ""
+
+    def _slow_writer(self) -> bool:
+        """Will the caller wait noticeably for the model's first sentence? The governor's live measure of it against `bridge_after_ms`, the same line the
+        "Let me check." bridge uses. Phase 3 dropped the opener said while the model writes ("Sure," is rendered in advance and plays at once) because said every time
+        it sounds scripted; it comes back only when the wait is long (29 Oct: on the laptop the first sound of a model-written reply took 1.9 s at the median, none under 1 s).
+        On a server fast enough for the full level it is never said."""
+        if self.bridge_after_ms <= 0 or self.governor is None:
+            return False
+        return self.governor.snapshot()["full_first_ms"] >= self.bridge_after_ms
 
     @staticmethod
     def _confirms(words: str) -> bool:
