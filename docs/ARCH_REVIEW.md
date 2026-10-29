@@ -251,3 +251,75 @@ MEASURED on 252 readings (the owner's 18 turns with a known text, made quieter a
 * **Digits recognition on a real voice is WORSE than I measured (NOT FIXED, needs a decision).** The 14 synthetic numbers read 14/14 with the digits hint; the owner's real number, re-recognised offline from the recording, was wrong on base with all four hints tried (the digits hint: "050, 0790, 056, 052, 052, 052 ...", a loop; no hint: "0.5.0.790.546"; a hint written as words: "zero five zero seven ninety two five four six", one digit missing), and right on small.en only with no hint ("0 5 0 7 9 3 2 5 4 6"). One real number is too few to conclude, but the direction is clear: base cannot be trusted for digits and small.en without a hint can. Option, not built: for the contact step only, use small.en without a hint (about +0.8 s on that one turn, about 250 MB more per worker, needs measuring on more real numbers). So the earlier statement in section 17 that the digits test showed no loss holds for synthetic speech only.
 * **"No." at the contact question** still clears the draft and says "What would you like to change?"; that is the model's `cancel_draft` and was left alone (the caller did not flag it).
 
+
+## 19. Phase 0: the baseline harness, rehearsed on the laptop (28 Oct; no GPU yet)
+
+**Status: the Phase 0 gate has NOT been passed or failed. No GPU number exists. Every GPU figure is unknown.** What was done, as agreed: rehearse the whole procedure on this Mac against a local OpenAI-compatible server, fix what stops the three scripts from running, and write the runbook for the GPU session (`docs/PHASE0_RUNBOOK.md`). Nothing in `src/` changed.
+
+**Machine for every number below (MEASURED conditions):** Apple M3 Pro, 12 cores, 36 GB, AC power. Model server `mlx_lm.server` 0.32 serving `mlx-community/Qwen3-4B-Instruct-2507-4bit` (4B, 4-bit, the model the project already uses elsewhere; **not** the 7 to 8B the plan names). Recogniser: `python -m dealer_core.sttserver` (Whisper base int8, OpenVINO, CPU), reached through `RemoteWhisper` like a GPU server. One worker, `--agent --prefix --backend gpu_server --max-calls 16`. The load generator, the worker, the recogniser, the model server, Kokoro and the user's own idle worker, Ollama and Postgres all shared the one machine (load average 3.4 to 5.5 before each run, CPU mean 22 to 41%, max 56 to 89%). So these are rehearsal numbers: they show the harness works and give a laptop reference, nothing else.
+
+### Where the plan and the repository disagree (found reading the code; nothing built around them)
+
+1. **The decision backend is not set by the production manifests.** `config.py:173` defaults `dialogue.decision_backend` to `openvino_gpu`; `app.py:113-117` builds the agent's tool-decision chain from it; `--backend gpu_server` selects only the reply model. `deploy/k8s/voice.yaml`, `deploy/Dockerfile` and `deploy/docker-compose.yml` never set `VA__DIALOGUE__DECISION_BACKEND`. INFERRED: in a pod the decisions are tried on `openvino_gpu`, `openvino_cpu`, `ollama` (`llm.fallbacks`), not on vLLM, so a Phase 0 run in that shape would not measure vLLM for decisions. MEASURED on the laptop: with `--backend gpu_server` alone the loaded configuration had `decision_backend` = `ollama` (from `.env`). **DONE after the owner's go-ahead (28 Oct), see "Decision backend" below.**
+2. **Model size.** The plan says a 7 to 8B model; `deploy/k8s/voice.yaml` and `config/default.yaml` (`gpu_server.model`) say `Qwen/Qwen3-14B-AWQ`. Proposed: run the plan's two candidates first, the 14B only if the gate fails.
+3. **`hearing_check.py` could not score the thing Phase 0 asks it to.** It built only the in-process OpenVINO recogniser (`WhisperOpenVino`); the GPU recogniser is reached through `RemoteWhisper`, which the script never used.
+4. **"Time to first sentence" is not what `load_test.py` reports.** It reports the first *sound* (median, p90, worst, share over 2 s). The model's first sentence comes from `capacity_probe.py` at the matching concurrency and from the worker's `/health` `quality.full_first_ms`. The governor level per turn is the change in `/health` `quality.turns` (or `voice_turn_level_total`) across a run; no script records it. The runbook says how to take all three.
+5. `capacity_probe.py` read a hard-coded `C:\dev\bmw-portal\site\data.js`, and the synthetic caller in `load_test.py` needs a Piper voice (`amy`) that this machine does not have.
+
+### What changed, file by file
+
+* `scripts/capacity_probe.py`: the website data path is `--portal-data`, default `../bmw-portal/site/data.js` beside the repository (the same file as before on the Windows layout).
+* `scripts/hearing_check.py`: `--stt-url` and `--stt-model` score a transcription server (the workers' `RemoteWhisper`) instead of the in-process model; a new `build_engines()` holds the choice; failed requests to the server are reported rather than passing as a very bad score.
+* `scripts/portal_call.py`: `caller_audio` accepts `kokoro:<voice>` for the synthetic caller on a machine with only the Kokoro model. `load_test.py` uses it through its existing `--voice`.
+* `tests/unit/test_phase0_scripts.py` (4; all four fail with the script changes stashed).
+* `docs/PHASE0_RUNBOOK.md`: new.
+* Test suite: `pytest tests/unit` 904 passed, 40 skipped.
+
+### Numbers (laptop, the machine above; single runs unless two are shown)
+
+**Model first sentence, `capacity_probe.py --backend gpu_server`, budget 700 ms** (2 x N requests per level, so at 1 and 2 at once the p90 is the slower of two or four samples; two runs, A then B):
+
+| At once | Full prompt, median / p90 ms | Prefix prompt, median / p90 ms |
+|---|---|---|
+| 1 | A 714 / 859, B 844 / 1,080 | A 629 / 665, B 514 / 536 |
+| 2 | A 1,200 / 1,782, B 1,060 / 1,688 | A 952 / 1,435, B 478 / 675 |
+| 4 | not run (sweep stops once p90 passes twice the budget) | A 717 / 947, B 600 / 900 |
+| 8 | not run | A 975 / 1,654, B 949 / 1,143 |
+| 16 | not run | A 1,982 / 2,880, B 2,633 / 4,408 |
+
+For comparison, the 28 Oct Ollama probe on this machine read 1,251 to 1,479 ms for the full prompt (`docs/ARCH_REVIEW_new.md`, from `worker1.log`; different tool, same machine). The start-up probe of the worker read 620 ms on one start and 1,504 ms on another. The full prompt never met the 700 ms budget in the sweep, so `full_n` was 0 and the script's "callers per machine" lines are meaningless here. Its recognition and voice lines (~106 and ~12 callers) come from the laptop's own CPU Whisper and Kokoro, not from any server.
+
+**Load test, one worker, `--mix --stagger 2`, caller voice Kokoro `michael` (the method in `docs/SCALING.md` uses Piper `amy`: not comparable with those tables):**
+
+| Callers | Turns | Failed | First sound median / p90 / worst | Over 2 s | Governor turns full / prefix / code | `full_first_ms` start to end | Worker cap |
+|---|---|---|---|---|---|---|---|
+| 1 | 7 | 0 | 0.81 / 1.35 / 2.03 s | 14% | 0 / 7 / 0 | 764 to 1,168 | 16 |
+| 8 | 56 | 0 | 0.96 / 1.90 / 3.06 s | 9% | 0 / 43 / 10 (3 not counted) | 1,168 to 1,055 | 16 |
+| 16 | 115 | 0 | 0.91 / 1.40 / 3.34 s | 4% | 0 / 79 / 29 (7 not counted) | 1,055 to 1,155 | 16 |
+
+(The governor counts for 8 and 16 callers sum to fewer than the turns because the counters are per turn that reached the engine; I did not find out why 3 and 7 are missing, so treat the split as approximate.) **The model-written level ran on 0 of the 168 counted turns (7 + 53 + 108)**, even though the server was faster than Ollama on the probe: its estimate sat at 764 to 1,168 ms against the 700 ms budget. The knee was not found: the three levels show no trend (p90 1.35, 1.90, 1.40 s), which at one run each is noise, and the load generator competed for the same cores. Not run: 4, 12, 20, 24, 32 callers.
+
+**Hearing, `hearing_check.py`, nine recorded turns of 27 Oct, Whisper base int8, hint on / off:** through the recogniser service (`--stt-url`): WER 3% / 10%, 7 of 9 turns exact with the hint, median 214 ms. In-process f32: WER 4% / 16%, 7 of 9 exact, median 214 ms. Nine turns: the difference is noise. This proves the new option works end to end against the OpenAI transcription API; it says nothing about a GPU model.
+
+**Probe options added for the GPU run (28 Oct, same laptop, MLX server, one run):** `--model-only --no-stop --levels 1 4` reached the level the old sweep never did: full prompt 856 ms median / 1,094 ms p90 at 1 at once (1.2 requests/s) and **2,167 ms / 2,682 ms at 4 at once (1.7 requests/s)**; prefix 682 / 749 ms at 1 (1.5 requests/s) and 837 / 932 ms at 4 (4.6 requests/s). So this server finished about 1.2 to 1.7 full-prompt requests a second whatever the concurrency, i.e. it does not batch them. The design rate for 500 callers is 17 to 33 per replica (GUESS, `docs/PHASE0_RUNBOOK.md` section 3). Single run at each level.
+
+### What was learned about running the harness (all MEASURED)
+
+* `mlx_lm.server` loads the model on the first request. That request took 1 min 42 s and `capacity_probe.py`'s first call timed out at 20 s. Send one real request to any new model server before measuring.
+* With the model server on the same machine and a free `--backend gpu_server`, the whole pipeline (worker, remote recogniser, MLX server) ran 16 simultaneous calls with 0 failed calls and 0 silent turns.
+
+### Decision backend set in the deployment files (DONE, 28 Oct)
+
+Reasoning is point 1 above: `--backend gpu_server` picks the reply model only, `dialogue.decision_backend` defaults to `openvino_gpu` (`config.py:173`), and none of the deploy files set it, so a pod's tool decisions would have been tried on the Intel-GPU model, then the CPU and Ollama fallbacks, never on vLLM, and a Phase 0 run in the production shape would not have measured vLLM for decisions.
+
+* `deploy/k8s/voice.yaml` (the `voice-worker` env), `deploy/docker-compose.yml` (`worker` environment) and `deploy/Dockerfile` (an `ENV`) now set `VA__DIALOGUE__DECISION_BACKEND=gpu_server`, the same name as the worker's `--backend`.
+* `tests/unit/test_deploy_decision_backend.py` (4): loads the configuration the way a worker does (the website overlay plus the environment parsed out of each of the three files, with the laptop's `.env` not read) and asserts the decision backend is the backend named by that file's `--backend`, and is the first tried. All three file cases fail with the deploy changes stashed. A fourth test pins that the overlay alone still gives `openvino_gpu`.
+* **`config/portal.yaml` was deliberately NOT changed, which narrows the instruction to set it there too.** That file is not a deployment profile: every laptop run loads it (`server/__main__.py:59`, `sttserver`, and every script), it already carries laptop settings (`voice.stt_model: whisper-small.en-int8-ov`, `stt_device: GPU`), and `serve_portal.cmd` on the Windows laptop passes no environment. Setting `decision_backend: gpu_server` there would send that laptop's decisions to `http://model-server:8000/v1`, which does not exist on it, and drop its iGPU decision model. (This Mac is protected only because its `.env` sets the variable, and environment beats the overlay.) The test above is what keeps the deployment and the overlay in agreement. If a deployment overlay is wanted later, it should be its own file, not `portal.yaml`; `config/default.yaml` is unchanged.
+
+### Not changed, on purpose
+
+All of `src/`; `config/default.yaml` and `config/portal.yaml`; the governor budget, deadlines and thresholds; the worker's request path. No data left the machine except the one model download (2.3 GB, `mlx-community/Qwen3-4B-Instruct-2507-4bit`, approved) and the `mlx-lm` package, installed in a separate environment outside the repository, not added to `pyproject.toml`.
+
+### Still to do for Phase 0 (needs the GPU)
+
+Run `docs/PHASE0_RUNBOOK.md`: the 7 to 8B candidates on vLLM, the real recogniser, the same three scripts, repeats, the knee at 4/12/20/24/32 callers, and the decision gate (first sentence under 300 ms at the design load). Until then Phases 2 and 3 are not unblocked.

@@ -12,6 +12,8 @@ COPY scripts ./scripts
 RUN pip install --no-cache-dir uv && uv pip install --system --no-cache . \
     pipecat-ai openvino openvino-genai sherpa-onnx soxr numpy fastapi uvicorn websockets httpx pg8000 redis prometheus-client
 ENV PYTHONPATH=/app/src PYTHONUNBUFFERED=1
+# The tool decisions go to the same server as the replies (the CMD's --backend). Without this they would be tried on dialogue.decision_backend's default, the Intel-GPU model.
+ENV VA__DIALOGUE__DECISION_BACKEND=gpu_server
 EXPOSE 8765 8760
 # Worker by default; the router runs the same image with: python -m dealer_core.gateway
 CMD ["python", "-m", "dealer_core.server", "--agent", "--prefix", "--backend", "gpu_server", "--host", "0.0.0.0", "--port", "8765", "--max-calls", "16"]
