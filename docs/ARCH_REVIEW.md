@@ -728,3 +728,25 @@ Quality, the same replay (46 or 47 model-written replies): fell back to the code
 Tests: `test_prompt_layout.py` (7: the car given once and first, two turns sharing everything up to the caller's new words, other cars short, the spec-sheet answer not given twice, a stable fact not rejected as invented, the window moving 4 times in 30 lines, the lines forgotten counted and kept across a reconnect). Three of them fail without the engine change. `test_model_speaks.py` updated for the extra value. `python -m pytest tests/unit`: 1,213 passed, 40 skipped; the sweep 144 of 144 with the code alone.
 
 What it does not show: the turn end (0.2 to 0.6 s) is from config, not measured here; a data-centre GPU with vLLM reuses prompt starts the same way (automatic prefix caching), so the layout should help there too, but that is INFERRED, not measured. Next candidates: the decision call (1.78 s when it happens) and the choice of model (needs downloads: the owner's call).
+
+## 30a. Qwen3-30B-A3B against Qwen3-4B on this Mac (29 Oct, the owner's request)
+
+`mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit` (16 GB on disk; a mixture of experts: 30B parameters, about 3B used per word) served by `mlx_lm.server` on port 8004 beside the 4B, both on the new prompt layout (section 30), same scripts, same M3 Pro. With both loaded the Mac swapped about 3.8 GB (29% memory free); the 4B's first raw-speed sample (83 tokens/s) was it being read back from swap and is left out. (A first 30B trace was thrown away: the model settings were passed in a shell variable that zsh does not split, so the replies came from the fallback model; re-run with the settings written out.)
+
+| MEASURED | Qwen3-4B | Qwen3-30B-A3B |
+|---|---|---|
+| memory for the weights | 2.3 GB | 16 GB |
+| reading a fresh prompt / writing | about 470 / 34-37 tokens/s | about 430-480 / 41 tokens/s |
+| the model reads its prompt (trace, median) | 0.59 s | 0.87 s |
+| first sentence (trace, median) | 0.97 s | 1.26 s |
+| first sentence, 18 conversations, median / p90 | 1.09 / 1.44 s (again 1.10 / 1.53) | 1.29 / 1.71 s |
+| fell back / facts spoken that were not given | 0 / 0 | 0 / 0 |
+| fact sentences repeated in a call / same opener twice | 2 / 0 | 1 / 1 |
+| "tell me more about X" answered with X | 6 of 6 | 6 of 6 |
+| sweep with the model deciding | 144 of 144 | 143 of 144 |
+
+Reading the replies side by side (the 9 model-written turns of the trace, my judgement): the 30B adds facts nobody asked for in 4 of 9 ("what about the fuel economy?" also gets the engine and the drive; "how many owners?" also gets the accident record and service; "and the boot?" also gets the interior; "the engine?" also gets the suspension), and says "all-wheel drive" in three answers running. The 4B answers follow-ups more tightly, but reads a list of specs when a car is first described (2 of 9) and embellished twice ("for great views", "a sporty feel"). Neither is clearly better; the 30B is not the step up its size suggests here, and it is about 30% slower to its first sentence (INFERRED reason: the memory pressure, and expert routing reading more weights per token than a dense 4B when the prompt is short) with seven times the memory.
+
+The sweep case it missed: "can we do 3 instead" while 9 AM and 2 PM were on offer. The rules do not route that phrasing, so the model decides: the 4B chose to book (and the code asked "did you say 3 PM?"), the 30B chose to look up times again, which asked for the day and lost the 3. A code fix (a time named while times are on offer is a booking step, whatever the model chose) would make it independent of the model.
+
+**Recommendation: keep the 4B on the laptop.** On a real GPU server the comparison would change (the bigger model's speed cost shrinks there and the memory does not matter), so it is worth repeating there; this shows nothing about that (UNKNOWN).
