@@ -685,3 +685,85 @@ Branch `feat/haggle-alternatives`. The owner: the agent must never change a pric
 Tests: `test_haggle.py` (17: the amount read from the words; first push; second push near the asked price; the asked price remembered and new cars each push; no amount; picking an offered car starts its own count; "is that a good price?" is not a push; "come on" is not a visit; the cheapest car; the count kept across a reconnect). Sweep: two new steps (`price_q`, `haggled`) and 13 phrasings; a new expectation `reply_has_all`. MEASURED, this Mac: the sweep **144 of 144** with the code alone and **144 of 144** with Qwen3-4B deciding (deadline lifted; the model decided 10 turns, as before). `python -m pytest tests/unit`: 1,206 passed, 40 skipped.
 
 Not done: haggling during a booking (a price question while a day or time is being chosen) still gets the fixed price and the booking's question, with no other cars: the caller has chosen this car, and offering others there would pull the booking apart. Owner's call if that should change.
+
+## 30. Where a full-quality turn spends its time, and a prompt laid out for the model server's cache (29 Oct)
+
+Branch `perf/model-prompt`. Machine for every number here: the owner's MacBook Pro, **Apple M3 Pro, 36 GB**, Qwen3-4B-Instruct-2507 4-bit served by `mlx_lm.server` 0.32.2, Whisper base int8 and Kokoro on the CPU, `model_speaks` on (as the owner's worker runs). Nothing else using the model server during a measurement.
+
+### The trace (`scripts/trace_full_turn.py`, new)
+
+Each step of a turn timed with the real model, the owner's 28 Oct test call and the "tell me more" call (18 turns, 9 written by the model), live deadlines lifted so each step's natural time is seen. MEASURED, medians:
+
+| step | time |
+|---|---|
+| turn end (VAD silence, then Smart Turn) | 0.2 s, up to 0.6 s (config, not measured) |
+| hearing (Whisper) | 0.18 s |
+| rules and the tool (code) | under 0.01 s |
+| the model decides (only when the rules cannot: 1 turn of 18) | 1.78 s |
+| **the model reads its prompt** | **1.47 s** (1,434 tokens) |
+| the model writes its first sentence | 0.38 s more |
+| the voice's first audio (Kokoro, first piece) | 0.42 s |
+
+About 2.65 s from the caller stopping to the model's first words (the code's "Sure," is heard at once). Raw speed of this Mac, MEASURED: the model reads a fresh prompt at about 430 tokens/s and writes about 37 tokens/s. Unified memory lets the model fit and the GPU read it without copying; it does not make it fast: reading is limited by the GPU's arithmetic and writing by memory bandwidth (about 150 GB/s on the M3 Pro, against several TB/s on a data-centre GPU). With a 1,400-token prompt, 2 s is out of reach unless the model reads less.
+
+### Why it read so much, and the change
+
+`mlx_lm.server` keeps the start of earlier prompts (an LRU of KV caches, matched on the longest common start), so the 733 tokens of fixed instructions were already reused. The 707 tokens after them were read fresh every turn:
+* the conversation came first and its 6-line window moved every turn, so the prompt changed right after the instructions;
+* the car in focus was given three times (its fact line, again among "cars in this call" with its spec facts, and the full spec sheet: about 300 tokens), the other cars' spec facts too, and the spec-sheet answer twice (as a fact and as the standard wording).
+
+Now (`AgentEngine._speaking_input`, `ReplyWriter.stream`): the facts that hold while one car is discussed (its fact line, its spec sheet with its drive, the price rule) come first, under "FACTS THAT HOLD FOR THIS PART OF THE CALL"; then the conversation, in a window whose first line moves only every 6 lines (6 to 11 lines shown; `Session.forgotten` counts the lines the call no longer keeps, so the window counts from the start of the call); then this turn's own facts. Each fact once; other cars by name, colour and price only; the spec-sheet answer only as the standard wording. The fact checks see both parts (`WriterInput.all_facts`).
+
+### Result, MEASURED (same machine, same scripts)
+
+| | before | after |
+|---|---|---|
+| the model reads its prompt (trace, median) | 1.47 s | **0.59 s** |
+| first sentence (trace, median) | 1.85 s | **0.97 s** |
+| first sentence, 18 conversations (`replay_model_speaks.py --no-deadline`), median / p90 | 1.67 / 2.09 s | **1.09 / 1.44 s** (second run 1.10 / 1.53 s) |
+| caller stops to the model's first words (sum of the medians above) | about 2.65 s | **about 1.8 s** |
+
+Quality, the same replay (46 or 47 model-written replies): fell back to the code's wording 0 -> 0; facts spoken that were not given 0 -> 0; sentences the fact guard stopped 0 -> 1 in the first run and 0 in the second (stopped, never said); fact sentences repeated in a call 3 -> 2; "tell me more about X" answered with X 6 of 6 -> 6 of 6; praise 1 -> 0 and 1. No change in what the model says was found; the gain is in what it reads.
+
+Tests: `test_prompt_layout.py` (7: the car given once and first, two turns sharing everything up to the caller's new words, other cars short, the spec-sheet answer not given twice, a stable fact not rejected as invented, the window moving 4 times in 30 lines, the lines forgotten counted and kept across a reconnect). Three of them fail without the engine change. `test_model_speaks.py` updated for the extra value. `python -m pytest tests/unit`: 1,213 passed, 40 skipped; the sweep 144 of 144 with the code alone.
+
+What it does not show: the turn end (0.2 to 0.6 s) is from config, not measured here; a data-centre GPU with vLLM reuses prompt starts the same way (automatic prefix caching), so the layout should help there too, but that is INFERRED, not measured. Next candidates: the decision call (1.78 s when it happens) and the choice of model (needs downloads: the owner's call).
+
+## 30a. Qwen3-30B-A3B against Qwen3-4B on this Mac (29 Oct, the owner's request)
+
+`mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit` (16 GB on disk; a mixture of experts: 30B parameters, about 3B used per word) served by `mlx_lm.server` on port 8004 beside the 4B, both on the new prompt layout (section 30), same scripts, same M3 Pro. With both loaded the Mac swapped about 3.8 GB (29% memory free); the 4B's first raw-speed sample (83 tokens/s) was it being read back from swap and is left out. (A first 30B trace was thrown away: the model settings were passed in a shell variable that zsh does not split, so the replies came from the fallback model; re-run with the settings written out.)
+
+| MEASURED | Qwen3-4B | Qwen3-30B-A3B |
+|---|---|---|
+| memory for the weights | 2.3 GB | 16 GB |
+| reading a fresh prompt / writing | about 470 / 34-37 tokens/s | about 430-480 / 41 tokens/s |
+| the model reads its prompt (trace, median) | 0.59 s | 0.87 s |
+| first sentence (trace, median) | 0.97 s | 1.26 s |
+| first sentence, 18 conversations, median / p90 | 1.09 / 1.44 s (again 1.10 / 1.53) | 1.29 / 1.71 s |
+| fell back / facts spoken that were not given | 0 / 0 | 0 / 0 |
+| fact sentences repeated in a call / same opener twice | 2 / 0 | 1 / 1 |
+| "tell me more about X" answered with X | 6 of 6 | 6 of 6 |
+| sweep with the model deciding | 144 of 144 | 143 of 144 |
+
+Reading the replies side by side (the 9 model-written turns of the trace, my judgement): the 30B adds facts nobody asked for in 4 of 9 ("what about the fuel economy?" also gets the engine and the drive; "how many owners?" also gets the accident record and service; "and the boot?" also gets the interior; "the engine?" also gets the suspension), and says "all-wheel drive" in three answers running. The 4B answers follow-ups more tightly, but reads a list of specs when a car is first described (2 of 9) and embellished twice ("for great views", "a sporty feel"). Neither is clearly better; the 30B is not the step up its size suggests here, and it is about 30% slower to its first sentence (INFERRED reason: the memory pressure, and expert routing reading more weights per token than a dense 4B when the prompt is short) with seven times the memory.
+
+The sweep case it missed: "can we do 3 instead" while 9 AM and 2 PM were on offer. The rules do not route that phrasing, so the model decides: the 4B chose to book (and the code asked "did you say 3 PM?"), the 30B chose to look up times again, which asked for the day and lost the 3. A code fix (a time named while times are on offer is a booking step, whatever the model chose) would make it independent of the model.
+
+**Recommendation: keep the 4B on the laptop.** On a real GPU server the comparison would change (the bigger model's speed cost shrinks there and the memory does not matter), so it is worth repeating there; this shows nothing about that (UNKNOWN).
+
+## 30b. The owner's review of whole conversations: fillers off, and three faults fixed (29 Oct)
+
+The owner asked to read full conversations before merging this branch, and did not want "Okay, / Hmm, / Alright," at the start of replies. `scripts/sample_calls.py` (new) runs three calls through the agent with the real model and prints them (the owner's 28 Oct BMW X5 call; a family SUV with haggling and a booking; Porsche questions). Same machine and model as section 30.
+
+* **Fillers off** (`dialogue.openers` now false). They were the code's, not the model's: a pre-recorded word played at once whenever the model is measured slower than 0.45 s to its first sentence, which on this Mac is every time; 17 of 30 replies began with one, including replies the code had ready at once. Without them the first sentence comes 0.5 to 1.5 s after the caller's words (plus about 0.4 s of voice); "Let me check." while the times are looked up stays.
+* **"The best for a family" within what was asked for.** "Hi, I'm looking for a family SUV under 100,000" got "the Carnival, with 8 seats", a van at 126,000: with no list read out yet, the choice was made from the whole stock. Now from the cars matching the words and the search so far (here the Tucson); with nothing matching, it is answered as a search with no results (`_t_best_of`).
+* **The cut-reply repair.** A model reply stopped after a clause ("It's a 2016 Porsche Macan in black,") was finished with "and here is the full picture." and then the whole fact sentence again, name and colour included. It now carries on with the clauses the caller has not heard ("with 91,000 kilometres on it, at 149,000 dirhams.": `_unheard`; a clause whose figures were all heard counts as said, so "29,000 km" is not followed by "29,000 kilometres"); when nothing is left, the reply ends there (it used to add "and that's the main thing.", a filler too).
+* **Opinions added to facts.** The model added what the prompt forbids and no check caught (no number, name or commercial term): "4.9 litres per hundred kilometres, which is efficient for a hybrid SUV, making it great for long family trips", "all-wheel drive for better traction on different surfaces", "a panoramic roof for great views". `writer.strip_opinion` now cuts each clause that starts like an add-on (", which", "making it", "offering", "for better", "with a sporty ...") and carries an opinion word and no number, before the sentence is checked and spoken; the facts stay ("It gets about 4.9 litres per hundred kilometres."). An opinion that is the sentence itself ("it's a great family car") is not touched. The replay's praise counter was widened to see these (it missed all three).
+
+MEASURED, `replay_model_speaks.py --no-deadline`, 18 conversations, 46 model-written replies each run, before (section 30's second run) -> after: fillers 43 -> **0**; opinions spoken 1 -> **0**; fell back 0 -> 0; facts spoken that were not given 0 -> 0; repeated fact sentences 2 -> 2; "tell me more about X" 6 of 6 -> 6 of 6; first sentence median / p90 1.10 / 1.53 s -> 1.15 / 1.41 s. The three sample calls: fillers 17 of 30 -> 0, the Carnival 1 -> 0, "full picture" 1 -> 0, opinions spoken -> 0. The sweep 145 of 145 with the code alone and with the model deciding (a new case: "What's the best family SUV under 100,000?").
+
+Seen and not changed: the model still sometimes reads a list of specs when a car is first described (the BMW X5: 9 facts in one sentence); a reply whose add-on was cut ends on the clause before it, so the caller hears "...4.9 litres per hundred kilometres," and nothing more (the call's history keeps the full stop); the first turn about a new car is slower (about 1 to 3 s) because the facts that come first in the prompt change, so the server reuses less. Run to run, the model's wording varies (the BMW call reached the booking's read-back in one run and was answered "I don't have a booking to confirm yet" in another: the time was never chosen in that call).
+
+Also found: twice during this work a run silently used another model (the settings were lost between shells, and once the 4B server had stopped), and the replies came from the local fallback. `sample_calls.py` now refuses to run when the model server cannot be reached; the other scripts print "unhealthy" and carry on, so check for that line.
+
+Tests: `test_owner_review_29oct.py` (16: fillers off by default; opinions cut, facts kept, in 6 sentences each way; an opinion not spoken in a call; the family car within budget and type; nothing over budget offered); `test_cut_reply_repair.py` and `test_test_call_28oct.py` updated for the new repair. `python -m pytest tests/unit`: 1,230 passed, 40 skipped.

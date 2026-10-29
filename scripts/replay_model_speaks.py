@@ -39,7 +39,8 @@ TEST_CALL = ["I'm looking for a BMW.", "Any budget, any model?", "I want to hear
 # A rough diagnostic, not a check: phrases that judge or embellish rather than state ("known for strong performance", "practical for weekend drives"). The fact checks
 # do not catch these (no number, name or commercial term in them); the prompt forbids praise. Counted so a listening test knows where to look.
 PRAISE = re.compile(r"\b(?:known for|perfect for|ideal for|great for|enough for|making it|makes it|strong|responsive|smooth|comfortable|spacious|luxurious|sporty|"
-                    r"reliable|impressive|excellent|fantastic|amazing|stunning|beautiful|solid|great shape|well looked after|popular|practical for)\b", re.I)                                  # load_test.MIX conversations that end in a confirmed booking
+                    r"reliable|impressive|excellent|fantastic|amazing|stunning|beautiful|solid|great shape|well looked after|popular|practical for|"
+                    r"efficient|for better|great views|helps? with|long (?:family )?trips|daily use|everyday|peace of mind|sporty feel)\b", re.I)   # 29 Oct: widened                                  # load_test.MIX conversations that end in a confirmed booking
 
 
 def heard_lines(folder: Path) -> list[list[str]]:
@@ -88,9 +89,9 @@ def main() -> int:
     real_input = e._speaking_input
 
     def recording_input(s, text, result):
-        core, awaiting, facts = real_input(s, text, result)
-        seen["allowed"] = f"{facts}\n{core}\n{text}"
-        return core, awaiting, facts
+        core, awaiting, facts, stable = real_input(s, text, result)
+        seen["allowed"] = f"{stable}\n{facts}\n{core}\n{text}"
+        return core, awaiting, facts, stable
 
     e._speaking_input = recording_input
     conversations = [("mix%d" % i, [(t, None) for t in c]) for i, c in enumerate(MIX)] + [("tell-me-more", TELL_ME), ("testcall", [(t, None) for t in TEST_CALL])] + \
@@ -126,6 +127,8 @@ def main() -> int:
                     fell = e.fidelity["fell_back"] - before["fell_back"] if not a.off else int("FALLBACK" in (dbg.note or ""))
                     stats["fell_back"] += fell
                     stats["guard_stops"] += e.fidelity["leaks"] - before["leaks"]
+                    if e.fidelity["leaks"] > before["leaks"] and len(stats.setdefault("guard_examples", [])) < 10:
+                        stats["guard_examples"].append({"caller": text, "said": reply, "why": re.findall(r"fact guard: [^;]*", dbg.note or "")})
                     if fell:
                         why = re.sub(r"\[.*?\]|'[^']*'", "", (dbg.note or "").split("stream")[-1])[:60]
                         stats["fallback_reasons"][why] = stats["fallback_reasons"].get(why, 0) + 1

@@ -186,3 +186,7 @@
 - {at: haggled, say: "Can you do 150k?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", Q7, Macan]}}
 - {at: haggled, say: "Can you do 120,000?", expect: {tool: get_car, car: X5, reply_has_all: ["209,000", RX 350]}}
 - {at: haggled, say: "Is that a good price?", expect: {tool: get_car, car: X5, reply_has: ["209,000"], reply_lacks: [Q7, Macan]}}
+
+# ---------------------------------------------------------------------------------------------------- "the best for a family" within what was asked for (29 Oct, the owner's review of PR 25:
+# "a family SUV under 100,000" got the Kia Carnival, a van at 126,000)
+- {at: search, say: "What's the best family SUV under 100,000?", expect: {reply_has: [RAV4], reply_lacks: [Carnival, Land Cruiser]}}

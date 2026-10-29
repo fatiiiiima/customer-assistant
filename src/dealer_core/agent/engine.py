@@ -31,7 +31,7 @@ from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
 from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
-from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, promise_in, verify_sentence
+from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, numbers, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex, names
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -155,12 +155,23 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     return text[0].lower() + text[1:]
 
 
-FINISHED_CLAUSE = "and that's the main thing."         # ends a reply cut after a clause when everything the code would add was already said
-
-
 def _rounding_off(said: str) -> str:
-    """A short sentence that closes a reply the caller has heard cut off: after a comma it finishes the clause, after a half-word it starts over politely."""
-    return "and here is the full picture." if said.rstrip().endswith(",") else "Let me put that properly."
+    """A short sentence before the facts of a reply the caller has heard cut in the middle of a word: it starts over politely. (After a comma, see `_unheard`.)"""
+    return "Let me put that properly."
+
+
+def _unheard(heard: str, facts: str) -> list[str]:
+    """What the standard wording's fact sentences say that the caller has not heard yet, clause by clause, to carry on a reply cut after a comma. A clause already
+    said ("It's the 2016 Porsche Macan in black") is left out; the rest of its sentence is kept ("with 91,000 kilometres on it, at 149,000 dirhams.")."""
+    out = []
+    for sentence in voice_rules.sentences(facts):
+        if covers(heard, sentence):
+            continue
+        said = numbers(heard)                                    # a clause whose figures were all heard is said ("29,000 km" covers "with 29,000 kilometres on it")
+        keep = [c for c in re.split(r",\s+", sentence.rstrip(" .!")) if not covers(heard, c) and not (numbers(c) and numbers(c) <= said)]
+        if keep:
+            out.append(", ".join(keep) + ".")
+    return out
 
 
 def _after_opener(sentence: str, proper: frozenset[str] | set[str] = frozenset(), new_sentence: bool = False) -> str:
@@ -543,12 +554,13 @@ class AgentEngine:
                 spoken.append(sentence)
                 yield sentence
         elif self.reply_writer is not None and not s.ended:
-            facts = "\n".join(result["facts"])
+            facts, stable = "\n".join(result["facts"]), ""
             core, awaiting = result["core"], result["awaiting"]
             if speaks:
-                core, awaiting, facts = self._speaking_input(s, text, result)
-            w = WriterInput(caller=text, core=core, risk=result["risk"], history=list(s.history), facts=facts, awaiting=awaiting)
-            allowed = f"{facts}\n{core}\n{text}"
+                core, awaiting, facts, stable = self._speaking_input(s, text, result)
+            w = WriterInput(caller=text, core=core, risk=result["risk"], history=list(s.history), facts=facts, awaiting=awaiting, stable=stable,
+                            history_base=s.forgotten)
+            allowed = f"{stable}\n{facts}\n{core}\n{text}"
             dbg.risk = result["risk"]
             t_write = time.perf_counter()
             if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
@@ -593,14 +605,16 @@ class AgentEngine:
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:
-                    # What was said cannot be taken back, so the repair finishes that thought and then gives the facts as a sentence of their own (it used to say
-                    # "...black, That is: that's a 2016 Macan, black, ...", a restart in the middle of a sentence). After a finished clause, a fact the caller has just heard is
-                    # not said again (28 Oct test call: "...340 horsepower, and here is the full picture. It has a 3.0-litre I6 turbo engine with 340 horsepower.").
-                    rest = core_facts
+                    # What was said cannot be taken back. After a clause ("It's a 2016 Porsche Macan in black,") the reply carries on with what the caller has not heard,
+                    # clause by clause: "with 91,000 kilometres on it, at 149,000 dirhams." (29 Oct: it said "and here is the full picture." and then the whole sentence again,
+                    # name and colour included). After a half-word it starts over politely and gives the facts as a sentence of their own.
                     if spoken[-1].rstrip().endswith(","):
-                        heard = " ".join(spoken)
-                        rest = " ".join(x for x in voice_rules.sentences(core_facts) if not covers(heard, x))
-                    for part in ((_rounding_off(spoken[-1]), rest) if rest else (FINISHED_CLAUSE,)):
+                        parts = _unheard(" ".join(spoken), core_facts)
+                        if not parts:                           # all of it was said: the reply ends there (it said "and that's the main thing.", a filler; owner, 29 Oct)
+                            spoken[-1] = spoken[-1].rstrip(" ,") + "."
+                    else:
+                        parts = [_rounding_off(spoken[-1]), core_facts]
+                    for part in parts:
                         spoken.append(part)
                         yield part
                 close = self._split_core(core)[1] if speaks else (core_q or W.anything_else(s))
@@ -779,26 +793,45 @@ class AgentEngine:
             self._car_word_set = guards.car_names(self.svc.inventory.vocabulary())
         return self._car_word_set
 
-    def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str]:
-        """(standard wording, awaiting an answer, facts) for a reply the model writes whole (ARCH_PLAN Phase 3, `model_speaks`).
+    def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str, str]:
+        """(standard wording, awaiting an answer, facts for this turn, facts that hold for this part of the call) for a reply the model writes whole
+        (ARCH_PLAN Phase 3, `model_speaks`).
 
         * Only the generic "anything else?" closer is dropped (the model may end on a statement). An invitation to visit stays: `wording.offer_test_drive` gives one only when
           it is due (none after a no, never two answers running, at most one in three), otherwise the generic closer, so the pacing decides. The booking steps and a
           clarifying question ("Which car do you mean?") keep theirs. (First version dropped invitations too: 0 in 1,000 replies, and 2% of replies asked anything.)
         * The facts are the whole spec sheet of the car in focus, not the next one or two groups, with what the caller has already heard and what they asked about, so a
           follow-up ("and the boot?", "what about the colour") can land on the aspect asked.
-        * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked."""
+        * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked.
+        * Each fact once, and the ones that do not change while one car is discussed (its line and spec sheet, the price rule) apart from this turn's, so the writer
+          puts them before the conversation and the model server reuses them (section 30, 29 Oct: the car in focus was given three times, about 300 of the 707 tokens
+          read fresh on every turn; the other cars' spec sheets were given too)."""
         core, awaiting = result["core"], result["awaiting"]
         facts_part, question = self._split_core(core)
         booking_step = s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back
         if question and not booking_step and is_generic_closer(question) and facts_part:
             core, awaiting = facts_part, False
-        lines = list(result["facts"])
         car = self.svc.get_car(s.car) if s.car else None
         d = self.svc.site.cars.get(s.car) if (s.car and getattr(self.svc, "site", None) is not None) else None
-        if car is not None and d is not None:
-            lines.append(f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
-                         + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS))
+        stable, lines = [], []
+        focus = f"- {T.car_name(car)}:" if car is not None and d is not None else None
+        for line in result["facts"]:
+            if line.startswith("Prices are fixed"):
+                stable.append(line)
+            elif focus and line.startswith(focus):
+                continue                                 # given once, in the stable part below
+            elif line.startswith("Answered from the spec sheet: ") and line.split(": ", 1)[1] in core:
+                continue                                 # the standard wording says it already
+            elif line.startswith("- ") and " dirhams" in line and line.startswith(tuple(f"- {T.car_name(c)}:" for c in s.shown)):
+                lines.append(line[:line.index(" dirhams") + len(" dirhams")])      # another car in the call: name, colour and price
+            else:
+                lines.append(line)
+        if lines and lines[-1] == "Cars in this call (true facts you may use):":
+            lines.pop()
+        if focus:
+            stable[:0] = [fact_sheet([car], self._branch_name),
+                          f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
+                          + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS) + f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}."]
             told = s.said_about.get(s.car, [])
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
@@ -812,7 +845,7 @@ class AgentEngine:
             lines.append("A test drive is being arranged: do not say it is booked or confirmed, and do not suggest times; the system asks for those.")
         if not awaiting:
             lines.append("The call is not waiting for an answer: end on a statement unless a question is really needed.")
-        return core, awaiting, "\n".join(lines)
+        return core, awaiting, "\n".join(lines), "\n".join(stable)
 
     def handle(self, s: Session, text: str) -> TurnResult:
         out = list(self.handle_stream(s, text))
@@ -1252,8 +1285,12 @@ class AgentEngine:
 
     def _t_best_of(self, s, args, text, dbg) -> dict:
         pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
-        if not pool:
-            pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(), 200)]
+        if not pool:                                                      # chosen from the stock, within what was asked for (29 Oct: "a family SUV under 100,000" got the Carnival, a van at 126,000)
+            asked = {**s.filters, **ex.search_filters(text, self.svc.inventory.vocabulary())}
+            wanted = {k: v for k, v in asked.items() if k in SearchFilters.model_fields and v not in (None, "")}
+            pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**wanted), 200)]
+            if not pool:
+                return self._t_search_cars(s, args, text, dbg)           # nothing matches: said as a search with no results
             text = text if A.superlative_topic(" ".join(ex.tokens_of(text))) else "best for a family"
         if s.filters and len(pool) < 2:
             pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**{k: v for k, v in s.filters.items() if k in ("make", "model", "max_price")}), 50)]
