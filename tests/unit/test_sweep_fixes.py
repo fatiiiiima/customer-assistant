@@ -168,10 +168,13 @@ def test_asking_to_see_everything_reads_out_the_search_under_way(text):
     assert intent == "search_cars" and "Corolla" in reply and "other makes" not in reply
 
 
-def test_the_middle_one_of_three():
+def test_the_middle_one_of_three_and_not_of_four():
+    from dealer_core.nlu import extractors as ex
+
     e, s = at("list")
-    say(e, s, "the middle one")
-    assert e.svc.get_car(s.car).model.startswith("Camry")
+    four = list(s.shown)                                                    # the Toyota list now names all four (no "plus one more")
+    assert len(four) == 4 and ex.selection("the middle one", four) is None
+    assert ex.selection("the middle one", four[:3]) == four[1].stock_id
 
 
 # ------------------------------------------------------------------------------------------------ the whole sweep, as a guard

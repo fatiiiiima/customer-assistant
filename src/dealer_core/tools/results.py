@@ -10,6 +10,7 @@ from ..models import BookingStatus, CarView
 from ..policy.negotiation import Decision, NegotiationState
 
 VOICE_MAX_CARS = 3          # never read more than 3 cars aloud; ask a narrowing question first
+NAME_THE_REST_UP_TO = 2     # ...except when only this many would be left over: then they are named too (29 Oct, owner: "plus one more" told the caller nothing)
 
 
 @dataclass(frozen=True)

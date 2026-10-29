@@ -137,7 +137,7 @@
 - {at: list, say: "tell me about the first one", expect: {car: Corolla}}
 - {at: list, say: "the Camry please", expect: {car: Camry}}
 - {at: list, say: "what about the RAV4?", expect: {car: RAV4}}
-- {at: list, say: "the middle one", expect: {car: Camry}}
+- {at: list, say: "the third one", expect: {car: RAV4}}
 
 # ---------------------------------------------------------------------------------------------------- a visit, or not, after "Shall I set up a test drive for you?"
 - {at: car, say: "I want to see it", expect: {tool: prepare_booking}}

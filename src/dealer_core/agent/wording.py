@@ -64,7 +64,7 @@ def list_line(s: Session, cars: list[CarView], total: int) -> str:
     parts = [f"the {name(c)} at {T.money(c.price) if i == 0 else f'{c.price:,}'}" for i, c in enumerate(cars)]
     listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     more = total - len(cars)
-    tail = "" if more <= 0 else (", plus one more" if more == 1 else f", plus {more} more")
+    tail = "" if more <= 0 else f", and {more} more"                 # (one or two more are named instead: engine._t_search_cars, results.NAME_THE_REST_UP_TO)
     if len(cars) == 1:
         return pick(s, "one", [f"I've got {listed}.", f"There's {listed}."])
     return pick(s, "list", [f"There's {listed}{tail}.", f"I've got {listed}{tail}.", f"We have {listed}{tail}."])
