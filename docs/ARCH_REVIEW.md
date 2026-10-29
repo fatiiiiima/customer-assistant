@@ -865,3 +865,30 @@ Tests: `test_bargein.py` (rewritten: it used to re-implement the logic instead o
 Branch `fix/car-names`. After "I'm looking for a Toyota.", "Do you have any BMWs?" and "Tell me about the X5." got the Toyota list again: "BMWs" (and "Audis", "Porsche's" as the recogniser writes it) matched no make, and a two-character model ("X5", "M3", "Q7") counted only with its make said, so nothing new was found and the code carried on with the search under way. On a turn the model decides it often got it right; at the prefix level, where the code decides more, it did not.
 
 Now (`nlu/extractors.find_vehicle`): a make said in the plural is that make (only when the word without its "s" is a make); a two-character model counts without its make after "the" ("tell me about the X5"), and only when one make in stock has it. Still not a car: "a four-wheel drive" (not the Audi A4), "is it a four door", "x five" alone. Tests: `test_car_names.py` (14), sweep +3 phrasings. MEASURED: the sweep 148 of 148 with the code alone and 148 of 148 with Qwen3-4B deciding. `python -m pytest tests/unit`: 1,257 passed, 40 skipped (this branch alone).
+
+## 36. Canary-Qwen 2.5B against Whisper, measured on the Mac (29 Oct, the owner's request)
+
+The owner asked to switch speech recognition to NVIDIA Canary-Qwen 2.5B. It is built for NVIDIA GPUs (NeMo); on the Mac the only way found is a community MLX port (Hugging Face `Santosh-bold/speechlm-canary`, 5.07 GB, bf16, never downloaded before). Its code was read before use (model layers only: no network, no other programs, safetensors only); its `generate.py` does not run as published (it reads the author's own folders and NVIDIA's original checkpoint), but its 3.4 GB language file is the whole Qwen3-1.7B with the fine-tuning merged (read from the file's header without downloading it), so `scripts/canary_server.py` (new) loads it with Qwen3-1.7B's config and tokenizer and serves the OpenAI transcription API the worker already speaks (`voice.stt_url`). It runs in the MLX environment (`librosa` added there, not to the project).
+
+`scripts/score_recognisers.py` (new): the same audio through each recogniser. 12 recorded turns with reference lines (the owner's 27 Oct and 29 Oct 16:14 calls; the second on a Bluetooth headset microphone, section 33's note), and 40 sweep phrasings spoken by three Kokoro voices (American, British, Indian English), each clean and as a headset microphone sends it (telephone band, the quiet set to exact zero). Words compared as the agent's code reads them (`--as-read`: "10" and "ten", "050 ..." and "zero five zero ...", "RAV4" and "RAV four" the same; American spellings made British), since Canary writes numbers as words. MEASURED, M3 Pro:
+
+| words wrong | recorded (12) | synthetic, clean (120) | synthetic, headset mic (120) | median per turn |
+|---|---|---|---|---|
+| Whisper base (now, CPU) | 12.8% | 11.3% | 21.9% | 0.19-0.21 s |
+| Whisper small.en (CPU) | **5.1%** | 8.5% | **7.4%** | 0.88-0.94 s |
+| Canary-Qwen (MLX port, GPU) | 15.4% | **6.8%** | 10.2% | 0.24-0.33 s |
+
+Canary hears ordinary words well, best on clean speech and far better than base on a headset microphone, but it gets the car names wrong on the real recordings: "Porsche" -> "Borsch", "Macan" -> "Machin" / "Mackin" (three times), "Land Cruiser" -> "And glue that". Whisper is given the stock's makes and models as a hint; Canary-Qwen's recognition prompt is fixed and takes none. For a car dealer that decides it: **not switched.** Whisper small.en is the most accurate on every set but takes about 0.9 s a turn on the CPU, four times base. (Whisper's readings also varied between runs on the same recording, e.g. "You're looking for a Toyota." and "you can see the Toyota."; 12 recorded turns are a small sample.) Next candidate, not tried: Whisper small (or large-v3-turbo) on the Mac's GPU through MLX, which keeps the hint.
+
+## 37. Magpie-TTS against Kokoro, measured on the Mac (29 Oct, the owner's request)
+
+The owner asked for NVIDIA Magpie-TTS Multilingual ("Kokoro has too many pauses") and a streaming voice. On the Mac the only way found is soniqo's `speech` toolkit (Apache-2.0; `brew install speech`, installed by the owner), whose `speech-server` serves Magpie (MLX, int8, about 410 MB) on the OpenAI speech API. Read in its code: the server streams only two other voices, so Magpie comes a whole sentence at a time, and it always uses Magpie's default speaker ("Sofia"); the library itself can stream and has five speakers, but a program of our own around it needs the full Xcode (the Metal compiler), which this Mac does not have.
+
+`scripts/score_voices.py` (new): the 18 first sentences of section 33, Kokoro as the worker plays it (B: openings ready, pieces back to back) against Magpie through the server (whole sentence). MEASURED, M3 Pro:
+
+| | first sound, median / worst | made in (x its length) | pauses of 120 ms+ in 18 sentences | longest |
+|---|---|---|---|---|
+| Kokoro (now) | **0 / 389 ms** | **0.19 x** | **61** | 550 ms |
+| Magpie (speech-server) | 3,445 / 8,372 ms | 0.35 x | 135 | 1,050 ms |
+
+Magpie's pauses are its own (one synthesis per sentence, no joins): it speaks 35 to 40% slower than Kokoro (67 to 111 words a minute against 91 to 181) with gaps up to a second inside a sentence (the X5 line: 13.5 s, 14 pauses, against 8.4 s, 5). Samples of both in `logs/voice_samples/compare/` (local, not committed). **Not switched** on the Mac. On NVIDIA GPUs (the deployment) Magpie runs natively and streams (NVIDIA's own server); that is unmeasured. What would answer "too many pauses" with Kokoro: trimming the silence each piece carries at its ends, so the joins are shorter (Kokoro's pauses here: median 150 to 220 ms, mostly at the joins).
