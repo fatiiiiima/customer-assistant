@@ -781,3 +781,39 @@ Branch `fix/numbers-and-wait`.
 * **New for measuring it:** the recorder (`VA_DUMP_AUDIO_DIR`) notes the moment the turn is decided over, so `call_latency.py` shows the detector's wait and Whisper's apart (older recordings show them together). Test: `test_call_latency.py`.
 
 Not changed yet (the owner's choice, both measurable): the tap-mode silence (re-measure cut sentences with the joining window on the recordings, then 0.35 s would save about 0.25 s on every turn), and reading the next car's facts into the model server's cache while the agent is speaking (the slowest model turns). `python -m pytest tests/unit`: 1,236 passed, 40 skipped.
+
+## 32. The wait cut in two places: a shorter turn end in tap mode, and the next car's facts read ahead (29 Oct, the owner's request)
+
+Branch `perf/turn-wait-and-prefetch`. Same machine (M3 Pro, Qwen3-4B on `mlx_lm.server`).
+
+### The turn end: 0.6 -> 0.35 s of silence before Smart Turn looks (tap mode)
+
+`scripts/score_turn_end.py` (new) replays every recorded turn in `logs/audio_dump` (201 turns, 39 calls) through the real Silero detector and Smart Turn at several silences. A turn end before the caller's last loud frame splits the sentence; since 27 Oct a split is joined back if the caller is heard again before the reply plays (`tap_grace_secs`, `ContinuationGuard`), so each split is scored as saved or not, for a reply ready at once (0.3 s) and one the model writes (1 s). MEASURED:
+
+| silence | wait after the caller finished, median / p90 | splits | not saved, ready reply | not saved, model reply |
+|---|---|---|---|---|
+| 0.60 s (was) | 0.72 / 0.96 s | 12 | 10 | 5 |
+| 0.45 s | 0.56 / 0.88 s | 19 | 13 | 6 |
+| **0.35 s (now)** | **0.46 / 0.64 s** | 24 | 15 | 6 |
+| 0.20 s | 0.32 / 0.66 s | 31 | 24 | 9 |
+
+0.35 s: every turn ends 0.26 s sooner at the median (0.32 s at p90); against 0.6 s it loses one more sentence in 201 when the model writes the reply, and 5 more cuts in 3 turns when the reply is ready at once ("I wonder even more about the Macan.", "What day and time are available?", "Yeah, I'm going to go ahead and see what happens."). Not scored: the 0.9 s silence after the agent asks for a phone number (`number_stop_secs`, unchanged) is not applied in the replay, so phone-number turns count as splits at every setting alike. Synthetic or not, these are the owner's own calls; another speaker pauses differently (UNKNOWN). `VA__VOICE__TAP_STOP_SECS=0.6` puts it back.
+
+### The next car's facts, read while the agent speaks (`dialogue.prefetch`, on)
+
+The slowest model turns were the first question about a car: the facts at the start of the prompt (section 30) change, so the server reads them fresh (the BMW X5 right after the list: 2.9 s reading, 3.3 s to the first sentence). While the agent speaks, the GPU is idle. After each turn the engine now sends the model server the start of the next likely prompt (`AgentEngine.prefetch`): for each car named in the reply just given (up to three) and the car being discussed, that car's facts and the conversation so far, exactly as the next reply's prompt begins (`ReplyWriter.prompt_start`, used by both, so they cannot drift apart); one token is asked for and thrown away, and the server keeps what it read. In the background, one at a time; it stops when the caller speaks, is skipped while another call is using the model, and is not done during a booking (the replies there are the code's).
+
+MEASURED, `trace_full_turn.py --speak` (the owner's X5 call, the Porsche questions and the family SUV call; after each turn it waits as long as the reply takes to say, about 2.5 words a second, as a real call does), first sentence of the 16 model-written turns:
+
+| | prefetch off | on |
+|---|---|---|
+| median | 1.31 s | 1.06 s (a second run: 1.20 s) |
+| p90 | 1.85 s | 1.49 s (second run) |
+| worst | 3.26 s | 1.90 s / 1.92 s |
+| the X5 right after the list | 3.26 s | 1.06 / 1.13 s |
+| the Macan right after the list | 1.65 s | 0.96 / 1.02 s |
+| "tell me about the first one" after two cars were offered | 1.94 s | 1.59 s (once the offered cars were included) |
+
+Not helped: a car nobody named yet ("Tell me about the RAV4" after the agent suggested the Tucson, 1.85 s). The cost: 1 to 4 prompt starts read per turn (24 over the three calls). On the laptop that is idle time; on a shared GPU server it is extra reading for every caller, and the model server's cache is per replica (the k8s Service spreads requests over the replicas), so a prefetch helps only when the next request lands on the same replica. Both are UNKNOWN until measured on hardware; `VA__DIALOGUE__PREFETCH=false` turns it off.
+
+Together, on a model-written turn on this laptop: about 0.26 s off the turn end on every turn, and the first sentence's slow tail cut from about 3.3 s to under 2 s. Tests: `test_prefetch.py` (5: the next prompt starts with what was sent, after a list and on a follow-up; cars offered in the last reply are sent; nothing during a booking or when switched off; a new turn stops what was queued), `test_call_latency.py` (the split scoring), `test_quiet_turns.py` (0.35 s). `python -m pytest tests/unit`: 1,243 passed, 40 skipped.
