@@ -106,6 +106,34 @@ def server_rows(name: str, url: str, voice: str, out: Path) -> list[dict]:
     return rows
 
 
+def stream_rows(name: str, url: str, model: str, voice: str, out: Path, rate: int = 24000) -> list[dict]:
+    """A streaming speech server (soniqo's for Pocket-TTS, scripts/chatterbox_server.py for Chatterbox): the first sound is the first chunk of audio."""
+    import httpx
+
+    from dealer_core.voice.tts import pronounce
+
+    client = httpx.Client(timeout=120)
+    body = lambda text: {"model": model, "input": text, "voice": voice, "stream": True, "response_format": "pcm"}
+    with client.stream("POST", f"{url}/audio/speech", json=body("Warming up.")) as r:
+        r.raise_for_status()
+        for _ in r.iter_bytes():
+            pass
+    rows = []
+    for i, text in enumerate(SENTENCES):
+        t0, first, data = time.perf_counter(), None, b""
+        with client.stream("POST", f"{url}/audio/speech", json=body(pronounce(text))) as r:
+            r.raise_for_status()
+            for part in r.iter_bytes():
+                if part and first is None:
+                    first = (time.perf_counter() - t0) * 1000
+                data += part
+        made = (time.perf_counter() - t0) * 1000
+        audio = np.frombuffer(data[: len(data) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768
+        save(out / f"{i:02d}_{name}.wav", audio, rate)
+        rows.append({"first": first or made, "made": made, "length": len(audio) / rate * 1000, "pauses": pauses(audio, rate)})
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", action="append", default=[], help="name=url of a speech server, e.g. magpie=http://127.0.0.1:8020/v1 (repeatable)")
@@ -113,6 +141,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=ROOT / "logs" / "voice_samples" / "compare")
     ap.add_argument("--trim", type=int, default=40, help="also Kokoro with the joins trimmed to about this many ms (0 = not)")
     ap.add_argument("--texts", type=Path, help="write the sentences as the voice is given them (numbers in words) to this JSON file, for another program, and stop")
+    ap.add_argument("--stream", action="append", default=[], help="name=url=model=voice of a streaming speech server, e.g. pocket=http://127.0.0.1:8020/v1=pocket=alba (repeatable)")
     ap.add_argument("--extra", action="append", default=[], help="name=rows.json from another program (scripts/score_chatterbox.py), shown in the same table")
     a = ap.parse_args()
     if a.texts:
@@ -124,6 +153,9 @@ def main() -> int:
     results = {"kokoro": kokoro_rows(a.out)}
     if a.trim:
         results["kokoro-trim"] = kokoro_rows(a.out, a.trim, "kokoro-trim")
+    for spec in a.stream:
+        name, url, model, voice = spec.split("=", 3)
+        results[name] = stream_rows(name, url.rstrip("/"), model, voice, a.out)
     for spec in a.extra:
         import json
 

@@ -930,3 +930,42 @@ MEASURED, M3 Pro, the same synthetic five-turn call through a test worker (hands
 | Chatterbox, code (no language model) | **0.46 to 0.47 s** | 1.14 s |
 
 Chatterbox alone starts its audio in about 0.46 s, steadily. At the prefix level the language model writes a follow-up on every turn on the same GPU at the same moment, and both slow down (the voice wait about doubles). Kokoro runs on the CPU and is not affected. So on this Mac: Chatterbox costs about 0.45 s a turn against Kokoro at the code level and about 1 s at the prefix level; on separate GPUs (the deployment) the two would not compete (UNKNOWN until measured). Not measured: several calls at once (one GPU, one sentence at a time). Tests: `test_remote_tts.py` (7). `python -m pytest tests/unit`: 1,324 passed, 40 skipped.
+
+## 40. Pocket-TTS against trimmed Kokoro and Chatterbox Turbo, measured on the Mac (29 Oct, the owner's request)
+
+Branch `voice/pocket` (on top of `voice/chatterbox`, PR 33). Pocket-TTS (Kyutai, 100M, CC-BY-4.0) came out best of the open voices in the tts-bench listening votes we could run on a Mac, and is made for streaming on a CPU. It runs through the speech toolkit's server the owner installed (`brew install speech`; `speech-server --port 8020`), which uses `aufklarer/Pocket-TTS-100M-CoreML-INT8` (313 MB, downloaded on first use) and streams it (`"stream": true, "response_format": "pcm"`, 24 kHz). That build has one voice, "alba", and takes up to 256 tokens a request.
+
+`scripts/score_voices.py --stream name=url=model=voice` (new) measures any streaming speech server the way the worker hears it: the first sound is the first chunk of audio to arrive. Chatterbox Turbo was measured through its own server (`scripts/chatterbox_server.py`, the worker's path since section 39).
+
+MEASURED, M3 Pro, the same 18 sentences as section 38:
+
+| | first sound, median / worst | made in (x its length) | pauses of 120 ms+ in 18 sentences | longest |
+|---|---|---|---|---|
+| Kokoro, joins trimmed | 0 / 365 ms | 0.18 x | 30 | 560 ms |
+| **Pocket-TTS (alba)** | **52 / 59 ms** | 0.20 x | **24** | 510 ms |
+| Chatterbox Turbo, its server | 448 / 457 ms | 0.54 x | 30 | 360 ms |
+
+With the GPU kept fully busy (`scripts/gpu_load.py`: 4096-square matrix products back to back in MLX, harder than the language model writing a reply), the same 18 sentences:
+
+| | first sound, median / worst | made in |
+|---|---|---|
+| Pocket-TTS | 66 / 72 ms | 0.27 x |
+| Chatterbox Turbo | 7,985 / 11,336 ms | 9.80 x |
+
+Whisper small.en heard the samples back (an intelligibility check, not a quality score; `as-read` scoring as section 36): 5.0% of words wrong for Pocket, 7.5% for trimmed Kokoro, 7.7% for Chatterbox. Most of the errors were "dirhams" and "Macan", for all three voices. The leading quiet before speech had a median of 66 ms for Pocket, 39 ms for Kokoro and 111 ms for Chatterbox.
+
+What this says (INFERRED from the tables):
+
+* Pocket starts in about 50 ms on every sentence, so it would need no opening-first trick (section 33) and no cache.
+* Its pauses are the fewest of the three.
+* It hardly slows when the GPU is busy, so it removes the contention that slowed Chatterbox in a call (section 39: about 1.04 s of voice wait at the prefix level).
+
+Not measured:
+
+* How it sounds against Chatterbox (samples of sentences 00, 05 and 09 for all three in `logs/voice_samples/for_boss/`, local).
+* A real recorded call with Pocket (not wired into the worker).
+* Several calls at once.
+* Whether the CoreML build runs on the Neural Engine or the CPU (UNKNOWN; the GPU test above says it is not held back by the GPU).
+* Other voices: this build has only "alba". Kyutai's own release can copy a voice, but it is not in this server.
+
+`python -m pytest tests/unit`: 1,324 passed, 40 skipped.
