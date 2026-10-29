@@ -40,3 +40,14 @@ def test_a_call_with_no_caller_audio_is_skipped_not_a_crash(tmp_path, monkeypatc
     monkeypatch.setattr(m, "ROOT", tmp_path)
     monkeypatch.setattr("sys.argv", ["call_latency.py"])
     assert m.main() == 1 and "VA_DUMP_AUDIO_DIR" in capsys.readouterr().out
+
+
+def test_a_split_is_saved_only_when_the_caller_is_heard_again_before_the_reply_plays():
+    """scripts/score_turn_end.py: a turn end before the caller's last loud frame splits the sentence; the join saves it if they resume before the reply plays."""
+    spec = importlib.util.spec_from_file_location("score_turn_end", ROOT / "scripts" / "score_turn_end.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    loud = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.4, 2.8])                  # speaking, a pause at 1.5-2.4 s, then the end of the sentence at 2.8 s
+    r = m.score([1.6, 3.2], loud, grace_s=2.0)
+    assert r["splits"] == 1 and abs(r["wait"] - 0.38) < 0.01
+    assert r["saved"] == {"ready reply (0.3 s)": 0, "model reply (1.0 s)": 1}  # heard again 0.8 + 0.1 s after the split: too late for a ready reply

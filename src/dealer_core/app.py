@@ -120,6 +120,7 @@ def build_app(cfg: Config, *, inventory: str = "demo", backend: str | None = Non
         dialogue.prefix_mode = cfg.dialogue.agent_prefix if agent_prefix is None else agent_prefix
         dialogue.openers = cfg.dialogue.openers
         dialogue.model_speaks = cfg.dialogue.model_speaks
+        dialogue.prefetch_on = cfg.dialogue.prefetch
         if quality or cfg.dialogue.quality != "off":
             from .agent.governor import QualityGovernor
 

@@ -112,4 +112,4 @@ def test_no_level_or_no_threshold_means_no_guard():
 def test_the_defaults_sit_in_the_gap_the_log_shows():
     v = load_config(environ={}).voice
     assert 0.015 < v.end_call_min_rms < 0.065
-    assert v.tap_stop_secs == 0.6
+    assert v.tap_stop_secs == 0.35                                  # 29 Oct: 0.6 -> 0.35 on 201 recorded turns (section 32)
