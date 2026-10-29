@@ -32,7 +32,8 @@ _NOTHING_IN_PARTICULAR = re.compile(
     r"(?:it|that)\s+(?:does\s*not|doesnt|doesn't)\s+matter|does\s*not\s+matter|i\s+(?:do\s*not|dont|don't)\s+mind|flexible|open|surprise me)"
     r"(?:\s+(?:(?:or|of|and|any)\s+)*(?:budget|limit|price|make|colou?r|mileage|preference|one|range|style|type|size|brand|kind|model|is fine|will do|works|for me|really|"
     # 29 Oct, the owner's call: "any model and any budget is all you need", "any model or any budget is alright" were not understood (asked for a make again)
-    r"is alright|is all right|is ok|is okay|is good|is all i need|is all you need|is all|is fine with me|either way|please|thanks|thank you|at all))*$")
+    r"is alright|is all right|is ok|is okay|is good|is all i need|is all you need|is all|is fine with me|either way|please|thanks|thank you|at all|"
+    r"you have|you've got|you got|you've|is there))*$")                    # 29 Oct sweep: "whatever you have"
 
 
 def last_question(last_agent: str) -> str:

@@ -158,3 +158,42 @@ def test_yes_and_a_question_books_and_answers():
 def test_agreeing_to_an_invitation_starts_the_booking(text):
     e, s = at("car")
     assert say(e, s, text)[0] == "prepare_booking"
+
+
+# ------------------------------------------------------------------------------------------------ D: the search
+@pytest.mark.parametrize("text", ["show me everything", "whatever you have", "show me all of them", "everything you have"])
+def test_asking_to_see_everything_reads_out_the_search_under_way(text):
+    e, s = at("search")
+    intent, reply = say(e, s, text)
+    assert intent == "search_cars" and "Corolla" in reply and "other makes" not in reply
+
+
+def test_the_middle_one_of_three():
+    e, s = at("list")
+    say(e, s, "the middle one")
+    assert e.svc.get_car(s.car).model.startswith("Camry")
+
+
+# ------------------------------------------------------------------------------------------------ the whole sweep, as a guard
+def test_the_whole_sweep_passes_with_the_code_alone():
+    """Every phrasing in tests/data/phrasing_sweep.yaml, with a model that never answers in time. A new failure here is a regression (or a new case to fix)."""
+    import yaml
+
+    from dealer_core.config import load_config
+
+    if not SITE.exists():
+        pytest.skip("the website is not on this machine")
+    cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
+    failed = []
+    for case in yaml.safe_load((ROOT / "tests" / "data" / "phrasing_sweep.yaml").read_text(encoding="utf-8")):
+        e = SW.make_engine(cfg, SITE, SW.TooSlow())
+        s = e.new_session()
+        lines, reached = SW.SETUP[case["at"]]
+        for line in lines:
+            list(e.handle_stream(s, line))
+        assert reached(s), case
+        out = list(e.handle_stream(s, case["say"]))
+        why = SW.check(case["expect"], out[-1].debug.intent, " ".join(x for x in out if isinstance(x, str)), s, e)
+        if why:
+            failed.append((case["at"], case["say"], why))
+    assert not failed, failed

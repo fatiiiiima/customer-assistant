@@ -118,7 +118,8 @@ _BYE = re.compile(r"\b(?:bye|goodbye|good bye|that's all|that is all|that's ever
 _WHAT_STOCK = re.compile(r"\b(?:i need a car|i'm looking for a car|looking for a car|i want (?:a|to buy a) car|buy a car|what cars do you have|what (?:cars|vehicles|models) have you got|what do you have|what have you got|what's in stock|"
                          r"what is in stock|what do you sell|show me (?:what you have|your cars|everything)|what are my options)\b")
 # "what do you have?" while a search is under way (after "Any specific model?") asks for what matches THAT search, not for the whole showroom
-_ASKS_TO_SEE = re.compile(r"\b(?:what do you have|what have you got|what are my options|show me what you have)\b")
+_ASKS_TO_SEE = re.compile(r"\b(?:what do you have|what have you got|what are my options|show me what you have|show me everything|everything you have|"
+                          r"show me (?:them )?all|all of them|whatever you(?:'ve)? (?:have|got)|list them)\b")    # 29 Oct sweep: "show me everything" after "4 Toyotas" listed other makes
 _FUEL = re.compile(r"\b(electric|ev|hybrid|petrol|diesel|plug in hybrid)\b")
 _LOW_KM = re.compile(r"\b(?:low (?:mileage|kilomet\w*|km)|not (?:many|a lot of) (?:kilomet\w*|km|miles)|barely (?:used|driven))\b")
 _FINANCE = re.compile(r"\b(?:finance|financing|loan|monthly|instal+ments?|installment plan|lease|leasing|down payment|emi)\b")

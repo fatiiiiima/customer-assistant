@@ -199,6 +199,8 @@ def selection(text: str, shown: list[CarView]) -> str | None:
         return shown[ordinal[m[1]]].stock_id
     if re.search(r"\blast\b", joined):
         return shown[-1].stock_id
+    if re.search(r"\bmiddle\b", joined) and len(shown) % 2 == 1:      # "the middle one" of three (29 Oct sweep)
+        return shown[len(shown) // 2].stock_id
     if re.search(r"\b(cheapest|cheaper|lowest price)\b", joined):
         return min(shown, key=lambda c: c.price).stock_id
     if re.search(r"\b(newest|most recent)\b", joined):
