@@ -21,6 +21,7 @@ import argparse
 import csv
 import statistics
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -68,9 +69,22 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("notes", nargs="?", type=Path, help="a recorded call's *_in.txt (default: the latest in logs/audio_dump)")
     a = ap.parse_args()
-    path = a.notes or max((ROOT / "logs" / "audio_dump").glob("*_in.txt"), key=lambda p: p.stat().st_mtime)
+    folder = ROOT / "logs" / "audio_dump"
+    heard = lambda p: p.with_name(p.name[: -len(".txt")] + ".pcm").exists() and p.with_name(p.name[: -len(".txt")] + ".pcm").stat().st_size > 0
+    if a.notes is None:                                         # the latest call in which the caller was recorded (a call that ended at the greeting has no caller audio)
+        calls = sorted((p for p in folder.glob("*_in.txt") if heard(p)), key=lambda p: p.stat().st_mtime) if folder.exists() else []
+        if not calls:
+            print(f"no recorded call with the caller's voice in {folder}: start the worker with VA_DUMP_AUDIO_DIR=logs/audio_dump in front of its command, make a call, then run this")
+            return 1
+        path = calls[-1]
+    else:
+        path = a.notes
+        if not heard(path):
+            print(f"{path.name}: the caller's audio is empty (the call ended before anyone spoke); nothing to time")
+            return 1
     rows = turns(*load(path))
-    print(f"{path.name}: {len(rows)} turns\n")
+    when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%d %b %H:%M")
+    print(f"{path.name} (recorded {when}): {len(rows)} turns\n")
     print(f"{'turn end':>8s} {'hearing':>8s} {'agent':>7s} {'voice':>7s} {'total':>7s}   the caller's words")
     f = lambda v: f"{v:6.2f}s" if v is not None else "      -"
     for r in rows:

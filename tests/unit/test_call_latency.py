@@ -27,3 +27,16 @@ def test_a_turn_is_split_into_its_waits(tmp_path):
     [row] = m.turns(*m.load(tmp_path / "20261029_120000_1111_in.txt"))
     assert abs(row["turn_end"] - 0.6) < 0.03 and abs(row["hearing"] - 0.2) < 0.01
     assert abs(row["agent"] - 1.1) < 0.01 and abs(row["voice"] - 0.4) < 0.01 and abs(row["total"] - 2.3) < 0.03
+
+
+def test_a_call_with_no_caller_audio_is_skipped_not_a_crash(tmp_path, monkeypatch, capsys):
+    """29 Oct: the latest recording was a call that ended at the greeting (0 bytes of caller audio) and the script crashed on it."""
+    m = _script()
+    folder = tmp_path / "logs" / "audio_dump"
+    folder.mkdir(parents=True)
+    (folder / "20261028_210725_5312_in.txt").write_text("1793207245.846\tsaid\tHi, welcome.\n")
+    (folder / "20261028_210725_5312_in.pcm").write_bytes(b"")
+    (folder / "20261028_210725_5312_in.csv").write_text("unix_time,bytes,sample_rate\n")
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr("sys.argv", ["call_latency.py"])
+    assert m.main() == 1 and "VA_DUMP_AUDIO_DIR" in capsys.readouterr().out
