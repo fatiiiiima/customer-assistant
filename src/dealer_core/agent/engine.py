@@ -696,6 +696,13 @@ class AgentEngine:
             return "showroom"
         return None
 
+    def _new_time_in(self, s: Session, text: str, joined: str) -> bool:
+        """At the read-back: do the words give a different day or time ("actually can we make it 9 instead", "Saturday instead")?"""
+        w = parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id))
+        if w.day or w.time:
+            return True
+        return bool(re.search(r"\b(?:make it|do|how about|what about|change (?:it )?to|move (?:it )?to) (\d{1,2}|" + "|".join(_HOUR_WORDS) + r")\b(?! (?:days?|weeks?))", joined))
+
     def _booking_prompt(self, s: Session) -> str:
         """The question the booking was waiting on, asked again after a side answer: the times already offered, the missing detail, or the read-back's question."""
         if s.read_back:
@@ -1087,6 +1094,8 @@ class AgentEngine:
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
         if s.state is State.CONFIRM and s.read_back and self._confirms(" ".join(words)):
             return {"tool": "confirm_booking", "via": "rules"}
+        if s.read_back and self._new_time_in(s, text, joined):
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # "actually can we make it 9 instead": the time changes and is read back again (29 Oct sweep)
         if s.read_back and re.match(r"(?:no|nope|not quite|wrong|that's wrong|actually)\b", joined):
             return {"tool": "fix_booking", "via": "rules"}                         # "no, the name is Omer" / "no, it's 055..." / "no"
         if s.state in (State.SLOT, State.CONTACT):
@@ -1594,7 +1603,7 @@ class AgentEngine:
                 first = sorted(s.offered_slots)[0]                      # "any day suits me" / "you choose" right after two times were offered: take the earlier one
                 day, tm = first.date(), first.time()
                 delegated = True
-            if tm is None and day is None and s.offered_slots:
+            if tm is None and day is None and (s.offered_slots or s.draft_slot):
                 said = " ".join(ex.tokens_of(text))
                 bare = re.fullmatch(r"(?:at |around |about )?(\d{1,2}|" + "|".join(_HOUR_WORDS) + r")(?: o'?clock| please)?", said) or (
                     len(said.split()) <= 8 and re.search(r"\b(?:do|make it|at|how about|what about|rather|instead)\b", said)        # "can we do 3 instead" (29 Oct sweep: asked the day again)
@@ -1603,8 +1612,8 @@ class AgentEngine:
                     h = int(bare.group(1)) if bare.group(1).isdigit() else _HOUR_WORDS[bare.group(1)]
                     from datetime import time as _time
                     tm = _time(h + 12 if h < 9 else h, 0)                 # a bare "2" in opening hours (9 AM - 8 PM) is 2 PM
-            if tm is not None and day is None and (s.slot_day or s.offered_slots):   # "2 PM" right after "tomorrow I can do 9 AM or 2 PM"
-                day = s.slot_day or s.offered_slots[0].date()
+            if tm is not None and day is None and (s.slot_day or s.offered_slots or s.draft_slot):   # "2 PM" right after "tomorrow I can do 9 AM or 2 PM"; "make it 9" at the read-back: that day
+                day = s.slot_day or (s.offered_slots[0].date() if s.offered_slots else s.draft_slot.date())
             if day and tm:
                 chosen = combine(day, tm, tz)
                 reason = self.svc.slots.invalid_reason(car.branch_id, chosen)

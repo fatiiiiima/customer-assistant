@@ -91,3 +91,42 @@ def test_a_question_is_never_taken_for_a_name(text):
 
     assert ex.contact(text).name is None
     assert ex.contact("Fatima, and what should I bring?").name == "Fatima"
+
+
+# ------------------------------------------------------------------------------------------------ B: read what was said
+@pytest.mark.parametrize("text, name", [("it's for my brother Ahmed", "Ahmed"), ("it's for my wife, Sara Khan", "Sara Khan"), ("for my friend called Omar", "Omar"),
+                                        ("it's Fatima", "Fatima"), ("it's for me", None), ("for my brother", None)])
+def test_a_booking_for_someone_else_takes_their_name(text, name):
+    from dealer_core.nlu import extractors as ex
+
+    assert ex.contact(text).name == name
+
+
+def test_for_my_brother_ahmed_in_the_contact_step():
+    e, s = at("contact_q")
+    say(e, s, "it's for my brother Ahmed")
+    assert s.draft_name == "Ahmed"
+
+
+@pytest.mark.parametrize("text, hour", [("actually can we make it 9 instead", 9), ("can we do 9 instead", 9), ("make it 9 in the morning", 9)])
+def test_a_new_time_at_the_read_back_changes_the_time_and_reads_back_again(text, hour):
+    e, s = at("readback")
+    intent, reply = say(e, s, text)
+    assert s.draft_slot.hour == hour and s.booking is None and reply.endswith("Shall I book it?") and "9:00 AM" in reply
+
+
+@pytest.mark.parametrize("today, weekend", [((2026, 10, 29), "2026-10-31"), ((2026, 10, 31), "2026-10-31"), ((2026, 11, 1), "2026-11-01")])
+def test_the_weekend_is_the_next_saturday_or_sunday(today, weekend):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from dealer_core.nlu.datetime_parse import parse_when
+
+    tz = ZoneInfo("Asia/Dubai")
+    assert str(parse_when("this weekend", datetime(*today, 10, tzinfo=tz), tz).day) == weekend
+
+
+def test_this_weekend_offers_the_weekend():
+    e, s = at("day_q")
+    intent, reply = say(e, s, "this weekend")
+    assert "Saturday" in reply or "Sunday" in reply
