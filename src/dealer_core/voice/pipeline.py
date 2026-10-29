@@ -232,15 +232,22 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         from .micgate import StopNotifier
 
         stages.append(StopNotifier(on_user_stop))
+    from .heard import Playback, PlaybackTracker
+
+    playback = Playback()                                     # what the page is playing, worked out here (voice/heard.py)
+    brain.playback = playback
+    if mic_gate is not None:
+        mic_gate.playback = playback                          # tap mode: a tap while the agent is audible interrupts it (not only while the server is still sending)
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
         from .bargein import BargeIn
 
-        stages.append(BargeIn())
+        stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level))
     for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)
         if name in probes:
             stages.append(probes[name])
+    stages.append(PlaybackTracker(playback, on_cut=brain.reply_cut))     # last before the page: the audio's timing as it goes out
     if dump:
         stages.append(AudioTap(dump, "out", OutputAudioRawFrame))
     stages.append(sink)

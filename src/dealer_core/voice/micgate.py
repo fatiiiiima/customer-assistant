@@ -29,6 +29,7 @@ class MicGate(FrameProcessor):
         self._pending = False                 # the turn is over but the microphone is kept open until the reply is heard (see hold_open_until_reply)
         self._timer = None
         self._on_close = None
+        self.playback = None                  # voice.heard.Playback, when known: the agent is audible on the page for longer than the server sends audio
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -49,7 +50,7 @@ class MicGate(FrameProcessor):
     async def set_open(self, on: bool) -> None:
         if on and not self.open:
             self.open = True
-            if self._bot_speaking:                                    # a tap while the agent speaks: stop it at once
+            if self._bot_speaking or (self.playback is not None and self.playback.playing()):     # a tap while the agent speaks: stop it at once
                 self.taps_while_speaking += 1
                 logger.debug("tap-to-talk: the visitor tapped over the agent")
                 await self.broadcast_interruption()

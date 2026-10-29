@@ -6,15 +6,22 @@ state machine, model-written reply, safety checks. This processor only moves tex
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 
 from loguru import logger
-from pipecat.frames.frames import BotStartedSpeakingFrame, Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame
+from pipecat.frames.frames import BotStartedSpeakingFrame, Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..dialogue.machine import DialogueEngine
 from .services import SPEAK_UP, too_quiet_to_trust
+
+
+# A turn that is only "Actually." / "Wait," / "Hold on": the start of what the caller is about to say, often followed by a pause (29 Oct, a barge-in: "Actually," was
+# answered on its own and "do you have any BMWs?" came as a turn of its own). Held up to MARKER_WAIT_S for the rest; "yes", "no" and "okay" are answers and are not held.
+_MARKER_ONLY = re.compile(r"(?:(?:actually|wait|hold on|hang on|um+|uh+|er+|erm|well|so|oh|hmm+|sorry|excuse me|one moment)[\s,.!?-]*)+", re.I)
+MARKER_WAIT_S = 1.2
 
 
 def _louder(a: float | None, b: float | None) -> float | None:
@@ -45,12 +52,20 @@ class DealerBrain(FrameProcessor):
         self._defer_next = False                        # the next transcript is the first half of a sentence that is still being said: keep it, do not answer it
         self._abort = False                             # the turn being answered is to be dropped and carried (see take_back)
         self.continued = 0                              # turns joined to the next one (for tests and the log)
+        self._marker_timer = None                       # a turn that was only "Actually," is answered on its own if nothing follows within MARKER_WAIT_S
+        self.marker_wait_s = MARKER_WAIT_S
+        self._marker_waiting = False                    # the caller is speaking after a held "Actually,": wait for that transcript
+        self._caller_speaking = False                   # between the detector's "started" and "stopped" speaking
+        self.playback = None                            # voice.heard.Playback: told when a reply starts, so what the caller heard of it can be worked out
+        self._cut_heard: str | None = None              # the caller interrupted the reply being written: what they had heard of it (see reply_cut)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
             await self.push_frame(frame, direction)
             if self._speak_opening:
+                if self.playback is not None:
+                    self.playback.new_reply()
                 opening = self.engine.opening(self.session)
                 if self._on_say:
                     self._on_say(opening)
@@ -63,8 +78,31 @@ class DealerBrain(FrameProcessor):
                 self._carry_level = _louder(self._carry_level, self._level_of() if self._level_of else None)
                 self.continued += 1
                 return                                              # the caller is still speaking: wait for the rest of the sentence
+            if self._marker_timer is not None or self._marker_waiting:  # what follows a held "Actually,": the two are one turn (see _answer's carry)
+                if self._marker_timer is not None:
+                    self._marker_timer.cancel()
+                self._marker_timer, self._marker_waiting = None, False
+            elif _MARKER_ONLY.fullmatch(frame.text.strip()) and not self._carry:
+                self._carry = frame.text.strip()
+                self._carry_level = self._level_of() if self._level_of else None
+                if self._caller_speaking:                           # already saying the rest (its start reached us before these words did): wait for it
+                    self._marker_waiting = True
+                else:
+                    self._arm_marker(self.marker_wait_s)
+                return
             await self._answer(frame.text)
             return
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._caller_speaking = True
+            if self._marker_timer is not None:
+                self._marker_timer.cancel()                         # the rest of the sentence after "Actually," is being said: its transcript will come
+                self._marker_timer = None
+                self._marker_waiting = True
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._caller_speaking = False
+            if self._marker_waiting:
+                self._marker_waiting = False                        # ...and if it gives no transcript after all, "Actually," is answered alone, a little later
+                self._arm_marker(self.marker_wait_s + 1.0)
         if isinstance(frame, BotStartedSpeakingFrame):
             self._open_turn = None                                  # the reply is being heard now: it can no longer be taken back
         await self.push_frame(frame, direction)
@@ -91,10 +129,44 @@ class DealerBrain(FrameProcessor):
             del history[-2:]
         return True
 
+    def _arm_marker(self, wait_s: float) -> None:
+        loop = asyncio.get_running_loop()
+        self._marker_timer = loop.call_later(wait_s, lambda: loop.create_task(self._answer_held()))
+
+    async def _answer_held(self) -> None:
+        """Nothing followed a held "Actually,": answer it as it is."""
+        self._marker_timer, self._marker_waiting = None, False
+        if self._carry:
+            await self._answer("")
+
+    def reply_cut(self, heard: str) -> None:
+        """The caller spoke over the agent: of its reply they heard `heard` (voice.heard.Playback). The call history keeps only that, so the next answer neither takes
+        for granted what was not heard nor asks a question that never got said; of the cars just listed only those heard are kept for "the second one".
+        29 Oct: the whole reply stayed in the history (it is saved when written, about 1 s in, and spoken for 5 to 10 s more)."""
+        if not heard:
+            return
+        if self._busy.locked():                                     # still being written: the turn is saved when it is cancelled (see _answer)
+            self._cut_heard = heard
+            return
+        history = self.session.history
+        if history and history[-1][0] == "agent" and history[-1][1].startswith(heard.removesuffix(" ...")):    # (a "speak up" is not in the history: then nothing to correct)
+            logger.debug(f"barge-in: the caller heard {len(heard.split())} of {len(history[-1][1].split())} words of the reply")    # counts only: no transcript in the log
+            history[-1] = ("agent", f"{heard} (interrupted)")
+            self._keep_heard_cars(heard)
+            self.interrupted += 1
+
+    def _keep_heard_cars(self, heard: str) -> None:
+        shown = self.session.shown
+        named = [c for c in shown if c.model.lower() in heard.lower()]
+        if named and len(named) < len(shown):
+            self.session.shown = named
+
     async def _answer(self, text: str) -> None:
         """Runs the turn in a worker thread; every sentence goes to the TTS the moment the engine has verified it."""
         async with self._busy:                                      # one turn at a time per caller
-            self._abort = False
+            self._abort, self._cut_heard = False, None
+            if self.playback is not None:
+                self.playback.new_reply()
             level = self._level_of() if self._level_of else None
             if self._carry:                                         # the first half of a sentence the caller carried on after
                 carried, carried_level = self._carry, self._carry_level
@@ -158,7 +230,11 @@ class DealerBrain(FrameProcessor):
                     self._open_turn = None
                     raise
                 self.session.remember("customer", text)           # the engine saves a turn only when it finishes: keep what really happened
-                self.session.remember("agent", (" ".join(said) + " (interrupted)") if said else "(interrupted)")
+                heard_part = self._cut_heard if self._cut_heard is not None else " ".join(said)      # what was heard of it, when the playback is known
+                self.session.remember("agent", f"{heard_part} (interrupted)" if heard_part else "(interrupted)")
+                if self._cut_heard:
+                    self._keep_heard_cars(self._cut_heard)
+                self._cut_heard = None
                 self.interrupted += 1
                 raise
             await worker
