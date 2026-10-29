@@ -481,7 +481,8 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        args = self._args_for(s, tool, decision.get("car_id"), text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
+        tool_text = decision.get("as_if") or text                         # a yes to an offer: the tool runs as if the offer's own words had been said (the caller's words are what is remembered)
+        args = self._args_for(s, tool, decision.get("car_id"), tool_text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "booking_aside":
             args = {"kind": decision.get("kind")}
         if tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
@@ -493,7 +494,7 @@ class AgentEngine:
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
-        result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
+        result = self._run(s, tool, args if isinstance(args, dict) else {}, tool_text, dbg)
         if decision.get("also") and s.car:
             result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
         if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
@@ -971,6 +972,11 @@ class AgentEngine:
         if s.pending is not None and s.pending.kind in ("cancel_which", "move_which"):   # the answer to "which one?" comes first, whatever it names
             return {"tool": "cancel_booking" if s.pending.kind == "cancel_which" else "reschedule_booking", "via": "rules"}
         booking_flow = s.read_back or s.state in (State.SLOT, State.CONTACT)          # a booking is being filled in or read back
+        offered_rest = re.search(r"\b(?:go through the rest|name the others)\b", s.last_agent().lower())
+        if offered_rest and not booking_flow and (self._confirms(joined) or re.fullmatch(r"(?:yes |yeah |ok(?:ay)? )?(?:go on|go ahead|the rest|the others|name them|all of them|go through them)(?: please)?", joined)):
+            if "name the others" in s.last_agent().lower():
+                return {"tool": "browse_makes", "as_if": "the others", "via": "rules"}     # "yes" to "...or shall I name the others?"
+            return {"tool": "search_cars", "as_if": "what other ones do you have", "via": "rules"}   # "yes" to "...or shall I go through the rest?"
         aside = self._aside_kind(s, text, words, joined) if booking_flow else None
         if aside:                                                                # "is it automatic?", "one sec" while times are on offer: answer, and the booking goes on
             return {"tool": "booking_aside", "kind": aside, "car_id": s.car, "via": "rules"}
@@ -1233,14 +1239,14 @@ class AgentEngine:
                         "facts": ["In stock by make: " + ", ".join(f"{names[mk]} {counts[mk]}" for mk in rest)], "awaiting": True}
         others = sorted((mk for mk in counts if not current or names[mk].lower() != current.lower()), key=lambda mk: -counts[mk])
         total = sum(counts[mk] for mk in others)
-        shown = [names[mk] for mk in others[:6]]
+        shown = [names[mk] for mk in (others if len(others) - 6 <= 2 else others[:6])]     # one or two more makes are named too
         more = len(others) - len(shown)
         parts = shown + ([f"{more} other makes"] if more > 0 else [])
         listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
         lead = f"Besides {current}, we've got {total} more cars" if current else f"We've got {total} cars"
         s.filters, s.shown, s.car, s.state = {}, [], None, State.INTEREST
         s.makes_said = ([current] if current else []) + shown
-        return {"core": f"{lead}, from {listed}. Which make would you like to hear about?",
+        return {"core": f"{lead}, from {listed}. Which make would you like to hear about" + (", or shall I name the others?" if more else "?"),
                 "facts": [f"In stock by make: " + ", ".join(f"{names[mk]} {counts[mk]}" for mk in others)], "awaiting": True}
 
     def _t_best_of(self, s, args, text, dbg) -> dict:
@@ -1339,6 +1345,7 @@ class AgentEngine:
         if fuel and not (need_seats or sporty):
             every = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(filters, 200)]
             keep = sorted([c for c in every if c and c.fuel == fuel], key=lambda c: c.price)
+            full = keep
             from ..tools.results import SearchResult
             from ..tools.service import VOICE_MAX_CARS
             res = SearchResult(total=len(keep), cars=tuple(keep[:VOICE_MAX_CARS]), needs_narrowing=len(keep) > VOICE_MAX_CARS)
@@ -1347,6 +1354,7 @@ class AgentEngine:
             keep = [c for c in every if c and (d := self.svc.site.cars.get(c.stock_id)) and (not need_seats or d.seats >= need_seats)
                     and (not sporty or d.power_hp >= 250)]
             keep.sort(key=lambda c: -self.svc.site.cars[c.stock_id].power_hp if sporty else c.price)
+            full = keep
             from ..tools.results import SearchResult
             from ..tools.service import VOICE_MAX_CARS
             res = SearchResult(total=len(keep), cars=tuple(keep[:VOICE_MAX_CARS]), needs_narrowing=len(keep) > VOICE_MAX_CARS)
@@ -1355,6 +1363,7 @@ class AgentEngine:
             f = {k: v for k, v in f.items() if v is not None}
         else:
             res = self.svc.search_cars(filters)
+            full = None
         dbg.tools.append(f"search_cars({f}) -> {res.total} match(es)")
         wanted = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in f.items()) or "anything"
         if not res.cars and _CHEAPER.search(words) and base is not None:
@@ -1436,8 +1445,15 @@ class AgentEngine:
         more = res.total - len(res.cars)
         if not res.needs_narrowing:
             s.narrow_asks = 0
-        ask = W.hear_more_or_book(s) if len(res.cars) == 1 else "Which one would you like to hear more about?"
-        listed = W.list_line(s, list(res.cars), res.total)               # says "plus one more" when the list is 3 of 4
+        from ..tools.results import NAME_THE_REST_UP_TO, SearchResult
+        if 0 < more <= NAME_THE_REST_UP_TO:                               # 4 or 5 of them: read them all, not "plus one more"
+            every = full if full is not None else [c.view() for c in self.svc.inventory.search(filters, res.total)]
+            res = SearchResult(total=res.total, cars=tuple(every[:res.total]), needs_narrowing=False)
+            s.shown, more = list(res.cars), 0
+            sheet = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams" for c in res.cars]
+        ask = W.hear_more_or_book(s) if len(res.cars) == 1 else (
+            "Which one would you like to hear more about, or shall I go through the rest?" if more > 0 else "Which one would you like to hear more about?")
+        listed = W.list_line(s, list(res.cars), res.total)               # "..., and 5 more" when more than two are left
         if more > 0:
             return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
                                                               *([f"There are {more} more not listed: say how many in total ({res.total}) and read out only these {len(res.cars)}."] if more > 0 else [])], "awaiting": True}
