@@ -58,9 +58,9 @@
 - {at: time_q, say: "two o'clock", expect: {slot_hour: 14}}
 - {at: time_q, say: "make it 9 in the morning", expect: {slot_hour: 9}}
 - {at: time_q, say: "I'll take the 2 o'clock", expect: {slot_hour: 14}}
-- {at: time_q, say: "either is fine", expect: {keeps_booking: true, booked: false}}
-- {at: time_q, say: "you choose", expect: {keeps_booking: true, booked: false}}
-- {at: time_q, say: "can we do 3 instead", expect: {keeps_booking: true, reply_lacks: ["9 am it is", "2 pm it is", "9 am. can i", "2 pm. can i"]}}
+- {at: time_q, say: "either is fine", expect: {keeps_booking: true, booked: false, reply_has: ["shall we say", "9", "2 pm"]}}
+- {at: time_q, say: "you choose", expect: {keeps_booking: true, booked: false, reply_has: ["shall we say", "9", "2 pm"]}}
+- {at: time_q, say: "can we do 3 instead", expect: {keeps_booking: true, reply_has: ["3"], reply_lacks: ["9 am it is", "2 pm it is", "9 am. can i", "2 pm. can i"]}}
 - {at: time_q, say: "half two", expect: {keeps_booking: true, reply_lacks: ["9 am it is", "9 am. can i"]}}
 
 # ---------------------------------------------------------------------------------------------------- answering "what day?"
@@ -93,13 +93,13 @@
 - {at: contact_q, say: "my name's Fatima and my number is 050 793 2546", expect: {name: Fatima, phone: "507932546"}}
 - {at: contact_q, say: "Fatima. 0507932546.", expect: {name: Fatima, phone: "507932546"}}
 - {at: contact_q, say: "thank you", expect: {keeps_booking: true, reply_lacks: ["anything else"]}}
-- {at: contact_q, say: "why do you need my number?", expect: {keeps_booking: true, booked: false}}
+- {at: contact_q, say: "why do you need my number?", expect: {keeps_booking: true, booked: false, name: ""}}
 - {at: name_q, say: "Fatima", expect: {name: Fatima}}
 - {at: name_q, say: "it's Fatima", expect: {name: Fatima}}
 - {at: name_q, say: "Fatima Masood", expect: {name: Fatima Masood}}
 - {at: name_q, say: "under Fatima", expect: {name: Fatima}}
 - {at: name_q, say: "thank you", expect: {keeps_booking: true, reply_lacks: ["anything else"]}}
-- {at: name_q, say: "do you need my surname?", expect: {keeps_booking: true, booked: false}}
+- {at: name_q, say: "do you need my surname?", expect: {keeps_booking: true, booked: false, name: ""}}
 
 # ---------------------------------------------------------------------------------------------------- a question in the middle of the booking: answer or not, the booking must go on
 - {at: time_q, say: "does it have a warranty?", expect: {keeps_booking: true}}

@@ -278,6 +278,7 @@ _UNDER_NAME = re.compile(r"\bunder(?: the name(?: of)?)?\s+([A-Za-z][A-Za-z' ]*?
                          r"(?=\s+(?:and|my|phone|number|mobile|please|thanks|thank you)\b|[,.;:!?\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)", re.I)
 _NOT_A_NAME = {"ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "k", "grand", "dirhams", "dirham",
                "aed", "budget", "price", "km", "kilometres", "kilometers", "miles", "the", "a", "an", "it", "that", "this", "me", "my"}
+_QUESTION_START = {"do", "does", "did", "can", "could", "would", "will", "should", "shall", "what", "why", "how", "where", "when", "who", "which", "is", "are", "was", "were", "may"}
 _STOP = {"yes", "no", "ok", "okay", "yeah", "yep", "yup", "yea", "ya", "nope", "nah", "alright", "right", "cool", "awesome", "absolutely",
         "definitely", "certainly", "actually", "sounds", "lovely", "excellent", "exactly", "correct", "hey", "hmm", "er", "erm", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
         "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh",
@@ -334,7 +335,8 @@ def contact(text: str) -> Contact:
     else:                                   # "Mohammed Al Mansoori, zero five zero ..." : the leading words before the number
         lead = re.split(r"[,.;:\d]| (?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b| and | my ", text, maxsplit=1, flags=re.I)[0]
         words = [w for w in lead.strip().split() if re.fullmatch(r"[A-Za-z']+", w)]
-        if 1 <= len(words) <= 4 and not any(w.lower() in _STOP for w in words):
+        question = bool(words) and words[0].lower() in _QUESTION_START              # "do you need my surname?" is not the name "Do You Need" (29 Oct sweep)
+        if 1 <= len(words) <= 4 and not question and not any(w.lower() in _STOP for w in words):
             name = " ".join(words)
     if name:
         name = " ".join(w for w in name.split() if w.lower() not in {"and", "my"})
