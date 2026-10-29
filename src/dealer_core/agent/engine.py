@@ -480,6 +480,9 @@ class AgentEngine:
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         result = self._run(s, tool, args if isinstance(args, dict) else {}, text, dbg)
+        if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
+            rest = _REACTION_LEAD.sub("", result["core"], count=1)
+            result["core"] = "You're welcome. " + rest[:1].upper() + rest[1:]
         if decision.get("fallback"):                                       # the code could not tell what was asked and the model was not asked
             result["core"] = W.pick(s, "overload", ["Sorry, I didn't quite get that. Are you after a particular make, type of car or budget?",
                                                     "Could you tell me a bit more: a make, a type of car, or a budget?"])
@@ -984,6 +987,8 @@ class AgentEngine:
             r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
         if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and _PLAIN_YES.fullmatch(joined) and offered:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
+        if _THANKS.fullmatch(joined) and (s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back):
+            return {"tool": "prepare_booking", "car_id": s.car, "via": "rules", "thanked": True}   # mid-booking (29 Oct: "Thank you." after the number dropped the question for the name)
         if _THANKS.fullmatch(joined):
             return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
         if not s.car and len(s.shown) >= 2 and not booking_flow and _PLAIN_YES.fullmatch(joined) and re.search(r"\bwhich\b", q):
@@ -1025,6 +1030,8 @@ class AgentEngine:
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "no, 2 PM", "the afternoon one": a time, whatever comes before it
             if s.state is State.SLOT and _FLEXIBLE.search(joined):
                 return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "any day", "what's free": offer the next free times
+            if s.state is State.CONTACT and ex.names_someone(text):
+                return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "No, but the booking under Fatima": a name, whatever comes before it (29 Oct)
             if not _CHANGE.search(" ".join(words)):
                 ct = ex.contact(text)
                 if w.found or ct.phone or (s.state is State.CONTACT and (ct.name or ct.heard_digits)):     # (digits that are not a whole number: ask again, do not leave it to the model)
