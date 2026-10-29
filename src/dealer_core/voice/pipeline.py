@@ -214,6 +214,13 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             endpointer.speculation = stt.speculation = brain.speculation = spec
         stages.append(endpointer)
     stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
+    if in_tap is not None:                                    # the recorder notes when the turn was decided over, so scripts/call_latency.py can tell the detector's wait from Whisper's
+        from .micgate import StopNotifier
+
+        async def turn_end() -> None:
+            in_tap.note("turn_end", "")
+
+        stages.append(StopNotifier(turn_end))
     if mic_gate is not None and on_user_stop is not None:     # tap-to-talk: a caller who carries on before the reply is heard continues the same sentence
         from .micgate import ContinuationGuard
 
