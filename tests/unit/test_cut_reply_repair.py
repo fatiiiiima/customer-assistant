@@ -4,7 +4,7 @@ and gives the facts as a sentence of their own."""
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from dealer_core.agent.engine import AgentEngine, _rounding_off
+from dealer_core.agent.engine import AgentEngine, _rounding_off, _unheard
 from dealer_core.agent.governor import QualityGovernor
 from dealer_core.app import build_app
 from dealer_core.config import load_config
@@ -49,12 +49,12 @@ def reply_to(clause):
     return [x for x in out if isinstance(x, str)], out[-1]
 
 
-def test_after_a_spoken_clause_the_facts_come_as_a_sentence_of_their_own():
+def test_after_a_spoken_clause_the_reply_carries_on_with_what_was_not_heard():
+    """29 Oct (owner): "and here is the full picture." followed by the whole sentence again sounded broken. After a comma the reply carries on with the facts not heard."""
     spoken, result = reply_to("Sure, that's the Camry,")
     assert spoken[0] == "Sure, that's the Camry,"
-    assert spoken[1] == "and here is the full picture."                      # finishes the clause the caller has heard
-    assert "That is:" not in " ".join(spoken)
-    assert spoken[2][:1].isupper() and "kilometres" in spoken[2]            # the facts, not cut or lower-cased into the clause
+    assert "full picture" not in " ".join(spoken) and "That is:" not in " ".join(spoken)
+    assert "58,000 kilometres" in spoken[1] and "78,500 dirhams" in spoken[1]
     assert spoken[-1].endswith("?") or spoken[-1].endswith(".")
 
 
@@ -63,7 +63,12 @@ def test_a_reply_cut_in_the_middle_of_a_word_starts_over_politely():
     assert spoken[1] == "Let me put that properly." and "That is:" not in " ".join(spoken)
 
 
-def test_the_rounding_off_sentence_depends_only_on_how_the_spoken_text_ended():
-    assert _rounding_off("Sure, black,") == "and here is the full picture."
-    assert _rounding_off("Sure, black, ") == "and here is the full picture."
+def test_the_rounding_off_sentence_is_for_a_half_word_only():
     assert _rounding_off("It has") == "Let me put that properly."
+
+
+def test_only_the_clauses_not_heard_are_said():
+    heard = "It's a 2016 Porsche Macan in black,"
+    assert _unheard(heard, "It's the 2016 Porsche Macan in black, with 91,000 kilometres on it, at 149,000 dirhams.") == ["with 91,000 kilometres on it, at 149,000 dirhams."]
+    assert _unheard("It has a 3.0-litre V6 twin-turbo engine with 340 horsepower,", "It has a 3.0-litre V6 twin-turbo engine with 340 horsepower.") == []
+    assert _unheard("Here's the 2022 Mazda CX-5 in blue: 29,000 km,", "It's the 2022 Mazda CX-5 in blue, with 29,000 kilometres on it, at 89,900 dirhams.") == ["at 89,900 dirhams."]

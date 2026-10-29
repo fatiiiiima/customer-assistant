@@ -31,7 +31,7 @@ from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
 from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
-from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, promise_in, verify_sentence
+from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, numbers, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex, names
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -155,12 +155,23 @@ def _lower_first(text: str, proper: frozenset[str] | set[str] = frozenset()) -> 
     return text[0].lower() + text[1:]
 
 
-FINISHED_CLAUSE = "and that's the main thing."         # ends a reply cut after a clause when everything the code would add was already said
-
-
 def _rounding_off(said: str) -> str:
-    """A short sentence that closes a reply the caller has heard cut off: after a comma it finishes the clause, after a half-word it starts over politely."""
-    return "and here is the full picture." if said.rstrip().endswith(",") else "Let me put that properly."
+    """A short sentence before the facts of a reply the caller has heard cut in the middle of a word: it starts over politely. (After a comma, see `_unheard`.)"""
+    return "Let me put that properly."
+
+
+def _unheard(heard: str, facts: str) -> list[str]:
+    """What the standard wording's fact sentences say that the caller has not heard yet, clause by clause, to carry on a reply cut after a comma. A clause already
+    said ("It's the 2016 Porsche Macan in black") is left out; the rest of its sentence is kept ("with 91,000 kilometres on it, at 149,000 dirhams.")."""
+    out = []
+    for sentence in voice_rules.sentences(facts):
+        if covers(heard, sentence):
+            continue
+        said = numbers(heard)                                    # a clause whose figures were all heard is said ("29,000 km" covers "with 29,000 kilometres on it")
+        keep = [c for c in re.split(r",\s+", sentence.rstrip(" .!")) if not covers(heard, c) and not (numbers(c) and numbers(c) <= said)]
+        if keep:
+            out.append(", ".join(keep) + ".")
+    return out
 
 
 def _after_opener(sentence: str, proper: frozenset[str] | set[str] = frozenset(), new_sentence: bool = False) -> str:
@@ -594,14 +605,16 @@ class AgentEngine:
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:
-                    # What was said cannot be taken back, so the repair finishes that thought and then gives the facts as a sentence of their own (it used to say
-                    # "...black, That is: that's a 2016 Macan, black, ...", a restart in the middle of a sentence). After a finished clause, a fact the caller has just heard is
-                    # not said again (28 Oct test call: "...340 horsepower, and here is the full picture. It has a 3.0-litre I6 turbo engine with 340 horsepower.").
-                    rest = core_facts
+                    # What was said cannot be taken back. After a clause ("It's a 2016 Porsche Macan in black,") the reply carries on with what the caller has not heard,
+                    # clause by clause: "with 91,000 kilometres on it, at 149,000 dirhams." (29 Oct: it said "and here is the full picture." and then the whole sentence again,
+                    # name and colour included). After a half-word it starts over politely and gives the facts as a sentence of their own.
                     if spoken[-1].rstrip().endswith(","):
-                        heard = " ".join(spoken)
-                        rest = " ".join(x for x in voice_rules.sentences(core_facts) if not covers(heard, x))
-                    for part in ((_rounding_off(spoken[-1]), rest) if rest else (FINISHED_CLAUSE,)):
+                        parts = _unheard(" ".join(spoken), core_facts)
+                        if not parts:                           # all of it was said: the reply ends there (it said "and that's the main thing.", a filler; owner, 29 Oct)
+                            spoken[-1] = spoken[-1].rstrip(" ,") + "."
+                    else:
+                        parts = [_rounding_off(spoken[-1]), core_facts]
+                    for part in parts:
                         spoken.append(part)
                         yield part
                 close = self._split_core(core)[1] if speaks else (core_q or W.anything_else(s))
@@ -1272,8 +1285,12 @@ class AgentEngine:
 
     def _t_best_of(self, s, args, text, dbg) -> dict:
         pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
-        if not pool:
-            pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(), 200)]
+        if not pool:                                                      # chosen from the stock, within what was asked for (29 Oct: "a family SUV under 100,000" got the Carnival, a van at 126,000)
+            asked = {**s.filters, **ex.search_filters(text, self.svc.inventory.vocabulary())}
+            wanted = {k: v for k, v in asked.items() if k in SearchFilters.model_fields and v not in (None, "")}
+            pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**wanted), 200)]
+            if not pool:
+                return self._t_search_cars(s, args, text, dbg)           # nothing matches: said as a search with no results
             text = text if A.superlative_topic(" ".join(ex.tokens_of(text))) else "best for a family"
         if s.filters and len(pool) < 2:
             pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**{k: v for k, v in s.filters.items() if k in ("make", "model", "max_price")}), 50)]

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from dealer_core.agent.engine import FINISHED_CLAUSE, AgentEngine
+from dealer_core.agent.engine import AgentEngine
 from dealer_core.agent.governor import QualityGovernor
 from dealer_core.app import ROOT, build_app
 from dealer_core.config import load_config
@@ -137,8 +137,8 @@ def test_the_engine_finishes_the_cut_sentence_and_then_asks():
     s = e.new_session()
     say(e, s, "Porsche.")
     _, reply = say(e, s, "Yes, talk about the Macan.")
-    assert reply[0].endswith(",") and reply[1] == "and here is the full picture."           # the sentence is finished before anything else
-    assert not reply[1].endswith("?")
+    assert reply[0] == "The 2016 Porsche Macan is black,"                                   # the sentence carries on with what was not heard (29 Oct)
+    assert reply[1] == "with 91,000 kilometres on it, at 149,000 dirhams." and "999" not in " ".join(reply)
 
 
 def test_the_repair_does_not_say_again_what_was_just_said():
@@ -148,7 +148,8 @@ def test_the_repair_does_not_say_again_what_was_just_said():
     say(e, s, "Yes, talk about the Macan.")
     _, reply = say(e, s, "Tell me more about the engine.")
     joined = " ".join(reply)
-    assert joined.count("340 horsepower") == 1 and FINISHED_CLAUSE in reply
+    assert joined.count("340 horsepower") == 1 and len(reply) == 1                          # nothing added after it (29 Oct: no "and that's the main thing.")
+    assert s.history[-1][1].endswith("340 horsepower.")
 
 
 def test_while_a_booking_is_being_arranged_the_code_carries_on_with_it():
