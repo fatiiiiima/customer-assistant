@@ -179,7 +179,8 @@ class DialogueCfg(_Strict):
     probe_every_s: float = 20.0                  # voice server: measure the model with a small request of the same shape as a model-written turn this often, only when no turn is using it (0 = off)
     probe_max_in_flight: int = 0                 # ...or when at most this many turns are using the model. 0 = only when none is. The plan (B5) asked for 2; in the scale simulation 2 and 4 recovered no faster after a GPU outage and sent 33-37% more probes to an overloaded model (ARCH_REVIEW section 20), so the default stays 0
     max_model_turns: int = 0                     # auto: turns using the model at once above which replies are spoken by code (0 = no cap)
-    openers: bool = True                         # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once
+    openers: bool = False                        # agent engine: fact replies start with a short acknowledgement ('Sure,') that the voice has ready, so sound starts at once.
+                                                 # OFF (owner, 29 Oct): heard on 17 of 30 replies ("Okay,", "So,", "Right,"), it sounded scripted; a clean answer about 1 s later is preferred
     agent_prefix: bool = False                   # agent engine, experimental: code speaks every fact at once; the model only continues with a short, strictly checked follow-up
     model_speaks: bool = False                   # agent engine, ARCH_PLAN Phase 3, behind this flag: at the FULL level the model writes the reply from all of the car's facts, with no opener said first and no
                                                  # closing question forced on it outside the booking steps; every sentence also passes agent/guards.py (facts of this turn only). Off: the full level as before
