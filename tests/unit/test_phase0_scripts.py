@@ -88,3 +88,10 @@ def test_probe_rows_say_how_many_requests_a_second_the_server_finished():
 
     _, rows = mod.sweep("full", fn, [2], 700.0)
     assert rows[0]["requests_per_s"] > 0 and set(rows[0]) == {"at_once", "median_ms", "p90_ms", "requests_per_s"}
+
+
+def test_a_recording_with_no_audio_gives_no_turns_instead_of_an_error(tmp_path):
+    mod = script("hearing_check")
+    (tmp_path / "empty.csv").write_text("unix_time,bytes,sample_rate\n")
+    (tmp_path / "empty.pcm").write_bytes(b"")
+    assert mod.load_turns("empty", tmp_path, None) == []
