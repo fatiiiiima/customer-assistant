@@ -818,6 +818,48 @@ Not helped: a car nobody named yet ("Tell me about the RAV4" after the agent sug
 
 Together, on a model-written turn on this laptop: about 0.26 s off the turn end on every turn, and the first sentence's slow tail cut from about 3.3 s to under 2 s. Tests: `test_prefetch.py` (5: the next prompt starts with what was sent, after a list and on a follow-up; cars offered in the last reply are sent; nothing during a booking or when switched off; a new turn stops what was queued), `test_call_latency.py` (the split scoring), `test_quiet_turns.py` (0.35 s). `python -m pytest tests/unit`: 1,243 passed, 40 skipped.
 
+## 33. The first sound without fillers: the sentence's own opening, ready in advance (29 Oct, the owner's request)
+
+Branch `voice/openings-first`. The owner: with `--quality prefix` replies felt slower than before (1.1 to 1.5 s, "wasn't it under 1 s?"). It was the fillers: until 29 Oct every reply began with "Okay," or "Sure," rendered at start-up, which played the moment the words were recognised and hid the 0.45 s Kokoro takes to make the first piece of the real sentence; with them gone (section 30b) that time is heard. The recorded 28 Oct calls were not under 1 s either (median 1.05 and 1.79 s to the first sound), but their first sound was a filler.
+
+Two ways to start sooner were compared, and the owner listened to samples of both (`logs/voice_samples/`): A, the split as it was (a first piece of 4 words, or up to 7 to a comma), and B, the sentence's own opening ("There's the", "It's the", "It has", "The best for a family we have is", ...: `voice/kokoro_tts.py OPENINGS`, counted in the sample calls and the sweep) rendered at start-up and played at once, the rest made while it plays; a sentence with no known opening starts with a 3-word piece. The pauses inside the sample sentences were measured: B's join adds about 0.03 to 0.06 s, the size of the breaks A already has between pieces. The owner chose B and asked to keep A.
+
+Now: `voice.opening_first` (B, on; `VA__VOICE__OPENING_FIRST=false` gives A as it was). The openings are kept for the life of the process (not pushed out of the voice's cache by a long call), and the test-drive offers rendered in advance follow the split in use (with B, "Today I've got" is kept too; with A its first piece "Today I've got 9" held a time and was not).
+
+MEASURED, `scripts/score_first_sound.py` (new): the real Kokoro, loaded as the server loads it, 18 first sentences of the code from the owner's calls and the sample calls, each from a cold start:
+
+| | first sound, median | worst | instant | a pause after the first piece |
+|---|---|---|---|---|
+| A (as it was) | 509 ms | 963 ms | 2 of 18 | none |
+| **B (now)** | **0 ms** | 376 ms ("It's accident-free and") | **17 of 18** | 2, of 44 and 27 ms |
+
+So the first sound of a reply the code writes comes about 0.5 s sooner: about 0.6 s after the caller stops (turn end 0.35 s, hearing about 0.26 s), against about 1.1 s with A and about 1.05 s with the fillers on 28 Oct. A model-written sentence starts with an opening less often (not measured). Not tested: whether a caller hears the join as a break; the owner's listening is the only check so far. Tests: `test_kokoro_tts.py` (4 added: the opening as a piece, the 3-word fallback, nothing lost or reordered, the setting choosing B or A and B's openings kept), `test_slot_openings.py` (B's offers ready in advance). `python -m pytest tests/unit`: 1,283 passed, 40 skipped.
+## 34. Barge-in: interrupt by voice, and the agent goes on from what you heard (29 Oct, the owner's request)
+
+Branch `voice/barge-in`. The owner: "the barge in is wrong; while the model is speaking, if I interrupt it, it should understand and change the response". What was wrong, found reading the code:
+
+1. On the website's default (tap-to-talk) the microphone is closed while the agent speaks: only a tap stops it. Interrupting by voice needs hands-free (`?voicemode=handsfree` on the page, or `--hands-free` on the server) and echo control (a headset, or the browser's echo cancellation on speakers).
+2. In hands-free, the agent stopped at the detector's first 0.1 s of sound: a cough, a click, an "mm" or its own echo cut it off.
+3. It went by the server's "bot speaking", which ends about half way through what the caller hears: the server sends audio at twice its speed (pipecat's websocket output) and the page buffers it. In the second half of a long reply, nothing could interrupt it (by voice, or by tap in tap mode).
+4. After an interruption the call history kept the whole reply, as if heard: the reply is saved when written (about 1 s in) and spoken for 5 to 10 s more. The next answer could take for granted cars or a question the caller never heard.
+
+What changed:
+* `voice/heard.py` (new): `Playback` works out the page's playback on the server (each chunk's send time at twice speed, the page's 0.12 s cushion, back-to-back play), so it knows whether the agent is audible and which words the caller has heard (each word weighted by how long it takes to say: "62,500" is "sixty two thousand five hundred"; rounded down, never a word not heard). `PlaybackTracker`, last before the page, feeds it and on an interruption hands the brain what was heard.
+* `voice/bargein.py`: interrupts when the caller has spoken 0.3 s (`voice.barge_in_min_speech_secs`) at speech level (`voice.barge_in_level` 0.01; the owner's speech is 0.03 to 0.05, background 0.0003 to 0.004) while the agent is audible on the page. A start that stops sooner is ignored (counted). Tap mode's tap also uses the page's playback.
+* `voice/brain.py`: `reply_cut` keeps only what was heard ("There's the Corolla at 62,500 dirhams, the Camry ... (interrupted)"), whether the reply was still being written or already saved; a "speak up" (not saved) is never mistaken for the reply; the cars just listed are cut to those heard, so "the last one" is the last one heard. A turn that is only "Actually," / "Wait," / "Hold on" is held and joined to what the caller says next (up to 1.2 s, longer while they are still speaking; "yes", "no", "okay" are answers and are not held).
+
+Checked through the real pipeline (a test server in hands-free mode, `scripts/portal_call.py --barge`: a synthetic caller who talks over every reply 1.2 s in, the real model on MLX for decisions, prefix level), the final run:
+
+| caller (talking over the agent) | what the agent had said | heard | answered |
+|---|---|---|---|
+| "I'm looking for a Toyota." | the greeting | 17 of 24 words | 4 Toyotas in stock |
+| "Actually, do you have any Porsches?" | the Toyota question | 6 of 22 | the Macan (one turn: "Actually." was held) |
+| "Tell me about the Macan." | the Macan offer | 6 of 18 | the Macan |
+| "Thank you, that's all." | the Macan line | 5 of 21 | goodbye |
+
+The first runs found two things fixed here: "Actually," was answered alone (the hold ran out while the rest was still being said and recognised; then the rest started before the words of "Actually," arrived), and a cough-length start would have stopped the agent. Not checked: a person on laptop speakers (whether the browser's echo cancellation keeps the agent from interrupting itself; a headset avoids it); whether "mm-hmm" (0.3 s and more) stops the agent (probably yes). Found while testing, not barge-in, fixed separately: "BMWs" and "the X5" are not recognised without the make, so the code fell back to the Toyota search ("Tell me about the X5" got the Toyota list).
+
+Tests: `test_bargein.py` (rewritten: it used to re-implement the logic instead of calling it; 6), `test_heard.py` (5), `test_barge_in_history.py` (9, including the real engine: the Toyota list cut after the Camry, "the last one" gets the Camry). `python -m pytest tests/unit`: 1,261 passed, 40 skipped.
 ## 35. A make in the plural, and a short model named without its make (29 Oct, found in the barge-in test call)
 
 Branch `fix/car-names`. After "I'm looking for a Toyota.", "Do you have any BMWs?" and "Tell me about the X5." got the Toyota list again: "BMWs" (and "Audis", "Porsche's" as the recogniser writes it) matched no make, and a two-character model ("X5", "M3", "Q7") counted only with its make said, so nothing new was found and the code carried on with the search under way. On a turn the model decides it often got it right; at the prefix level, where the code decides more, it did not.
