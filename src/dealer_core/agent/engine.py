@@ -812,14 +812,16 @@ class AgentEngine:
 
     def prefetch(self, s: Session) -> int:
         """While the agent speaks, send the start of the next likely prompt to the model server, which keeps what it reads (29 Oct, the owner's call: the first
-        question about a new car waited up to 3 s, most of it the model reading that car's facts). The car being discussed, or else up to three cars just listed,
+        question about a new car waited up to 3 s, most of it the model reading that car's facts). Up to three cars named in the reply just given, and the car being discussed,
         each with the conversation so far: exactly what the next reply's prompt starts with (ReplyWriter.prompt_start). One token is asked for and thrown away.
         In the background, one at a time; stops when the caller has started the next turn, and is skipped while another call is using the model.
         Returns how many prompts were queued."""
         if not (self.prefetch_on and self.model_speaks and self.reply_writer is not None) or s.ended or s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back:
             return 0
         site = getattr(self.svc, "site", None)
-        ids = [s.car] if s.car else [c.stock_id for c in s.shown[:3]]
+        said = s.last_agent()
+        named = [c.stock_id for c in s.shown if c.model in said][:3]    # cars just read out or offered ("...the Mazda CX-5 at 89,900 and the Tucson..."): the caller may pick one
+        ids = list(dict.fromkeys([*named, *([s.car] if s.car else [])]))
         starts = []
         for cid in ids:
             car, d = self.svc.get_car(cid), (site.cars.get(cid) if site is not None else None)

@@ -77,3 +77,17 @@ def test_a_new_turn_stops_what_was_queued_for_the_old_one():
     gate.set()
     _settle(e)
     assert rec.sent == []
+
+
+def test_cars_offered_in_the_last_reply_are_sent_as_well_as_the_car_discussed():
+    """29 Oct trace: after "can you do 90?" offered the Mazda CX-5 and the Tucson, only the RAV4 being haggled over was sent, and "tell me about the first one" read the CX-5 fresh."""
+    e, _, rec = _engine()
+    s = e.new_session()
+    for t in ("I'm looking for a Toyota.", "Tell me about the RAV4.", "Can you do 90,000?"):
+        list(e.handle_stream(s, t))
+    _settle(e)
+    rec.sent.clear()
+    list(e.handle_stream(s, "Come on, can you do 90?"))
+    _settle(e)
+    heads = [u.split("\n")[1] for u in rec.sent]
+    assert any("Mazda CX-5" in h for h in heads) and any("Hyundai Tucson" in h for h in heads) and any("Toyota RAV4" in h for h in heads)
