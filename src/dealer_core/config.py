@@ -203,6 +203,8 @@ class VoiceCfg(_Strict):
     reply_max_tokens: int = 110
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
+    barge_in_min_speech_secs: float = 0.3         # barge-in: the caller must speak this long over the agent (after the detector's own 0.1 s start) before it stops: a cough or a click does not
+    barge_in_level: float = 0.01                  # ...counting audio at least this loud (speech in the owner's calls: median 0.03 to 0.05; background 0.0003 to 0.004)
     model_only: bool = False                      # False (the production behaviour): a reply the model leaves short, or a sentence the checks drop, is completed with the code's own facts and question.
                                                   # True = TEST MODE: only the model's own words are spoken, nothing in their place (27 Oct: a reply could end after its opener). Was True by default
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
