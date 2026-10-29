@@ -98,7 +98,7 @@ def main() -> int:
     conversations = [c for c in conversations if c[0].startswith(a.only)]
     stats = {"model_speaks": not a.off, "deadlines": "off (correctness run)" if a.no_deadline else "live", "conversations": 0, "turns": 0, "model_replies": 0, "fell_back": 0, "guard_stops": 0, "spoken_leaks": 0, "ends_on_question": 0,
              "same_opener": 0, "repeated_fact_sentences": 0, "tell_me_more": [0, 0], "bookings": {}, "first_ms": [], "leak_examples": [], "fallback_reasons": {}, "praise_sentences": 0, "model_sentences": 0, "praise_examples": [],
-             "invites": 0}
+             "invites": 0, "first_out_ms": [], "acks": 0}
     t_start = time.perf_counter()
     rounds = 0
     while True:
@@ -110,7 +110,11 @@ def main() -> int:
             for text, expect in turns:
                 seen.clear()
                 before = dict(e.fidelity)
-                out = list(e.handle_stream(s, text))
+                t_turn, first_out, out = time.perf_counter(), None, []
+                for item in e.handle_stream(s, text):                       # timed piece by piece: the first string is the first thing the caller would hear
+                    if first_out is None and isinstance(item, str):
+                        first_out = (time.perf_counter() - t_turn) * 1000
+                    out.append(item)
                 result = out[-1]
                 said = [x for x in out if isinstance(x, str)]
                 reply = " ".join(said)
@@ -127,6 +131,9 @@ def main() -> int:
                         stats["fallback_reasons"][why] = stats["fallback_reasons"].get(why, 0) + 1
                     if dbg.lead_ms:
                         stats["first_ms"].append(dbg.lead_ms)
+                    if first_out is not None:
+                        stats["first_out_ms"].append(first_out)
+                        stats["acks"] += bool(said) and said[0].rstrip().endswith(",") and len(said[0].split()) <= 3      # "Sure," / "Let's see," said first
                     stats["ends_on_question"] += reply.rstrip().endswith("?")
                     stats["invites"] += bool(re.search(r"\b(?:test drive|come (?:in|and see|by)|see it in person|visit)\b", reply.lower()))
                     if not fell:
@@ -164,6 +171,10 @@ def main() -> int:
         if not a.turns or stats["model_replies"] >= a.turns:
             break
         print(f"round {rounds}: {stats['model_replies']} model-written replies so far, {time.perf_counter() - t_start:.0f} s", flush=True)
+    out_ms = stats.pop("first_out_ms")
+    stats["first_sound_ms_median"] = round(statistics.median(out_ms)) if out_ms else None          # turn start (words in) -> first string out, model-written turns, THIS machine
+    stats["first_sound_ms_p90"] = round(sorted(out_ms)[int(0.9 * (len(out_ms) - 1))]) if out_ms else None
+    stats["first_sound_under_1s"] = f"{sum(x < 1000 for x in out_ms)} of {len(out_ms)}"
     ms = stats.pop("first_ms")
     stats["first_sentence_ms_median"] = round(statistics.median(ms)) if ms else None
     stats["first_sentence_ms_p90"] = round(sorted(ms)[int(0.9 * (len(ms) - 1))]) if ms else None

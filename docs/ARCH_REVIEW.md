@@ -562,3 +562,25 @@ After the fixes, both runs:
 * Model-written replies 2, fell back 0, guard stops 0, spoken leaks 0; first sentence median 1,532 ms (4.5 s run) and 1,454 ms (10 s run), two replies each, laptop.
 
 Tests: `test_test_call_28oct.py` now 36; each fix fails some when removed. `pytest tests/unit`: 1,024 passed, 40 skipped. The worker that took the call runs the code before these fixes and must be restarted to have them.
+
+## 25. Speed on the laptop: a quick acknowledgement while a slow model writes (29 Oct)
+
+Owner's request after the test call: replies with `model_speaks` on felt slow. Branch `speed/ack-on-long-wait`, from `fix/hearing-booking-latency-27oct`. Machine and model as in section 23 (M3 Pro, Qwen3-4B 4-bit on MLX). Nothing in this section makes the model faster: on this laptop its first sentence takes about 1.9 s, and only a faster machine changes that (sections 21, 23).
+
+**What changed.** Phase 3 dropped the short acknowledgement said while the model writes ("Sure,", "Right,", "So,": rendered in advance, so it plays at once) because said on every reply it sounds scripted. It is back with `model_speaks` on only when the governor's live measure of the model's first sentence is at least `voice.bridge_after_ms` (450 ms), the same line the "Let me check." bridge uses for slow decisions. On a server fast enough for the full level it is never said; on this laptop it is said on most model-written replies, never the same one twice running (the existing opener picker). The model's own first sentence then carries on after it in lower case (the existing `_after_opener`). `agent/engine.py: _slow_writer`, 3 lines in `handle_stream`. Booking lines are spoken by code and get none. Tests: `test_model_speaks.py` (4 added: slow model gets one, fast model none, none when the bridge is off or nothing is measured, not the same twice running); each of two mutations (never, always) fails some. `pytest tests/unit`: 1,028 passed, 40 skipped. The replay script now times the first thing said in each turn.
+
+**Measured with the replay** (the 17 conversations of section 23, flag on, deadlines lifted; times from the caller's words reaching the engine, so without the detector's 0.6 s and recognition):
+
+| | Before | After |
+|---|---|---|
+| Something said within 1 s | 0 of 46 model-written replies | 44 of 47 |
+| First thing said, median / p90 | 1,908 / 2,524 ms | 1 / 1 ms (the acknowledgement is ready in advance) |
+| The model's first sentence (the answer), median | 1,888 ms | 1,884 ms |
+| Acknowledgements | 0 | 43 |
+| Same opening as an earlier reply in the call | 5 | 0 |
+| Spoken leaks / fallbacks | 0 / 1 | 0 / 0 |
+| Scripted bookings | 3 of 3 | 3 of 3 |
+
+(Bookings are 3 of 3 in both runs, against 2 of 3 in section 23: the third script says "Ten in the morning", which the parser fix of section 24a now reads.)
+
+**What this does and does not do.** The caller hears something at once instead of 1.9 s of silence; the answer itself arrives as late as before, so on this laptop there is now a short gap after "Sure," (the acknowledgement lasts about half a second, the answer follows about 1.4 s after it ends: INFERRED from the two medians, not heard). Most read naturally ("Sure, the boot is 580 litres. Would you like to come and see it?"); some less so ("So, yes, it comes with a 12-month or 20,000-kilometre AGMC warranty."). Whether the gap after it sounds natural is for a listening test. Not changed: the governor, the bridge, the threshold, anything with `model_speaks` off.
