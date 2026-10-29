@@ -15,10 +15,10 @@ DRIVE = {"AWD": "all-wheel drive", "4WD": "four-wheel drive", "RWD": "rear-wheel
 # topic -> what a caller says about it
 TOPICS: dict[str, re.Pattern] = {
     "warranty": re.compile(r"\bwarrant\w*|\bguarantee\w*"),
-    "accident": re.compile(r"\baccident\w*|\bcrash\w*|\bdamage\w*|\bclean (?:title|history)\b|\brepainted\b"),
+    "accident": re.compile(r"\baccident\w*|\bcrash\w*|\bdamage\w*|\bclean (?:title|history)\b|\brepainted\b|\b(?:its|the|car's|the car's) history\b"),
     "inspection": re.compile(r"\binspect\w*|\bcondition\b|\bchecked\b|\bmechanical\w*"),
     "owners": re.compile(r"\bowners?\b|\bowned\b|\bhands\b"),
-    "service": re.compile(r"\bservice (?:history|record\w*)\b|\bserviced\b|\bmaintenance\b|\bmaintained\b"),
+    "service": re.compile(r"\bservice (?:history|record\w*)\b|\bserviced\b|\bmaintenance\b|\bmaintained\b|\b(?:its|the|car's|the car's) history\b"),
     "engine": re.compile(r"\bengine\b|\bcylinders?\b|\bv6\b|\bv8\b|\bturbo\b|\blitre engine\b"),
     "power": re.compile(r"\bhorse ?power\b|\bhp\b|\bpower\w*\b|\btorque\b|\bbhp\b"),
     "drive": re.compile(r"\b(?:all|four|rear|front)[ -]wheel\b|\bawd\b|\b4wd\b|\b4x4\b|\bfour by four\b|\bdrivetrain\b|\bwheel drive\b"),
@@ -83,7 +83,12 @@ def blurb_sentence(blurb: str) -> str:
 
 
 def topics_in(words: str) -> list[str]:
-    return [k for k, p in TOPICS.items() if p.search(words)]
+    """The topics asked about. "Tell me more about the engine" is about the engine: "tell me more" only carries the question, so the generic "about" (the car's
+    blurb, the next group not told yet) counts only when nothing more specific was asked. (28 Oct: it answered the engine and then added the blurb.)"""
+    found = [k for k, p in TOPICS.items() if p.search(words)]
+    if "about" in found and len(found) > 1:
+        found.remove("about")
+    return found
 
 
 def asked_feature(words: str) -> str | None:

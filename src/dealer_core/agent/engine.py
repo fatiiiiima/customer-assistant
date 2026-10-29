@@ -24,13 +24,14 @@ from difflib import SequenceMatcher
 
 from ..dialogue import templates as T
 from . import answers as A
+from . import guards
 from . import wording as W
 from ..dialogue import voice_rules
 from ..dialogue.machine import TurnDebug, TurnResult
 from ..dialogue.session import KnownBooking, Pending, Session
 from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
-from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, fact_sheet, promise_in, verify_sentence
+from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, fact_sheet, is_generic_closer, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
 from ..nlu import expected, extractors as ex
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
@@ -263,6 +264,8 @@ class AgentEngine:
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.openers = False                             # start fact replies with a short spoken acknowledgement ("Sure,") that plays at once (voice/kokoro_tts.py)
+        self.model_speaks = False                        # ARCH_PLAN Phase 3 (config dialogue.model_speaks): at the full level the model writes the whole reply; see _speaking_input
+        self.fidelity = {"sentences": 0, "leaks": 0, "replies": 0, "fell_back": 0}     # model_speaks: sentences checked by agent/guards.py and how many it stopped (for replays)
         self.governor = None                             # QualityGovernor: picks full / prefix / code per turn from the model's live speed (agent/governor.py)
         if self.reply_writer is not None:
             self.reply_writer.extra_check = self._stock_claims
@@ -481,7 +484,8 @@ class AgentEngine:
         if level == "full" and tool in _FACT_TOOLS and prefix:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
-        opener, lead = ("", bridge) if bridge else (self._opener(s, tool, result["core"]), "")
+        speaks = self.model_speaks and level == "full"
+        opener, lead = ("", bridge) if bridge else ("" if speaks else self._opener(s, tool, result["core"]), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
@@ -509,7 +513,11 @@ class AgentEngine:
                 yield sentence
         elif self.reply_writer is not None and not s.ended:
             facts = "\n".join(result["facts"])
-            w = WriterInput(caller=text, core=result["core"], risk=result["risk"], history=list(s.history), facts=facts, awaiting=result["awaiting"])
+            core, awaiting = result["core"], result["awaiting"]
+            if speaks:
+                core, awaiting, facts = self._speaking_input(s, text, result)
+            w = WriterInput(caller=text, core=core, risk=result["risk"], history=list(s.history), facts=facts, awaiting=awaiting)
+            allowed = f"{facts}\n{core}\n{text}"
             dbg.risk = result["risk"]
             t_write = time.perf_counter()
             if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
@@ -521,6 +529,13 @@ class AgentEngine:
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
                     for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
+                        if speaks:
+                            self.fidelity["sentences"] += 1
+                            leak = guards.leaks(sentence, allowed, self._car_words())
+                            if leak:                                    # fail closed: not said; what was said stands, the code's wording follows if nothing was
+                                self.fidelity["leaks"] += 1
+                                dbg.note = (dbg.note + "; " if dbg.note else "") + "fact guard: " + "; ".join(leak)
+                                break
                         if lead and len(spoken) == 1:
                             sentence = _after_opener(sentence, self._proper(s), new_sentence=not lead.rstrip().endswith(","))
                             if not sentence:
@@ -552,13 +567,18 @@ class AgentEngine:
                     for part in (_rounding_off(spoken[-1]), core_facts):
                         spoken.append(part)
                         yield part
-                close = core_q or W.anything_else(s)
-                spoken.append(close)
-                yield close
+                close = self._split_core(core)[1] if speaks else (core_q or W.anything_else(s))
+                if close:                                       # (when the model speaks, a question is added only if the call is waiting on one)
+                    spoken.append(close)
+                    yield close
             if spoken:
                 dbg.draft = " ".join(spoken)
                 dbg.copy_ratio = round(SequenceMatcher(None, dbg.draft.lower(), result["core"].lower()).ratio(), 2)
+        if speaks:
+            self.fidelity["replies"] += 1
         if spoken == ([bridge] if bridge else []) and (not self.model_only or self.silent_fallback):
+            if speaks:
+                self.fidelity["fell_back"] += 1
             spoken.append(result["core"])
             dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
             yield result["core"]
@@ -631,6 +651,46 @@ class AgentEngine:
             if not set(o.lower().strip(",.").split()) & set(first.lower().replace(",", "").split()[:8]):
                 return o
         return ""
+
+    def _car_words(self) -> set[str]:
+        if not hasattr(self, "_car_word_set"):
+            self._car_word_set = guards.car_names(self.svc.inventory.vocabulary())
+        return self._car_word_set
+
+    def _speaking_input(self, s: Session, text: str, result: dict) -> tuple[str, bool, str]:
+        """(standard wording, awaiting an answer, facts) for a reply the model writes whole (ARCH_PLAN Phase 3, `model_speaks`).
+
+        * Only the generic "anything else?" closer is dropped (the model may end on a statement). An invitation to visit stays: `wording.offer_test_drive` gives one only when
+          it is due (none after a no, never two answers running, at most one in three), otherwise the generic closer, so the pacing decides. The booking steps and a
+          clarifying question ("Which car do you mean?") keep theirs. (First version dropped invitations too: 0 in 1,000 replies, and 2% of replies asked anything.)
+        * The facts are the whole spec sheet of the car in focus, not the next one or two groups, with what the caller has already heard and what they asked about, so a
+          follow-up ("and the boot?", "what about the colour") can land on the aspect asked.
+        * Where the booking stands, so the model neither offers a second test drive nor talks as if one were booked."""
+        core, awaiting = result["core"], result["awaiting"]
+        facts_part, question = self._split_core(core)
+        booking_step = s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back
+        if question and not booking_step and is_generic_closer(question) and facts_part:
+            core, awaiting = facts_part, False
+        lines = list(result["facts"])
+        car = self.svc.get_car(s.car) if s.car else None
+        d = self.svc.site.cars.get(s.car) if (s.car and getattr(self.svc, "site", None) is not None) else None
+        if car is not None and d is not None:
+            lines.append(f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
+                         + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS))
+            told = s.said_about.get(s.car, [])
+            if told:
+                lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
+        words = " ".join(ex.tokens_of(text))
+        topics = [t for t in A.topics_in(words) if t != "about"] + [{"km": "mileage"}.get(k, k) for k, p in _ATTRIBUTE.items() if p.search(words)]
+        if topics:                                      # every aspect named ("the colour, mileage, engine and price": all four, not only the spec-sheet one)
+            lines.append("The caller is asking about: " + ", ".join(topics) + ". Answer all of that first.")
+        if s.booking is not None or s.known_bookings:
+            lines.append("A test drive is already booked in this call or on the website: do not offer another one.")
+        elif booking_step or s.draft_slot or s.offered_slots:
+            lines.append("A test drive is being arranged: do not say it is booked or confirmed, and do not suggest times; the system asks for those.")
+        if not awaiting:
+            lines.append("The call is not waiting for an answer: end on a statement unless a question is really needed.")
+        return core, awaiting, "\n".join(lines)
 
     def handle(self, s: Session, text: str) -> TurnResult:
         out = list(self.handle_stream(s, text))

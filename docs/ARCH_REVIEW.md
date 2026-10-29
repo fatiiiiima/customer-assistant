@@ -446,3 +446,82 @@ Nine turns: differences of a few points are noise. The hint helps base a lot (4 
 ### Not changed, on purpose
 
 All of `src/`; the 0.6 s tap silence and the tap-grace join; Smart Turn; `min_rms`, the speak-up thresholds, f32; `early_start_secs` (stays 0).
+
+## 23. Phase 3 behind a flag: the model speaks, the code guards (28 Oct; judged on correctness, not latency)
+
+Scope (section 21): built behind `dialogue.model_speaks` (default **off**), judged on correctness and fact-safety by replays on the laptop, not on the plan's latency targets. Branch `phase-3`, stacked on `phase-4`. Machine for every number: the M3 Pro, model `mlx-community/Qwen3-4B-Instruct-2507-4bit` on `mlx_lm.server` (not the 7 to 8B the plan names; no GPU). Phase 2 (one model call per turn) is not built, so this runs on the existing decide-then-write path, as the plan's "staged" option allows.
+
+### Where the plan and the code disagree (found reading the code)
+
+* **Most of the guard already existed.** `writer.py: verify_sentence` rejects, sentence by sentence and before anything is spoken, invented numbers, names (capitalised), colours, seat counts, claims ("immaculate", "accident-free" when the facts do not say it), negations, "booked/confirmed" and first-person promises; a reply with nothing usable falls back to the code's wording. The exact booking, confirmation and read-back lines are already spoken by code at every level (`EXACT_TOOLS`). Phase 3 adds a stricter check, not the first one.
+* **The model's question rewording (`_novel_words`) is on the prefix level only**, not the full one; there was nothing to remove at the full level.
+* **"Tell me more about X" already answered X**; it then added the car's blurb (the words "tell me more" were themselves read as the topic "about"), and "its history" got the blurb first. Fixed at every level (below).
+* **What really made the full level scripted:** an opener said before the model wrote anything, the code's closing question forced onto every reply (`writer.stream` appends it when the model does not ask it; the engine's cut-reply repair adds "anything else?"), and the model seeing only the next one or two fact groups, so it could not answer "and the boot?" from its facts.
+
+### What changed, file by file
+
+* `agent/answers.py` (all levels, not behind the flag): a named topic replaces the generic "tell me more"; "its history" means accident and service history. Tests: `test_tell_me_more_about.py` (10; 9 fail on the old code).
+* `agent/guards.py` (new): `leaks(sentence, allowed, names)`: numbers (digits, spoken numbers over ten, years, prices), colours, makes and models of the stock (lower case too) and commercial terms (return, refund, warranty, finance, delivery, insurance, deposit, trade-in, discount, free, included, reserve...) must appear in **this turn's** facts, the code's wording or the caller's words. `verify_sentence` also accepts the whole call history, so a price of a car mentioned three turns ago passes it; this does not.
+* `agent/engine.py`, `config.py` (`dialogue.model_speaks`), `app.py`: with the flag on, at the full level only:
+  * no opener before the model;
+  * the code's closing question is dropped when it is an invitation or a generic "anything else?" and there are facts to say; it stays in the booking steps (SLOT, CONTACT, CONFIRM, read-back) and when it is the whole reply ("Which car do you mean?"); the cut-reply repair adds no question either;
+  * the model is given every fact group of the car in focus, what the caller has already heard, every aspect asked for (spec-sheet topics and colour, mileage, price, year), and where the booking stands (being arranged: do not confirm or suggest times; booked: do not offer another);
+  * every sentence passes `guards.leaks`; a leak stops the reply there (fail closed) and the code's wording follows if nothing was said. Counters in `AgentEngine.fidelity`.
+* `scripts/replay_model_speaks.py` (new): the five scripted conversations of `load_test.py`, a "tell me more about X" script and the heard lines of every recorded call, through the real engine at the full level, flag on or off.
+* Tests: `test_model_speaks.py` (46): what the model is given, nothing added, the questions that stay, the guard failing closed (a figure, a year, a lower-case car name), the plan's fact-fidelity suite (5 faithful and 9 leaking sentences against a fixed fact list), the plan's forbidden-promise suite (17 sentences), and a known limit. `pytest tests/unit`: 986 passed, 40 skipped. Two mutations (guard off; question rule off) fail them.
+
+### Numbers (MEASURED on the laptop; deadlines lifted for the correctness runs, because with the live 1.5 s first-sentence deadline every model-written reply on this machine fell back to the code's wording: 7 of 7 in the first try)
+
+Same 17 conversations, 119 turns, once each:
+
+| | Flag off (full level as before) | Flag on |
+|---|---|---|
+| Model-written replies | 45 | 44 |
+| Fell back to the code's wording | 0 | 1 (the writer's name check) |
+| Sentences the new guard stopped | n/a | 0 |
+| Spoken sentences with a number, colour, name or commercial term not in that turn's facts | 0 | 0 |
+| Replies ending on a question | 30 (67%) | 1 (2%) |
+| Replies inviting a test drive | 14 | 0 |
+| "Tell me more about X" answered with X | 6 of 6 | 6 of 6 |
+| Scripted bookings made | 2 of 3 | 2 of 3 (the same two) |
+| Model's first sentence, median / p90 | 1,278 / 1,715 ms | 1,603 / 1,967 ms |
+
+**1,000 model-written replies, flag on** (381 conversations, 2,671 turns, 49 minutes): 0 spoken sentences with a fact not in that turn's facts; 3 sentences stopped by the new guard (0.3%) and 16 replies refused by the writer's name check and spoken in the code's wording instead (1.6%); "tell me more about X" answered with X 138 of 138; 24 replies (2.4%) ended on a question, none invited a test drive; 65 replies opened with the same three words as an earlier reply in the same conversation, and 35 fact sentences were said twice in a conversation; first sentence median 1,613 ms, p90 2,143 ms. The zero is checked by the same family of rules that enforce it (the replay re-checks every spoken sentence with `guards.leaks` against the facts the model was given), so it says the rules were never bypassed, not that every possible leak is a rule.
+
+**What the checks do not catch (MEASURED, rough).** 23 of 1,578 model sentences (1.5%) judge or embellish rather than state: "known for strong performance and responsive acceleration" (most of them, word for word), "enough for groceries, luggage, or a weekend trip", "perfect for both the road and off-road". No number, name or commercial term is in them, so neither check stops them; the prompt forbids praise. And a value true of another attribute passes: 500 is the Macan's boot in litres, so "500 horsepower" would pass the guard (a test pins this as a known limit).
+
+**Bookings.** In the repeated run every scripted booking reads "not made": after the first round the same slots are already taken in the in-memory database, and the agent correctly says "That slot isn't free" and offers others (checked on mix0, round 1 books Wednesday 4 PM, rounds 2 to 4 are offered 5 and 6 PM). The single-pass numbers above are the outcome. The third scripted booking (mix1) fails with the flag on and off alike: the script asks for 10 AM when 9 and 2 are offered, the agent checks "did you say 10 AM?", and the script answers with a name, which this laptop's model was too slow to decide (the code decided).
+
+### Against the plan's "done when"
+
+* "A 20-turn conversation with no two replies with the same opener": not met. 65 of 1,000 replies repeated an earlier reply's first three words in the same conversation, mostly "It has a..." and "The boot has..." in the "tell me more" script. Without the code's openers the repetition is the model's own.
+* "'Tell me more about X' answers X": met, 138 of 138.
+* "The fact-fidelity suite passes 1,000 replayed turns with zero leaks": met in the sense above (0 spoken; the guard and the writer stopped 19).
+* "Latency must not regress against Phase 2": Phase 2 is not built. Against the full level as it was, on this laptop: +325 ms at the median (the whole spec sheet is a longer prompt). On a server with a prefix cache most of that is cached; not measured.
+
+### Left for the owner (not decided here)
+
+* **Questions and invitations.** The plan removes the forced closing question; the model then almost never asks one (2.4%) and never invites a test drive. The pacing rule that already exists (`wording.offer_test_drive`: no invitation after a no, none in two answers running, at most one in three) could keep an invitation when it is due while dropping the generic "anything else?". Not built: it is a sales decision.
+* **Embellishment.** A list of praise words as a third check would stop most of the 1.5%; it would also stop some true statements of the site's own blurbs. Not built.
+* **The flag stays off.** On this laptop the full level is reached only with the deadlines lifted; turning it on changes nothing a caller hears until the model is fast enough for the full level. Listening tests (ten replies per state, heard by a person) are not done.
+
+### Not changed, on purpose
+
+The prefix and code levels; exact booking and summary lines; `verify_sentence`; the governor; `model_only` false; the opener and the forced question with the flag off.
+
+### 23a. Invitations kept when due (28 Oct, owner's decision), re-measured once
+
+With `model_speaks` on, only the generic "anything else?" closer is now dropped; an invitation to visit stays, and `wording.offer_test_drive` gives one only when it is due (none after a no, never two answers running, at most one in three). Tests: `test_model_speaks.py` (48; the first version's rule fails 3). Same 17 conversations, one pass, same laptop and model, deadlines lifted:
+
+| | Flag off (run above) | Flag on, first version | Flag on, invitations kept |
+|---|---|---|---|
+| Model-written replies | 45 | 44 | 44 |
+| Fell back / guard stops / spoken leaks | 0 / n.a. / 0 | 1 / 0 / 0 | 0 / 0 / 0 |
+| Replies ending on a question | 30 | 1 | 15 |
+| Replies inviting a test drive | 14 | 0 | 14 |
+| Same opener as an earlier reply in the call | 0 | 1 | 3 |
+| "Tell me more about X" answered with X | 6 of 6 | 6 of 6 | 6 of 6 |
+| Scripted bookings | 2 of 3 | 2 of 3 | 2 of 3 (the same two) |
+| First sentence, median / p90 | 1,278 / 1,715 ms | 1,603 / 1,967 ms | 1,668 / 2,214 ms |
+
+The invitations are back at the rate the code had (14), and replies end on a question half as often as with the flag off (15 against 30): the generic closers are gone. **The 1,000-reply figures above are from the first version and were not re-run** (stopped by the owner, to be repeated after a listening test); a single pass of 44 replies is too few to restate them.
