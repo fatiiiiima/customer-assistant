@@ -217,8 +217,10 @@ class VoiceCfg(_Strict):
     number_stop_secs: float = 0.9                 # silence that ends the caller's turn right after the agent asked for a phone number: people dictate digits in groups with pauses ("050" ... "123" ... "4567")
     tap_grace_secs: float = 2.0                   # tap mode: after the turn is over the microphone stays open until the reply starts to play, at most this long. A caller who was only pausing carries on and
                                                   # the two halves are ONE sentence (before: the page closed the microphone at once and the rest of the sentence was lost). 0 = the old behaviour
-    tap_stop_secs: float = 0.6                    # tap mode: a cut turn closes the mic mid-sentence and the rest is never heard, so it waits longer. 24 real recordings: 0.2 s cut 4-5 sentences, 0.35 s cut 2, 0.6 s cut 0.
-                                                  # Cost: about +0.3 s on every turn vs 0.35 s (synthetic callers, median 547 -> 867 ms; docs/VOICE.md). Put it back with VA__VOICE__TAP_STOP_SECS=0.35
+    tap_stop_secs: float = 0.35                   # tap mode: the detector's silence before Smart Turn looks. Was 0.6 s (27 Oct: 24 recordings, 0.2 s cut 4-5 sentences, 0.35 s cut 2, 0.6 s cut 0),
+                                                  # chosen before a cut sentence could be joined back (tap_grace_secs). 29 Oct, 201 recorded turns (scripts/score_turn_end.py, section 32):
+                                                  # 0.35 s ends the turn 0.26 s sooner at the median (0.46 against 0.72 s; p90 0.64 against 0.96 s) and loses 1 more sentence when the
+                                                  # model writes the reply, 5 more cuts in 3 turns when the reply is ready at once. Put it back with VA__VOICE__TAP_STOP_SECS=0.6
     silent_turn_fallback: bool = True             # when the model or a safety check leaves a turn with nothing to say, speak the code-written reference wording instead of silence
     stt_model: str = "whisper-base-int8-ov"      # OpenVINO Whisper folder under models/ov. base: ~0.1 s slower than tiny, noticeably fewer mishearings
     stt_device: str = "CPU"                      # CPU | GPU (NPU cannot take the recognizer hint). small.en on the GPU: 21/24 of the owner's recordings in 0.17 s
