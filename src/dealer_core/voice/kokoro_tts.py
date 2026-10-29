@@ -107,8 +107,19 @@ def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> l
     else:
         cut = next((i + 1 for i, w in enumerate(words[:first_words + 3]) if w.endswith(",") and i >= 1), first_words)
         out, rest = [" ".join(words[:cut])], words[cut:]
-    cur: list[str] = []
-    for w in rest:
+    return out + _clauses(rest, max_words)
+
+
+# How the agent's fact sentences usually start (29 Oct, counted in the sample calls and the sweep). With `voice.opening_first` (B) each is rendered at start-up and played the
+# moment a sentence starting with it is ready, while the rest is made: the first sound has no wait, without a filler word. Longest first.
+OPENINGS = ("The best for a family we have is", "If you'd like something", "So that's the", "It uses about", "It gets about", "It comes with", "The interior is",
+            "There's the", "There are", "That's a", "That's the", "Here's the", "It's the", "It's a", "It's had", "It has", "It seats", "The boot", "I've got")
+
+
+def _clauses(words: list[str], max_words: int) -> list[str]:
+    """Pieces at commas (of at least 4 words) or of `max_words`."""
+    out, cur = [], []
+    for w in words:
         cur.append(w)
         if (w.endswith(",") and len(cur) >= 4) or len(cur) >= max_words:
             out.append(" ".join(cur))
@@ -118,10 +129,25 @@ def first_piece_split(text: str, first_words: int = 4, max_words: int = 12) -> l
     return out
 
 
+def opening_first_split(text: str, openings: tuple[str, ...] = OPENINGS, max_words: int = 12) -> list[str]:
+    """B (`voice.opening_first`, 29 Oct): "There's the Macan at 149,000 dirhams." -> ["There's the", "Macan at 149,000 dirhams."]. A sentence that starts with one of
+    `openings` gives it as a piece of its own (rendered at start-up, so it plays at once; the rest is made while it plays, as with A); a sentence that starts with an
+    opener word ("Perfect,") is split as in A; any other has a first piece of 3 words, or 4 when a comma ends the fourth (A: 4, or up to 7 to a comma)."""
+    lead = next((o for o in openings if text.startswith(o + " ")), None)
+    if lead:
+        return [lead] + first_piece_split(text[len(lead):].strip(), max_words=max_words)
+    words = text.split()
+    if any(w.endswith((",", ".", "!")) for w in words[:3]) or len(words) <= 4:
+        return first_piece_split(text, max_words=max_words)
+    cut = next((i + 1 for i, w in enumerate(words[:4]) if w.endswith(",") and i >= 1), 3)
+    return [" ".join(words[:cut])] + _clauses(words[cut:], max_words)
+
+
 class KokoroOV:
     sample_rate = 24000
 
-    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto", threads: int | None = None) -> None:
+    def __init__(self, models: Path, voice: str = "sarah", speed: float = 1.0, cache_size: int = 300, runtime: str = "auto", threads: int | None = None,
+                 opening_first: bool = False) -> None:
         from kokoro_onnx import Kokoro
 
         d = models / "kokoro-v1.0"
@@ -139,9 +165,17 @@ class KokoroOV:
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._cache_size = cache_size
         self._lock = threading.Lock()
+        self.opening_first = opening_first                # B: OPENINGS played first (see opening_first_split); A: first_piece_split as before
+        self._pinned: dict[str, np.ndarray] = {}           # the openings: kept for the life of the process, never pushed out of the cache by a long call
+
+    def pieces(self, text: str) -> list[str]:
+        """How a sentence is cut for the voice: B (opening first) or A."""
+        return opening_first_split(text) if self.opening_first else first_piece_split(text)
 
     def _say(self, piece: str) -> np.ndarray:
         key = piece.strip()
+        if key in self._pinned:
+            return self._pinned[key]
         with self._lock:
             hit = self._cache.get(key)
             if hit is not None:
@@ -161,17 +195,20 @@ class KokoroOV:
         sentences whose rest changes every time ("Today I can do" ... the times), so the first sound has no wait and the rest is made while it plays."""
         t0 = time.perf_counter()
         for p in phrases:
-            for piece in first_piece_split(p):
+            for piece in self.pieces(p):
                 self._say(piece)
         for p in first_only:
-            self._say(first_piece_split(p)[0])
+            self._say(self.pieces(p)[0])
+        if self.opening_first:
+            for o in OPENINGS:
+                self._pinned[o] = self._say(o)
         return time.perf_counter() - t0
 
     def warm_up(self) -> None:
         self._say("Warm up.")
 
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:
-        return np.concatenate([self._say(p) for p in first_piece_split(text)])
+        return np.concatenate([self._say(p) for p in self.pieces(text)])
 
     def stream(self, text: str, speed: float = 1.0) -> Iterator[np.ndarray]:
         """Piece by piece: the short first piece is ready quickly; the next ones are made while it plays."""
@@ -179,7 +216,7 @@ class KokoroOV:
 
         def run():
             try:
-                for piece in first_piece_split(text):
+                for piece in self.pieces(text):
                     q.put(self._say(piece))
             finally:
                 q.put(None)

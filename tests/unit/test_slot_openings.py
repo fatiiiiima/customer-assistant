@@ -41,7 +41,7 @@ def test_only_the_first_piece_of_each_opening_is_rendered_not_the_times_after_it
 
     class Stub(KokoroOV):
         def __init__(self):                                                           # (no model: just the counting)
-            self._cache, self._cache_size = {}, 300
+            self._cache, self._cache_size, self.opening_first, self._pinned = {}, 300, False, {}
 
         def _say(self, piece):
             rendered.append(piece)
@@ -55,7 +55,7 @@ def test_the_phrases_given_without_the_option_are_rendered_whole_as_before():
 
     class Stub(KokoroOV):
         def __init__(self):
-            self._cache, self._cache_size = {}, 300
+            self._cache, self._cache_size, self.opening_first, self._pinned = {}, 300, False, {}
 
         def _say(self, piece):
             rendered.append(piece)
@@ -65,10 +65,23 @@ def test_the_phrases_given_without_the_option_are_rendered_whole_as_before():
 
 
 def test_the_voice_is_loaded_with_the_openings():
-    assert "first_only=slot_offer_openings()" in inspect.getsource(__import__("dealer_core.voice.pipeline", fromlist=["x"]).load_engines)
+    assert "first_only=slot_offer_openings(tts.pieces)" in inspect.getsource(__import__("dealer_core.voice.pipeline", fromlist=["x"]).load_engines)
 
 
 def test_the_wording_itself_is_unchanged():
     out = offer_slot_variants("today", "2 in the afternoon or 5 in the evening")
     assert out == ["Today I can do 2 in the afternoon or 5 in the evening. Which suits you better?", "Today I've got 2 in the afternoon or 5 in the evening. Which works for you?",
                    "The soonest is today: 2 in the afternoon or 5 in the evening. Which would you prefer?"]
+
+
+@pytest.mark.parametrize("day", DAYS)
+@pytest.mark.parametrize("times", TIMES)
+def test_with_openings_first_the_first_piece_of_every_offer_is_still_ready_in_advance(day, times):
+    """B (voice.opening_first, 29 Oct) cuts sentences differently; the openings rendered in advance are cut the same way, so they still match."""
+    from dealer_core.voice.kokoro_tts import opening_first_split
+
+    kept = {opening_first_split(s)[0] for s in slot_offer_openings(opening_first_split)}
+    for sentence in offer_slot_variants(day, times):
+        sentence = sentence.split("?")[0].split(". ")[0] + "."
+        first = opening_first_split(sentence)[0]
+        assert first in kept or any(ch.isdigit() for ch in first), f"{first!r} is neither ready in advance nor started by a time"
