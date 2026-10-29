@@ -33,7 +33,7 @@ from ..dialogue.states import State
 from ..dialogue.draft import clean_draft
 from ..dialogue.writer import _DONE, FIRST_SENTENCE_DEADLINE, split_point, ReplyWriter, WriterInput, covers, fact_sheet, is_generic_closer, promise_in, verify_sentence
 from ..models import BodyType, CarStatus, CarView, SearchFilters
-from ..nlu import expected, extractors as ex
+from ..nlu import expected, extractors as ex, names
 from ..nlu.datetime_parse import combine, parse_when, part_of_day
 from ..tools.escalation import EscalationReason
 from ..tools.phones import normalize_phone, speak_phone
@@ -1183,7 +1183,7 @@ class AgentEngine:
             asked_name = s.state is State.CONTACT or bool(re.search(r"\b(?:name|who should i put)\b", expected.last_question(s.last_agent()), re.I))
             # Without "my name is", the leading words are a name only when a name was asked for or a number comes with them
             # ("Mohammed, 050 ..."): "Yeah, I want to come and see it" after "Want to come and see it?" is not a name.
-            args["name"] = ct.name if (cue or ((asked_name or ct.phone) and not when_found)) else None   # "tomorrow at four" is never a name
+            args["name"] = names.correct(ct.name) if (cue or ((asked_name or ct.phone) and not when_found)) else None   # "tomorrow at four" is never a name; "Achmed" is Ahmed (nlu/names.py)
             args["when"] = text
         return args
 
@@ -1831,7 +1831,7 @@ class AgentEngine:
             return {"core": "Sorry about that. What should I change: the day and time, your name, or your number?", "risk": "high", "awaiting": True,
                     "facts": ["The customer said the read-back was wrong. Nothing is booked. Keep the draft."]}
         if named:
-            s.draft_name = ct.name
+            s.draft_name = names.correct(ct.name)
         if ct.phone:
             s.draft_phone = ct.phone
         s.read_back = False
