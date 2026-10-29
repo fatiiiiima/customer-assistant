@@ -685,3 +685,46 @@ Branch `feat/haggle-alternatives`. The owner: the agent must never change a pric
 Tests: `test_haggle.py` (17: the amount read from the words; first push; second push near the asked price; the asked price remembered and new cars each push; no amount; picking an offered car starts its own count; "is that a good price?" is not a push; "come on" is not a visit; the cheapest car; the count kept across a reconnect). Sweep: two new steps (`price_q`, `haggled`) and 13 phrasings; a new expectation `reply_has_all`. MEASURED, this Mac: the sweep **144 of 144** with the code alone and **144 of 144** with Qwen3-4B deciding (deadline lifted; the model decided 10 turns, as before). `python -m pytest tests/unit`: 1,206 passed, 40 skipped.
 
 Not done: haggling during a booking (a price question while a day or time is being chosen) still gets the fixed price and the booking's question, with no other cars: the caller has chosen this car, and offering others there would pull the booking apart. Owner's call if that should change.
+
+## 30. Where a full-quality turn spends its time, and a prompt laid out for the model server's cache (29 Oct)
+
+Branch `perf/model-prompt`. Machine for every number here: the owner's MacBook Pro, **Apple M3 Pro, 36 GB**, Qwen3-4B-Instruct-2507 4-bit served by `mlx_lm.server` 0.32.2, Whisper base int8 and Kokoro on the CPU, `model_speaks` on (as the owner's worker runs). Nothing else using the model server during a measurement.
+
+### The trace (`scripts/trace_full_turn.py`, new)
+
+Each step of a turn timed with the real model, the owner's 28 Oct test call and the "tell me more" call (18 turns, 9 written by the model), live deadlines lifted so each step's natural time is seen. MEASURED, medians:
+
+| step | time |
+|---|---|
+| turn end (VAD silence, then Smart Turn) | 0.2 s, up to 0.6 s (config, not measured) |
+| hearing (Whisper) | 0.18 s |
+| rules and the tool (code) | under 0.01 s |
+| the model decides (only when the rules cannot: 1 turn of 18) | 1.78 s |
+| **the model reads its prompt** | **1.47 s** (1,434 tokens) |
+| the model writes its first sentence | 0.38 s more |
+| the voice's first audio (Kokoro, first piece) | 0.42 s |
+
+About 2.65 s from the caller stopping to the model's first words (the code's "Sure," is heard at once). Raw speed of this Mac, MEASURED: the model reads a fresh prompt at about 430 tokens/s and writes about 37 tokens/s. Unified memory lets the model fit and the GPU read it without copying; it does not make it fast: reading is limited by the GPU's arithmetic and writing by memory bandwidth (about 150 GB/s on the M3 Pro, against several TB/s on a data-centre GPU). With a 1,400-token prompt, 2 s is out of reach unless the model reads less.
+
+### Why it read so much, and the change
+
+`mlx_lm.server` keeps the start of earlier prompts (an LRU of KV caches, matched on the longest common start), so the 733 tokens of fixed instructions were already reused. The 707 tokens after them were read fresh every turn:
+* the conversation came first and its 6-line window moved every turn, so the prompt changed right after the instructions;
+* the car in focus was given three times (its fact line, again among "cars in this call" with its spec facts, and the full spec sheet: about 300 tokens), the other cars' spec facts too, and the spec-sheet answer twice (as a fact and as the standard wording).
+
+Now (`AgentEngine._speaking_input`, `ReplyWriter.stream`): the facts that hold while one car is discussed (its fact line, its spec sheet with its drive, the price rule) come first, under "FACTS THAT HOLD FOR THIS PART OF THE CALL"; then the conversation, in a window whose first line moves only every 6 lines (6 to 11 lines shown; `Session.forgotten` counts the lines the call no longer keeps, so the window counts from the start of the call); then this turn's own facts. Each fact once; other cars by name, colour and price only; the spec-sheet answer only as the standard wording. The fact checks see both parts (`WriterInput.all_facts`).
+
+### Result, MEASURED (same machine, same scripts)
+
+| | before | after |
+|---|---|---|
+| the model reads its prompt (trace, median) | 1.47 s | **0.59 s** |
+| first sentence (trace, median) | 1.85 s | **0.97 s** |
+| first sentence, 18 conversations (`replay_model_speaks.py --no-deadline`), median / p90 | 1.67 / 2.09 s | **1.09 / 1.44 s** (second run 1.10 / 1.53 s) |
+| caller stops to the model's first words (sum of the medians above) | about 2.65 s | **about 1.8 s** |
+
+Quality, the same replay (46 or 47 model-written replies): fell back to the code's wording 0 -> 0; facts spoken that were not given 0 -> 0; sentences the fact guard stopped 0 -> 1 in the first run and 0 in the second (stopped, never said); fact sentences repeated in a call 3 -> 2; "tell me more about X" answered with X 6 of 6 -> 6 of 6; praise 1 -> 0 and 1. No change in what the model says was found; the gain is in what it reads.
+
+Tests: `test_prompt_layout.py` (7: the car given once and first, two turns sharing everything up to the caller's new words, other cars short, the spec-sheet answer not given twice, a stable fact not rejected as invented, the window moving 4 times in 30 lines, the lines forgotten counted and kept across a reconnect). Three of them fail without the engine change. `test_model_speaks.py` updated for the extra value. `python -m pytest tests/unit`: 1,213 passed, 40 skipped; the sweep 144 of 144 with the code alone.
+
+What it does not show: the turn end (0.2 to 0.6 s) is from config, not measured here; a data-centre GPU with vLLM reuses prompt starts the same way (automatic prefix caching), so the layout should help there too, but that is INFERRED, not measured. Next candidates: the decision call (1.78 s when it happens) and the choice of model (needs downloads: the owner's call).
