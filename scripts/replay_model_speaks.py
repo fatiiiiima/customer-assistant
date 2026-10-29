@@ -39,7 +39,8 @@ TEST_CALL = ["I'm looking for a BMW.", "Any budget, any model?", "I want to hear
 # A rough diagnostic, not a check: phrases that judge or embellish rather than state ("known for strong performance", "practical for weekend drives"). The fact checks
 # do not catch these (no number, name or commercial term in them); the prompt forbids praise. Counted so a listening test knows where to look.
 PRAISE = re.compile(r"\b(?:known for|perfect for|ideal for|great for|enough for|making it|makes it|strong|responsive|smooth|comfortable|spacious|luxurious|sporty|"
-                    r"reliable|impressive|excellent|fantastic|amazing|stunning|beautiful|solid|great shape|well looked after|popular|practical for)\b", re.I)                                  # load_test.MIX conversations that end in a confirmed booking
+                    r"reliable|impressive|excellent|fantastic|amazing|stunning|beautiful|solid|great shape|well looked after|popular|practical for|"
+                    r"efficient|for better|great views|helps? with|long (?:family )?trips|daily use|everyday|peace of mind|sporty feel)\b", re.I)   # 29 Oct: widened                                  # load_test.MIX conversations that end in a confirmed booking
 
 
 def heard_lines(folder: Path) -> list[list[str]]:

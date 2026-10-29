@@ -58,6 +58,43 @@ CLAIMS = re.compile(r"\b(?:\w+\s)?condition\b|pristine|immaculate|spotless|flawl
                     r"great (?:car|deal|value|price)|good (?:deal|value|price)|bargain|steal", re.I)
 
 # "You're booked", "all set", "confirmed": only the system may say the booking is done (a model said it two steps early, before the phone number).
+# An opinion added to a fact ("..., which is efficient for a hybrid SUV, making it great for long family trips", "all-wheel drive for better traction", "a panoramic
+# roof for great views"). The prompt forbids them and the checks did not catch them (no number, name or commercial term in them): 29 Oct transcripts on PR 25.
+_OPINION_MARKER = re.compile(r"(?:^|,\s*|\s+)(?=(?:which|making|offering|providing|adding|helps?|helping|giving|known for|great for|perfect for|ideal for|good for|"
+                             r"for (?:better|great|extra|added|more|easy|everyday|daily)|with (?:a|its) (?:sporty|smooth|premium|luxurious|comfortable|stylish|sleek)\b))", re.I)
+_OPINION_WORD = re.compile(r"\b(?:great|perfect|ideal|efficient|economical|better|comfort\w*|smooth|sporty|spacious|roomy|luxur\w*|premium|practical|reliab\w*|strong|"
+                           r"responsive|impressive|excellent|fantastic|amazing|stunning|beautiful|solid|popular|fun|exciting|stylish|sleek|elegant|powerful|nimble|safer?|"
+                           r"versatile|confidence|peace of mind|feel|views?|easy|enjoy\w*|everyday|adventures?|trips?|family use|refined|upscale|classy|touch)\b", re.I)
+
+
+def strip_opinion(sentence: str) -> str:
+    """The sentence without the opinions added to its facts: each clause that starts like one (", which ...", "making it ...", "for better ...", "with a sporty ...")
+    and carries an opinion word and no number is cut, up to the next comma or "and". The facts stay: "It gets about 4.9 litres per hundred kilometres." An empty
+    string when nothing is left."""
+    m = re.search(r"[.?!,]+$", sentence.rstrip())             # a piece that ends on a comma (the stream speaks clauses early) keeps it
+    end = m.group() if m else ""
+    text = sentence.rstrip()[:len(sentence.rstrip()) - len(end)]
+    opinion = lambda part: not re.search(r"\d", part) and bool(_OPINION_WORD.search(part))
+    cut = True
+    while cut:                                                  # the first add-on that is an opinion is cut, then the sentence is looked at again
+        cut = False
+        for mark in _OPINION_MARKER.finditer(text):
+            rest, n = text[mark.end():], 0
+            while True:                                         # the clause runs to the next comma or "and", and on through an "and ..." that is an opinion too
+                stop = re.compile(r",\s|\s+and\s+(?!(?:helps?|makes?|gives?|is|it's)\b)").search(rest, n)
+                after = rest[stop.end():].split(",")[0] if stop else ""
+                after = after[:m2.start()] if (m2 := _OPINION_MARKER.search(after)) else after     # "and a panoramic roof for great views": the roof is a fact
+                if stop is None or not (rest[stop.start():].lstrip(", ").startswith("and ") and opinion(after)):
+                    break
+                n = stop.end()
+            clause = rest[:stop.start()] if stop else rest
+            if opinion(clause):
+                text, cut = text[:mark.start()] + (rest[stop.start():] if stop else ""), True
+                break
+    text = text.rstrip(" ,")
+    return f"{text}{end}" if text else ""
+
+
 _REACTION = re.compile(r"^(?:ok(?:ay)?|got it|sure(?: thing)?|great(?: choice)?|good (?:choice|question|call|catch)|perfect|nice(?: one)?|alright|absolutely|of course|certainly|wonderful|excellent|no problem)[!.,]*$", re.I)
 _DONE = re.compile(r"\b(?:booked|confirmed|all set|reserved|locked in|scheduled)\b", re.I)
 
@@ -618,7 +655,7 @@ class ReplyWriter:
         def check(sentence: str) -> str | None:
             nonlocal stopped
             raw_first = sentence.lstrip()[:1]
-            sentence = clean_draft(sentence)
+            sentence = strip_opinion(clean_draft(sentence))      # the facts without the opinions added to them
             if not sentence:
                 return None
             if spoken and spoken[-1].endswith(",") and raw_first.islower() and sentence[:1].isupper():
