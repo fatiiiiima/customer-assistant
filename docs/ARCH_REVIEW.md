@@ -818,6 +818,22 @@ Not helped: a car nobody named yet ("Tell me about the RAV4" after the agent sug
 
 Together, on a model-written turn on this laptop: about 0.26 s off the turn end on every turn, and the first sentence's slow tail cut from about 3.3 s to under 2 s. Tests: `test_prefetch.py` (5: the next prompt starts with what was sent, after a list and on a follow-up; cars offered in the last reply are sent; nothing during a booking or when switched off; a new turn stops what was queued), `test_call_latency.py` (the split scoring), `test_quiet_turns.py` (0.35 s). `python -m pytest tests/unit`: 1,243 passed, 40 skipped.
 
+## 33. The first sound without fillers: the sentence's own opening, ready in advance (29 Oct, the owner's request)
+
+Branch `voice/openings-first`. The owner: with `--quality prefix` replies felt slower than before (1.1 to 1.5 s, "wasn't it under 1 s?"). It was the fillers: until 29 Oct every reply began with "Okay," or "Sure," rendered at start-up, which played the moment the words were recognised and hid the 0.45 s Kokoro takes to make the first piece of the real sentence; with them gone (section 30b) that time is heard. The recorded 28 Oct calls were not under 1 s either (median 1.05 and 1.79 s to the first sound), but their first sound was a filler.
+
+Two ways to start sooner were compared, and the owner listened to samples of both (`logs/voice_samples/`): A, the split as it was (a first piece of 4 words, or up to 7 to a comma), and B, the sentence's own opening ("There's the", "It's the", "It has", "The best for a family we have is", ...: `voice/kokoro_tts.py OPENINGS`, counted in the sample calls and the sweep) rendered at start-up and played at once, the rest made while it plays; a sentence with no known opening starts with a 3-word piece. The pauses inside the sample sentences were measured: B's join adds about 0.03 to 0.06 s, the size of the breaks A already has between pieces. The owner chose B and asked to keep A.
+
+Now: `voice.opening_first` (B, on; `VA__VOICE__OPENING_FIRST=false` gives A as it was). The openings are kept for the life of the process (not pushed out of the voice's cache by a long call), and the test-drive offers rendered in advance follow the split in use (with B, "Today I've got" is kept too; with A its first piece "Today I've got 9" held a time and was not).
+
+MEASURED, `scripts/score_first_sound.py` (new): the real Kokoro, loaded as the server loads it, 18 first sentences of the code from the owner's calls and the sample calls, each from a cold start:
+
+| | first sound, median | worst | instant | a pause after the first piece |
+|---|---|---|---|---|
+| A (as it was) | 509 ms | 963 ms | 2 of 18 | none |
+| **B (now)** | **0 ms** | 376 ms ("It's accident-free and") | **17 of 18** | 2, of 44 and 27 ms |
+
+So the first sound of a reply the code writes comes about 0.5 s sooner: about 0.6 s after the caller stops (turn end 0.35 s, hearing about 0.26 s), against about 1.1 s with A and about 1.05 s with the fillers on 28 Oct. A model-written sentence starts with an opening less often (not measured). Not tested: whether a caller hears the join as a break; the owner's listening is the only check so far. Tests: `test_kokoro_tts.py` (4 added: the opening as a piece, the 3-word fallback, nothing lost or reordered, the setting choosing B or A and B's openings kept), `test_slot_openings.py` (B's offers ready in advance). `python -m pytest tests/unit`: 1,283 passed, 40 skipped.
 ## 34. Barge-in: interrupt by voice, and the agent goes on from what you heard (29 Oct, the owner's request)
 
 Branch `voice/barge-in`. The owner: "the barge in is wrong; while the model is speaking, if I interrupt it, it should understand and change the response". What was wrong, found reading the code:

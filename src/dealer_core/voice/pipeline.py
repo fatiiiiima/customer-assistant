@@ -52,27 +52,30 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
-        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads)
+        tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads, opening_first=cfg.voice.opening_first)
     else:
         tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies,
                          threads=cfg.tts.threads or 4)
     stt.warm_up()
     tts.warm_up()
     if hasattr(tts, "preload"):                         # the phrases said all the time play with no wait
-        tts.preload(common_phrases(cfg), first_only=slot_offer_openings())
+        tts.preload(common_phrases(cfg), first_only=slot_offer_openings(tts.pieces))
     return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
 
 
-def slot_offer_openings() -> list[str]:
+def slot_offer_openings(split=None) -> list[str]:
     """The sentences that offer test-drive times, as agent/wording.py writes them, with sample times: only their first piece is rendered in advance (voice/kokoro_tts.py first_only).
-    The first piece is the first four words, so it can be kept ahead of time where the day is the only thing that varies ("Today I can do", "The soonest is today:"), and not where a
-    time comes in the first four words ("Today I've got 9"). Measured 28 Oct: about 0.35 s to the first sound of every slot offer."""
+    It can be kept ahead of time where the day is the only thing that varies ("Today I can do", "The soonest is today:"), and not where a time comes in it ("Today I've got 9",
+    with A's four-word first piece; with B's three words it is "Today I've got", which is kept). `split`: how the voice cuts a sentence (default A). Measured 28 Oct: about 0.35 s
+    to the first sound of every slot offer."""
     from ..agent.wording import offer_slot_variants
+    from .kokoro_tts import first_piece_split
 
+    split = split or first_piece_split
     days = ["today", "tomorrow"] + [f"on {d}" for d in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")]
     out: list[str] = []
     for d in days:
-        out += [v for v in offer_slot_variants(d, "9 in the morning or 2 in the afternoon") if "9" not in " ".join(v.split()[:4])]
+        out += [v for v in offer_slot_variants(d, "9 in the morning or 2 in the afternoon") if "9" not in split(v)[0]]
     return out
 
 
