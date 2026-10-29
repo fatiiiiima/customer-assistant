@@ -272,6 +272,12 @@ def asks_if_only_one(text: str) -> bool:
 _NAME_CUE = re.compile(r"(?:my name is|the name is|name is|this is|i am|i'm|it is|it's|its|name's|call me|name:)\s+([A-Za-z][A-Za-z' ]*?)"
                        r"(?=\s+(?:and|my|phone|number|mobile|call|reach|you can)\b|[,.;:\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)",
                        re.I)
+# "the booking under Fatima", "put it under Omar Hassan": the answer to the agent's own "Who should I put the booking under?" (29 Oct: not read as a name). "Under" is also a budget
+# word ("under 100,000"), so the words after it must look like a name: no number, money or budget word.
+_UNDER_NAME = re.compile(r"\bunder(?: the name(?: of)?)?\s+([A-Za-z][A-Za-z' ]*?)"
+                         r"(?=\s+(?:and|my|phone|number|mobile|please|thanks|thank you)\b|[,.;:!?\d]|\s+(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b|$)", re.I)
+_NOT_A_NAME = {"ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "k", "grand", "dirhams", "dirham",
+               "aed", "budget", "price", "km", "kilometres", "kilometers", "miles", "the", "a", "an", "it", "that", "this", "me", "my"}
 _STOP = {"yes", "no", "ok", "okay", "yeah", "yep", "yup", "yea", "ya", "nope", "nah", "alright", "right", "cool", "awesome", "absolutely",
         "definitely", "certainly", "actually", "sounds", "lovely", "excellent", "exactly", "correct", "hey", "hmm", "er", "erm", "my", "the", "hello", "hi", "sure", "thanks", "thank", "please", "it", "its", "it's", "i", "i'm",
         "im", "am", "is", "this", "that", "that's", "number", "phone", "mobile", "and", "so", "well", "um", "uh",
@@ -305,6 +311,13 @@ def _digit_groups(text: str) -> str | None:
     return max(runs, key=len) if runs else None
 
 
+def names_someone(text: str) -> bool:
+    """Is a name given with a cue that cannot be anything else ("my name is ...", "under Fatima")? Then a "no" or "but" in front ("No, but the booking under Fatima")
+    does not make it a refusal."""
+    c = contact(text)
+    return bool(c.name) and bool(_NAME_CUE.search(text) or _UNDER_NAME.search(text))
+
+
 def contact(text: str) -> Contact:
     digits = _digit_groups(text)
     for val, _, _ in number_spans(tokens_of(text)):              # spoken digits ("zero five zero ...") and joined numbers
@@ -313,8 +326,11 @@ def contact(text: str) -> Contact:
     phone = normalize_phone(digits) if digits else None
     name = None
     m = _NAME_CUE.search(text)
+    under = _UNDER_NAME.search(text)
     if m:
         name = m[1].strip()
+    elif under and not any(w.lower() in _NOT_A_NAME or w.lower() in _STOP for w in under[1].split()):
+        name = under[1].strip()
     else:                                   # "Mohammed Al Mansoori, zero five zero ..." : the leading words before the number
         lead = re.split(r"[,.;:\d]| (?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b| and | my ", text, maxsplit=1, flags=re.I)[0]
         words = [w for w in lead.strip().split() if re.fullmatch(r"[A-Za-z']+", w)]
