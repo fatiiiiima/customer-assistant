@@ -28,6 +28,7 @@ from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
+from ..agent.wording import NARROW_QUESTIONS
 from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
 from ..agent.wording import OPENERS
 from ..dialogue.templates import greeting
@@ -114,9 +115,8 @@ def common_phrases(cfg: Config) -> list[str]:
             "Sure! What day would you like to come in?", "Of course. What day and time suit you?", "What day and time work for you?",
             "When would you like to come in?", "Perfect. Can I take your name and mobile number?", "Great. What's your name and mobile number?",
             "Great. And your name, please?", "Lovely. Who should I put the booking under?", "Which one would you like to hear more about?",
-            "Could you tell me your budget or a make?", "What budget do you have in mind, or is there a model you like?",
             "Sorry, I didn't catch that. Could you say it again?", "Thank you for calling AGMC. Goodbye!", "You're welcome!",
-            "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
+            *NARROW_QUESTIONS, "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",

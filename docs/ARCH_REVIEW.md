@@ -1256,3 +1256,32 @@ Seen in passing, not changed: "Something under 100,000." finds 8 cars, then asks
 Tests: `test_greeting.py`, 11 new.
 
 `python -m pytest tests/unit`: 1,392 passed, 40 skipped.
+
+## 48. Too many cars: ask about what the caller has not said (30 Oct, seen in section 47)
+
+Branch `fix/budget-reask`. "Something under 100,000." found 8 cars, then asked "Could you tell me your budget or a make?". The search's narrowing question only looked at whether a make had been given. Any other search got the budget-or-make question, even right after a budget.
+
+**Fix** (`wording.narrow_question`): the question is about what has not been said yet.
+
+| already said | asked |
+|---|---|
+| nothing, or only a type ("An SUV.") | "Could you tell me your budget or a make?" (as before) |
+| a make | "What budget do you have in mind, or is there a model you like?" (as before) |
+| a budget | "Is there a make you like, or a type of car, like an SUV?" |
+| a budget and a type | "Is there a make you like?" |
+| a make and a budget | "Is there a model you like, or a type of car?" |
+| a make, a budget and a type | "Is there a model or a colour you like?" |
+
+All six questions are fixed wording and are in the voice's start-up list (`common_phrases`), so each plays at once.
+
+At the prefix level the model rewords the question. It used to be told "budget, make, body type or colour"; it is now told only the ones still missing.
+
+Checked through the code's routing:
+* "Something under 100,000." → 8 cars, then "Is there a make you like, or a type of car, like an SUV?".
+* "An SUV under 150,000." → 8 SUVs, then "Is there a make you like?".
+
+Seen in passing, not changed: "Something between 50,000 and 80,000." is read as a budget of 130,000 (13 cars) instead of 50,000 to 80,000.
+
+Tests: `test_narrow_question.py`, 12 new.
+
+`python -m pytest tests/unit`: 1,393 passed, 40 skipped; with section 47 merged in, 1,404 passed, 40 skipped.
