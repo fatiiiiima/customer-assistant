@@ -1649,3 +1649,21 @@ For the owner's test only: it says whatever the model says, unchecked. Productio
 Tests: `tests/unit/test_model_only.py` (2). A turn the rules would route ("tell me about the Land Cruiser", then "yes") goes to the model. Only its words are said, a made-up price included and noted, and the prompt has no standard wording. Without the mode the same turn is the code's.
 
 Set aside, not committed: making "Do you have any reviews on this car?" say it has none ("reviews" as a topic that is always not on record). It is a fix to the code's own replies, which the owner is not testing now.
+
+## 61. In the test mode a reply has room for a list (30 Oct, the owner's first Nemotron-only call)
+
+The call (the owner's transcript):
+> I am looking for a Porsche.
+> I have a 2016 black Macan at 149,000 dirhams, Hello? Are you still there?
+
+The same happened again on the next turn. First sound came 2.5 s and 9.7 s after the caller.
+
+The cut: replayed here with the same settings on the local Qwen3-4B (free, `model_only` on, voice profile applied), the same turn stopped at the same place. MEASURED, the model's whole text was: "I have a 2016 Porsche Macan in black at 149,000 dirhams, a 2020 Porsche Cayenne in white at 285,000 dirhams, and a 2021 Porsche 911 in red at 495,". The reply token cap (`dialogue.max_reply_tokens` 70) ran out inside the list.
+
+The writer never speaks an unfinished sentence, so only the first clause was said. Outside the test mode the code finishes such a reply with its own facts and question (section 60 turned that off), which is why it was not heard before. INFERRED: Nemotron was cut the same way. Its first clause is the same, and nothing followed it.
+
+Fix (`voice/pipeline.apply_voice_profile`): with `voice.model_only` the reply cap is at least 200 tokens (`MODEL_ONLY_TOKENS`). With it, the same replay gave the whole list, all three cars really in stock, and "Which one would you like to hear more about?" (MEASURED, 3.0 s to the end of the reply on the local model). The prompt still asks for at most 30 words. Test: `test_model_only.py::test_in_the_test_mode_a_voice_reply_has_room_for_a_list`.
+
+Also seen in the replay: to "do you have any other Porsche cars?" the model said "We don't have any other Porsche models in stock." The check notes it ("says there are no porsche cars, but there are") and, in this mode, lets it through. That is the kind of sentence the checks exist for.
+
+UNKNOWN: why the second turn took 9.7 s. The worker's own log for that turn (its "stream:" and timing lines) would say; it was not read. One way it could happen (GUESS): the stream stalled until the 6 s backend timeout, then the engine's one retry.

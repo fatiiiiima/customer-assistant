@@ -43,3 +43,17 @@ def test_without_the_test_mode_the_same_turn_is_the_codes():
     e, _ = agent(None, backend=b)
     r = said(e, e.new_session(), "tell me about the Land Cruiser")
     assert not b.prompts and r.debug.via == "agent:rules" and r.reply != SAYS
+
+
+def test_in_the_test_mode_a_voice_reply_has_room_for_a_list():
+    """30 Oct, Nemotron alone: the 70-token cap cut a three-car list after its first clause, and nothing finished it."""
+    from dealer_core.app import build_app
+    from dealer_core.config import load_config
+    from dealer_core.voice.pipeline import MODEL_ONLY_TOKENS, apply_voice_profile
+
+    for on, want in ((False, 70), (True, MODEL_ONLY_TOKENS)):
+        cfg = load_config(environ={"VA__VOICE__MODEL_ONLY": str(on).lower()})
+        b = Scripted()
+        app = build_app(cfg, classifier=b, reply_mode="conversational", lead_backend=b, engine="agent")
+        apply_voice_profile(app, cfg)
+        assert app.engine.reply_writer.max_tokens == want and app.engine.model_only is on
