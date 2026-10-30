@@ -11,6 +11,94 @@ Written 28 Oct 2026 from the second review (`docs/ARCH_REVIEW_new.md`) and the d
 * Keep `pytest tests/unit` green. Every behaviour change gets a test; the words logs in `logs/audio_dump/*_in.txt` are the replay material for conversation tests.
 * Labels: MEASURED means a number in the docs or logs supports it; INFERRED means it follows from the code; GUESS means it must be measured before it is believed.
 
+## 30 Oct: the conversational agent (the owner's vision; supersedes Phase 0, extends Phase 3, tightens the goal)
+
+The owner, 30 Oct: "It should be flexible, and be able to answer anything the user asks. If it doesn't know, it should clearly state it doesn't know. Basically function like a fully conversational voice bot, but built for the used cars website." The model now runs on Amazon Bedrock (an OpenAI-compatible endpoint, "Mantle"), so the local-GPU limit that made the code-written replies the product (see "Why it sounds scripted") goes away.
+
+**The owner's decisions (30 Oct)**
+
+| Question | Decision |
+|---|---|
+| Off-topic questions (football, the weather) | Decline politely and steer back to cars |
+| A dealership fact that is not in our data | Say plainly that it is not known. No callback offer |
+| Arabic | Not yet: English only |
+| Speed | **Never more than 1 s** from the end of the caller's speech to the first sound. Up to 1 s is fine |
+| Prices | Fixed. No negotiation |
+
+**What the agent may say, by kind of question**
+
+1. *About this dealership* (stock, a car's price, kilometres, colour, history, warranty, finance terms, opening hours, test-drive slots): only what a tool returned this turn. A field we do not hold is given to the model explicitly as "not recorded" (for example accident history), so the honest answer is in front of it: "I don't have that information."
+2. *General car knowledge* ("Is a hybrid worth it?", "Camry or Accord for a family?"): from the model's own knowledge, said as general advice, never as a fact about one of our cars.
+3. *Anything else*: one polite sentence declining, then back to cars ("I can only help with cars here. Are you looking for anything in particular?").
+
+**Who does what**
+
+* The model holds the conversation. It writes every reply and chooses the tools (function calling), in one call per turn.
+* The code keeps the facts and the actions. Today's `engine.py` tools become the model's tools: `search_cars`, `get_car`, `best_of`, `compare_cars`, `colours`, `browse_makes`, `check_slots`, `prepare_booking`, `confirm_booking`, `fix_booking`, `cancel_draft`, `my_bookings`, `cancel_booking`, `reschedule_booking`, `showroom_info`, `end_call`.
+* Exact lines stay code-written and are said verbatim: the slot offer, the booking read-back and confirmation, "speak up", the silence prompts (section 49). No booking, cancellation or change without a confirmed yes, as today.
+* Guards after the model, before the voice (Phase 3, unchanged): every number, price, year, colour and model name must be in this turn's tool results; no discount, no "I can do", no promise (`voice_rules`); a reply that fails is not said, and the code path answers that turn.
+
+**The 1 s ceiling, honestly**
+
+MEASURED on a test worker with eve, when the first sentence is ready the instant the turn ends (section 42, code level): end of speech to first sound 0.73 to 0.79 s. So turn-end detection, recognition and the voice already use about 0.75 s. That leaves about 0.25 s for a network model to return its first clause. GUESS: no model reached over the network does that on every turn, and many will not on the median. Therefore:
+
+* **A watchdog makes the ceiling a guarantee.** If the model's first clause is not ready 1.0 s after the caller stopped speaking (minus the voice's own ~0.1 s), the code says a short ready-made bridge at once ("Let me check that.", "Good question."), and the model's answer follows it. That guarantees a first *sound* within 1 s on every turn. It cannot guarantee the *answer* within 1 s; no design can, with a model over a network.
+* **Earn back the 0.75 s, so the bridge is rare.** Start the model on the transcript while Smart Turn is still deciding (`voice/speculate.py`, built, off on the laptop); recognition streamed during speech (Phase 4); the model told to open with a short clause; prompt caching for the fixed part of the prompt (INFERRED available on Bedrock for some models); the Bedrock region nearest the callers; one kept-open connection per worker.
+* **The bridge rate is a number we report**, per model: the share of turns where the model's own first clause made it inside 1 s. A bridge on every turn sounds robotic, so the choice of model depends on it.
+* **When Bedrock is slow or down** (no first clause in 3 s, or an error): today's code path answers that turn. That is all that remains of the templates.
+
+**What is retired, once the new path passes its gate**
+
+The regular-expression intent routing in front of the model (`_fast_decide`, `_FLEXIBLE`, `_DELEGATES`), the separate decision call, the opener rotation and two-group templates, the model's rewording of a code-written question (`_check_continuation`, `_novel_words`), and the governor's prefix level as the normal way of speaking. They stay as the fallback above, behind the same switch.
+
+**What stays as it is**: hearing (Smart Turn, the background and first-turn gates, speak-up), barge-in and "what the caller heard", the caller-first start and silence clock, the call store and carry-on, eve and its fallbacks, the booking store, the site messages.
+
+**The cars come from the database, not from `data.js`** (the owner, 30 Oct: "when we go live, the data should be in a database. What if we have thousands of cars?")
+
+Today (INFERRED from the code):
+* The 24 demo cars and the showroom details are written in the website's `site/data.js`.
+* At start-up a worker copies the cars into an inventory (in-memory SQLite, or PostgreSQL when `DATABASE_URL` is set: `repos/pg_store.py`). The full spec sheets and showroom details are read into memory only (`site/details.py`, `svc.site.cars`).
+* The website reads `data.js` directly.
+* Several fields are not records at all: data.js works them out by rule for every car. "Accident-free" and "GCC specs" are set on every car; the service history comes from the owner count; the warranty from age and kilometres; the inspection score is computed.
+
+Target:
+* **One PostgreSQL database is the only source.** Cars, with every spec as a column (seats, power, body, fuel, transmission, drivetrain, consumption, boot, owners, features, blurb, colour, photos), the status (available, reserved, sold), branches (address, hours, contacts), bookings and reservations (already there), and calls (already there).
+* **A fact we do not hold is NULL and is said as "not recorded".** That covers accident history, service history and warranty, until a real source fills them; nothing is derived by rule.
+* **`floor_price`** (a negotiation floor) is unused under the fixed-price decision.
+* **The website reads an API** (`/api/cars` with filters, `/api/cars/{id}`, `/api/showroom`) instead of `data.js`. `data.js` becomes the demo seed, imported by a script.
+* **The voice tools read the database on every search:**
+  * the spec sheet comes from the database, not from memory;
+  * seats and "sporty" become SQL filters (today up to 200 cars are fetched and filtered in Python);
+  * nothing loads the whole stock;
+  * the status is read live, and locked again when a car is booked or reserved.
+* **Names as callers say them** ("LC300", "the Land Cruiser"): indexes on make, model, price, body, status and branch, plus a fuzzy name match (PostgreSQL's trigram index; INFERRED suitable).
+* **Whisper's hint list of makes and models** is built from the database, limited to what fits: the makes in stock first, then the models already named in the call.
+* **Who keeps it current** is the owner's question to AGMC: where does the real stock live today (a dealer management system, a spreadsheet)? The importer depends on the answer (UNKNOWN).
+
+Done when:
+* the website and the voice server run with no read of `data.js`;
+* the demo cars imported into the database give the same replay outcomes as today;
+* a load test with 5,000 generated cars records search, count and spec-sheet times, median and p99. A target for p99 is under 20 ms, so the data never shows in the 1 s budget (GUESS; measure);
+* the speech hint list stays within Whisper's limit.
+
+**Steps** (one branch and pull request each, no step starts before the one before it has its numbers; step 0 and step 1 are independent and may run side by side)
+
+0. *The database as the only source of cars* (above). It goes first because every tool the model will call reads it, so the tools are built once, on the real data layer. It does not wait for Bedrock: a database search is milliseconds against a model's hundreds (INFERRED), so it does not change which model wins.
+1. *Bedrock baseline* (needs a working key; costs money, asked first). List the models on Mantle. For each candidate, from this laptop and with the real prompt and tools: time to first token and to the first clause, median, p90 and worst over at least 100 requests; tool-call accuracy on the replay set; cost per turn. Pick at most three models to carry on.
+2. *The scoring set* (no model calls needed to build it): the owner's recorded calls (`logs/audio_dump/*_in.txt`) plus written cases for each kind of question above: "Do you have a Tesla?", "Can you do 60,000?", "Is it accident-free?", "What's your warranty?", "Who won the match?", "Is a hybrid worth it?", a booking, a reschedule, an interruption.
+3. *The new path behind a switch* (`dialogue.mode: conversational`): one call per turn with tools, streamed sentence by sentence to the voice, the guards, the watchdog bridge, the fallback.
+4. *Replay and compare* both paths on the scoring set and on test calls.
+
+**Done when**, on the chosen model:
+* the first sound arrives within 1.0 s on 100% of turns (the watchdog), and the model's own first clause within 1.0 s on a share the owner accepts;
+* zero facts outside the tool results over the whole scoring set;
+* every unknown dealership fact gets "I don't have that information";
+* every off-topic question is declined and steered back;
+* no negotiation;
+* bookings end the same as today on the replays.
+
+**Changes to the phases below**: Phase 0 (a vLLM GPU server) is replaced by step 1. Phase 2's single call is step 3. Phase 3 stands, with the three kinds of question above added to the model's rules and to its tests. The goal's 1 s median / 1.5 s p90 becomes 1 s on every turn, by the watchdog.
+
 ## Goal and the time budget
 
 End of the caller's speech to the first sound of the reply, under 1 s on the median and under 1.5 s at p90, while sounding like a person. What the budget has to look like, against the 28 Oct call on the laptop (tap mode, small.en on CPU, Ollama):
