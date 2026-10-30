@@ -50,7 +50,7 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     else:
         stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies,
                               precision=cfg.voice.stt_precision, threads=cfg.voice.stt_threads)
-    if cfg.tts.backend in ("kokoro", "chatterbox"):     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
+    if cfg.tts.backend in ("kokoro", "chatterbox", "pocket"):   # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
         tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads, opening_first=cfg.voice.opening_first,
@@ -65,6 +65,16 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
             kokoro_ready = kokoro.preload(common_phrases(cfg), first_only=slot_offer_openings(kokoro.pieces))     # the fallback, as Kokoro would be
             tts.preload(common_phrases(cfg), first_only=())          # (Kokoro's part already done above; the server's made in the background)
             logger.debug(f"voice: chatterbox at {cfg.tts.url}, Kokoro ready as fallback in {kokoro_ready:.1f} s")
+            return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
+        if cfg.tts.backend == "pocket":                 # Pocket-TTS's eve; its alba from another server when that fails; Kokoro, the last resort, only when both do
+            from .remote_tts import StreamingVoice
+
+            alba = StreamingVoice(cfg.tts.pocket_fallback_url, tts, model="pocket", voice=cfg.tts.pocket_fallback_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s)
+            tts = StreamingVoice(cfg.tts.pocket_url, alba, model="pocket", voice=cfg.tts.pocket_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s)
+            stt.warm_up()
+            tts.warm_up()                               # warms alba and Kokoro too (each warms its fallback)
+            tts.preload(common_phrases(cfg), first_only=())          # eve's versions, made in the background (Kokoro's are not made: it speaks only if both servers are down)
+            logger.debug(f"voice: {tts.name}")
             return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
     else:
         tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies,

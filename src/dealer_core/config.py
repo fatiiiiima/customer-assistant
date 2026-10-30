@@ -97,9 +97,16 @@ class LlmCfg(_Strict):
 
 
 class TtsCfg(_Strict):
-    backend: Literal["piper", "kokoro", "chatterbox"] = "kokoro"      # chatterbox: a streaming voice server (scripts/chatterbox_server.py), Kokoro the fallback (section 39)
+    backend: Literal["piper", "kokoro", "chatterbox", "pocket"] = "pocket"   # pocket (owner, 30 Oct: "wire in eve, make alba the fallback"; section 42): Pocket-TTS's eve from
+                                            # scripts/pocket_server.py, its alba from the speech toolkit's server when that fails, Kokoro only when both do.
+                                            # chatterbox: a streaming voice server (scripts/chatterbox_server.py), Kokoro the fallback (section 39)
     url: str = "http://127.0.0.1:8030/v1"   # chatterbox: the voice server
     first_timeout_s: float = 2.0            # chatterbox: no audio from the server by then and the sentence is said by Kokoro
+    pocket_url: str = "http://127.0.0.1:8040/v1"            # pocket: Kyutai's Pocket-TTS (scripts/pocket_server.py, ~/pocketenv)
+    pocket_voice: str = "eve"
+    pocket_fallback_url: str = "http://127.0.0.1:8020/v1"   # pocket: the speech toolkit's server (speech-server --port 8020), a separate program, so it still speaks when the first is down
+    pocket_fallback_voice: str = "alba"                     # (the only voice that build has)
+    pocket_first_timeout_s: float = 1.0     # pocket: no audio by then and the next voice says the sentence (eve's first sound: worst 155 ms with the GPU busy, section 41)
     kokoro_runtime: Literal["auto", "openvino", "onnxruntime"] = "auto"   # auto: OpenVINO on Intel / AMD, ONNX Runtime on Apple chips (OpenVINO distorts the voice there)
     kokoro_voice: str = "sarah"         # kokoro backend: sarah / heart / bella / emma (female), michael / adam / puck / eric / liam / onyx (US male), fenrir, george / lewis (UK male)
     voice: str | None = "joe"           # Piper voice folder name (see voice/tts.py VOICES). Owner choice: Joe (CC0)

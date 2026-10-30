@@ -1009,3 +1009,40 @@ Not measured:
 * Several calls at once: the package is not thread-safe, so the server makes one sentence at a time, and a second call would mean a second model (about 0.5 GB of memory, INFERRED).
 
 `python -m pytest tests/unit`: 1,328 passed, 40 skipped.
+
+## 42. Pocket-TTS's eve as the worker's voice, alba the fallback (30 Oct, the owner: "wire in eve, make alba the fallback cause kokoro sucks")
+
+Same branch as sections 40 and 41.
+
+* **`tts.backend: pocket`**, now the default (config.py and config/default.yaml; `--tts pocket`). The voice is three `StreamingVoice`s in a chain:
+  * eve from `scripts/pocket_server.py` (port 8040, Kyutai's package);
+  * alba from the speech toolkit's server (port 8020, CoreML), when eve fails;
+  * Kokoro, only when both fail.
+
+  The two Pocket servers are separate programs on separate runtimes, so one crashing leaves the other. `tts.pocket_first_timeout_s` (1 s): no audio by then and the next voice says the sentence. Eve's worst first sound with the GPU busy was 155 ms (section 41).
+* **`StreamingVoice`** takes a `voice` and sends it by name. Its fallback can be another `StreamingVoice`. Each one warms its fallback at start, and the log names the voice that took over. Eve's versions of the phrases said all the time are made in the background as before. Kokoro's are no longer made, since it speaks only if both servers are down.
+* **How to run it:** docs/VOICE.md, "The voice".
+
+Tests: `test_remote_tts.py`, 4 new:
+* eve asked for by name;
+* eve down, so alba says the sentence and Kokoro does not;
+* both down, so Kokoro still speaks and the worker still starts;
+* pocket is the default.
+
+MEASURED, M3 Pro, the five-turn synthetic call of section 39 through a test worker (hands-free, recorded, `scripts/call_latency.py`):
+
+| voice, quality level | voice wait (said -> first audio), median / worst | total wait, median / worst | sentences said by a fallback |
+|---|---|---|---|
+| Kokoro, joins trimmed, prefix (section 39) | 0.00 s | 0.70 s | |
+| Chatterbox, prefix (section 39) | 1.04 / 1.42 s | 1.75 s | |
+| **eve, code** | **0.08 / 0.09 s** | 0.73 / 0.78 s | 0 |
+| **eve, prefix** (the language model on the GPU at the same time) | **0.09 / 0.11 s** | 0.79 / 0.79 s | 0 |
+| eve's server stopped: alba, code | 0.05 / 0.06 s | 0.70 / 0.74 s | 10 of 10 by alba, 0 by Kokoro |
+
+Eve costs about 0.1 s a turn against Kokoro's ready-made openings, and it is not slowed by the language model. Chatterbox cost about 1 s a turn at the prefix level.
+
+Not measured:
+* Several calls at once: each Pocket server makes one sentence at a time. Eve makes speech in about 0.14 of the time it takes to say, so one server should keep up with a few calls (INFERRED, not measured).
+* The deployment, which has no Mac. Pocket runs on a CPU there, but the speech toolkit's alba build is Mac-only, so the fallback there would be alba from a second `pocket_server.py` (`--voice alba`).
+
+`python -m pytest tests/unit`: 1,332 passed, 40 skipped.
