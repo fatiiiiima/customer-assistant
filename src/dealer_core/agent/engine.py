@@ -745,7 +745,7 @@ class AgentEngine:
         topics = [t for t in A.topics_in(joined) if t != "about"]
         if topics or A.asked_feature(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or any(p.search(joined) for p in _ATTRIBUTE.values()):
             return "car"
-        if getattr(self.svc, "site", None) is not None and A.showroom_topics(joined):
+        if A.showroom_topics(joined):
             return "showroom"
         return None
 
@@ -774,11 +774,11 @@ class AgentEngine:
         """The answer to a side remark in the middle of a booking, from the data only ("" when there is nothing to say)."""
         words = " ".join(ex.tokens_of(text))
         car = self.svc.get_car(s.car) if s.car else None
-        d = self.svc.site.cars.get(s.car) if (car is not None and getattr(self.svc, "site", None) is not None) else None
+        d = self.svc.details(s.car) if car is not None else None
         if kind == "think":
             return "No problem, take your time."
         if kind == "showroom":
-            return " ".join(A.showroom_answer(self.svc.site, words) or [])
+            return " ".join(A.showroom_answer(self.svc.showroom(), words) or [])
         if car is None:
             return ""
         if HAGGLE.search(words) or _VALUE.search(words):
@@ -825,7 +825,8 @@ class AgentEngine:
         """The facts that hold while this car is discussed: its line and its whole spec sheet (the start of the model's prompt, see _speaking_input and prefetch)."""
         return [fact_sheet([car], self._branch_name),
                 f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
-                + " ".join(A.group_sentence(g, d) for g in A.FACT_GROUPS) + f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}."]
+                + " ".join(x for x in (A.group_sentence(g, d) for g in A.FACT_GROUPS) if x) + (f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}." if d.drive else "")
+                + " Anything not listed here is not recorded: say you don't have it on record."]
 
     def prefetch(self, s: Session) -> int:
         """While the agent speaks, send the start of the next likely prompt to the model server, which keeps what it reads (29 Oct, the owner's call: the first
@@ -835,13 +836,12 @@ class AgentEngine:
         Returns how many prompts were queued."""
         if not (self.prefetch_on and self.model_speaks and self.reply_writer is not None) or s.ended or s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back:
             return 0
-        site = getattr(self.svc, "site", None)
         said = s.last_agent()
         named = [c.stock_id for c in s.shown if c.model in said][:3]    # cars just read out or offered ("...the Mazda CX-5 at 89,900 and the Tucson..."): the caller may pick one
         ids = list(dict.fromkeys([*named, *([s.car] if s.car else [])]))
         starts = []
         for cid in ids:
-            car, d = self.svc.get_car(cid), (site.cars.get(cid) if site is not None else None)
+            car, d = self.svc.get_car(cid), self.svc.details(cid)
             if car is not None and d is not None:
                 stable = "\n".join([*self._car_facts(car, d), PRICE_RULE])
                 starts.append(self.reply_writer.prompt_start(WriterInput(caller="", core="", risk="low", history=list(s.history), stable=stable, history_base=s.forgotten)))
@@ -882,7 +882,7 @@ class AgentEngine:
         if question and not booking_step and is_generic_closer(question) and facts_part:
             core, awaiting = facts_part, False
         car = self.svc.get_car(s.car) if s.car else None
-        d = self.svc.site.cars.get(s.car) if (s.car and getattr(self.svc, "site", None) is not None) else None
+        d = self.svc.details(s.car)
         stable, lines = [], []
         focus = f"- {T.car_name(car)}:" if car is not None and d is not None else None
         for line in result["facts"]:
@@ -1215,7 +1215,7 @@ class AgentEngine:
             return {"tool": "search_cars", "via": "rules"}                       # "now I'm looking for any BMW": a new search, not the car before
         if not s.car or s.ended:
             return None
-        detail = s.car in self.svc.site.cars and (A.topics_in(joined) or A.asked_feature(joined))
+        detail = (A.topics_in(joined) or A.asked_feature(joined)) and self.svc.details(s.car) is not None
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or detail)
                 and not _BOOKING_CUE.search(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
@@ -1321,11 +1321,14 @@ class AgentEngine:
 
     def _spec_facts(self, c: CarView) -> str:
         """The site's spec sheet for a car, for the model to answer from ("is it a good family car?"): seats, drive, economy, boot, warranty."""
-        d = self.svc.site.cars.get(c.stock_id)
+        d = self.svc.details(c.stock_id)
         if d is None:
             return ""
-        return (f", {d.seats} seats, {A.DRIVE.get(d.drive.upper(), d.drive)}, {c.fuel}, {d.power_hp} hp, uses {d.consumption}, boot {d.boot_litres} litres, "
-                f"{d.accident}, {d.owners} previous owner(s), warranty {d.warranty}")
+        parts = [f"{d.seats} seats" if d.seats is not None else "", A.DRIVE.get(d.drive.upper(), d.drive) if d.drive else "", c.fuel,
+                 f"{d.power_hp} hp" if d.power_hp is not None else "", f"uses {d.consumption}" if d.consumption else "",
+                 f"boot {d.boot_litres} litres" if d.boot_litres is not None else "", A.spoken(d.accident) if d.accident else "",
+                 f"{d.owners} previous owner(s)" if d.owners is not None else "", f"warranty {A.spoken_warranty(d.warranty)}" if d.warranty else ""]
+        return "".join(f", {x}" for x in parts if x)                    # what the sheet does not record is left out, not guessed
 
     def _t_browse_makes(self, s, args, text, dbg) -> dict:
         """What else is in stock, by make: after a booking or a search, "what other cars do you have?" means the rest of the showroom."""
@@ -1368,7 +1371,7 @@ class AgentEngine:
             text = text if A.superlative_topic(" ".join(ex.tokens_of(text))) else "best for a family"
         if s.filters and len(pool) < 2:
             pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**{k: v for k, v in s.filters.items() if k in ("make", "model", "max_price")}), 50)]
-        line = A.best_of([c for c in pool if c], self.svc.site.cars, " ".join(ex.tokens_of(text)))
+        line = A.best_of([c for c in pool if c], self.svc.details_for(c.stock_id for c in pool if c), " ".join(ex.tokens_of(text)))
         if not line:
             return self._t_none(s, args, text, dbg)
         winner, sentence = line
@@ -1454,28 +1457,18 @@ class AgentEngine:
             f["fuel"] = fuel
         need_seats = 7 if (_SEATS.search(words) or f.get("seats")) else None          # kept for "any budget" after "seven seats"
         sporty = bool(_SPORTY.search(words) or f.get("sporty"))
-        if fuel and not (need_seats or sporty):
-            every = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(filters, 200)]
-            keep = sorted([c for c in every if c and c.fuel == fuel], key=lambda c: c.price)
-            full = keep
-            from ..tools.results import SearchResult
-            from ..tools.service import VOICE_MAX_CARS
-            res = SearchResult(total=len(keep), cars=tuple(keep[:VOICE_MAX_CARS]), needs_narrowing=len(keep) > VOICE_MAX_CARS)
-        elif (need_seats or sporty) and self.svc.site.cars:                   # what the spec sheet knows and the search cannot filter on
-            every = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(filters, 200)]
-            keep = [c for c in every if c and (d := self.svc.site.cars.get(c.stock_id)) and (not need_seats or d.seats >= need_seats)
-                    and (not sporty or d.power_hp >= 250)]
-            keep.sort(key=lambda c: -self.svc.site.cars[c.stock_id].power_hp if sporty else c.price)
-            full = keep
-            from ..tools.results import SearchResult
-            from ..tools.service import VOICE_MAX_CARS
-            res = SearchResult(total=len(keep), cars=tuple(keep[:VOICE_MAX_CARS]), needs_narrowing=len(keep) > VOICE_MAX_CARS)
-            f["seats"] = f"{need_seats}+" if need_seats else f.get("seats")
-            f["sporty"] = True if sporty else f.get("sporty")
-            f = {k: v for k, v in f.items() if v is not None}
-        else:
-            res = self.svc.search_cars(filters)
-            full = None
+        if fuel or need_seats or sporty:                                 # in the database query: the fuel, and what only the spec sheet records (seats, power)
+            spec = {"fuel": fuel, "min_seats": need_seats, "min_power": 250 if sporty else None, "sort": "power" if sporty else "price"}
+            if (need_seats or sporty) and not self.svc.inventory.count(SearchFilters(include_unavailable=True, min_seats=0 if need_seats else None,
+                                                                                    min_power=0 if sporty else None)):
+                spec = {"fuel": fuel}                                    # no car has it recorded (the demo stock): it cannot be searched on
+            elif need_seats or sporty:
+                f["seats"] = f"{need_seats}+" if need_seats else f.get("seats")
+                f["sporty"] = True if sporty else f.get("sporty")
+                f = {k: v for k, v in f.items() if v is not None}
+            filters = filters.model_copy(update=spec)
+        res = self.svc.search_cars(filters)
+        full = None
         dbg.tools.append(f"search_cars({f}) -> {res.total} match(es)")
         wanted = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in f.items()) or "anything"
         if not res.cars and _CHEAPER.search(words) and base is not None:
@@ -1594,7 +1587,7 @@ class AgentEngine:
         facts = ["Prices are fixed (no negotiation).", *fact_sheet([car], self._branch_name).splitlines()]
         words = " ".join(ex.tokens_of(text))
         ask = lambda: W.offer_test_drive(s)        # the closing question, chosen only when it is used (an invitation to visit is not made in two answers running, nor after a no)
-        d = self.svc.site.cars.get(car.stock_id)
+        d = self.svc.details(car.stock_id)
         told = s.said_about.setdefault(car.stock_id, [])
         topics = A.topics_in(words)
         pushed = bool(HAGGLE.search(words)) or self._offer_on(s, car, words)
@@ -1623,9 +1616,10 @@ class AgentEngine:
             if part:
                 return {"core": " ".join(part) + " " + ask(), "facts": facts, "awaiting": True}
             if d is not None and _FAMILY.search(words):                  # "is it a good family car?": what a family would ask about
-                said = [f"It seats {d.seats}, with a {d.boot_litres}-litre boot, and it's {d.accident} with a {d.service}."]
-                A.mark_said(told, ["boot", "accident", "service"])
-                return {"core": " ".join(said) + " " + ask(), "facts": facts, "awaiting": True}
+                said = [x for x in (A.group_sentence("practical", d), A.group_sentence("condition", d)) if x]
+                if said:
+                    A.mark_said(told, ["boot", "accident", "service"])
+                    return {"core": " ".join(said) + " " + ask(), "facts": facts, "awaiting": True}
             if d is not None:                                            # "is it reliable?", "something else about it": the next facts not told yet, the car's condition first for an opinion question
                 return self._more_about(s, car, d, told, facts, ask, prefer=("condition",) if _OPINION.search(words) else ())
         s.described = car.stock_id
@@ -1665,8 +1659,8 @@ class AgentEngine:
     def _more_about(self, s: Session, car, d, told: list[str], facts: list[str], ask, prefer: tuple[str, ...] = ()) -> dict:
         """The next one or two groups of facts about this car that the caller has not heard; when there are none, say so rather than repeat one."""
         s.described = car.stock_id
-        if prefer and prefer[0] in told:                                 # asked "is it reliable?" and the condition was already told: it IS the answer, said again briefly
-            again = A.group_sentence(prefer[0], d)
+        again = A.group_sentence(prefer[0], d) if prefer and prefer[0] in told else None
+        if again:                                                        # asked "is it reliable?" and the condition was already told: it IS the answer, said again briefly
             return {"core": again + " " + ask(), "facts": facts + [f"Answered from the spec sheet: {again}"], "awaiting": True}
         sentences = A.next_facts(d, told, prefer)
         if not sentences:
@@ -2131,7 +2125,8 @@ class AgentEngine:
         return {"core": f"{line} Is there a colour you'd like?", "facts": [line], "awaiting": True}
 
     def _t_showroom_info(self, s, args, text, dbg) -> dict:
-        lines = A.showroom_answer(self.svc.site, " ".join(ex.tokens_of(text))) or [f"Our showroom is on {self.svc.site.location or 'Sheikh Zayed Road'}."]
+        site = self.svc.showroom()
+        lines = A.showroom_answer(site, " ".join(ex.tokens_of(text))) or [f"Our showroom is on {site.location or 'Sheikh Zayed Road'}."]
         return {"core": " ".join(lines) + " " + W.anything_else(s), "facts": lines, "awaiting": False}
 
     def _t_repeat(self, s, args, text, dbg) -> dict:
@@ -2165,7 +2160,7 @@ class AgentEngine:
         if len(cars) < 2:
             return {"core": "Which two cars would you like me to compare?", "facts": ["Two cars are needed for a comparison."], "awaiting": True}
         a, b = cars
-        lines = A.compare(a, self.svc.site.cars.get(a.stock_id), b, self.svc.site.cars.get(b.stock_id))
+        lines = A.compare(a, self.svc.details(a.stock_id), b, self.svc.details(b.stock_id))
         s.shown, s.car, s.state = [a, b], None, State.ANSWERING
         dbg.tools.append(f"compare({a.stock_id}, {b.stock_id})")
         return {"core": " ".join(lines) + " Which one would you like to hear more about?", "awaiting": True,

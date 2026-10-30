@@ -353,7 +353,7 @@ def fact_sheet(cars, branch_name) -> str:
     lines = []
     for c in cars:
         lines.append(f"- {c.year} {c.make} {c.model}: {c.color}, {c.km:,} kilometres, {c.price:,} dirhams, {c.transmission} gearbox, "
-                     f"{c.fuel}, {c.regional_spec} spec, {'full service history' if c.service_history else 'no service history on file'}, "
+                     f"{c.fuel}, {c.spec_said()}, {c.service_said().removeprefix('a ')}, "
                      f"at our {branch_name(c)}, {c.status.value}")
     return "\n".join(lines)
 

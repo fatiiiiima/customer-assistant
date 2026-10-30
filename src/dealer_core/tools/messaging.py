@@ -34,7 +34,7 @@ def compose_details(cars: list[CarView], licence_note: str | None = None) -> tup
     lines = []
     media: list[str] = []
     for c in cars:
-        lines.append(f"{c.year} {c.make} {c.model} ({c.stock_id}): {c.km:,} km, AED {c.price:,}, {c.color}, {c.regional_spec} spec, "
+        lines.append(f"{c.year} {c.make} {c.model} ({c.stock_id}): {c.km:,} km, AED {c.price:,}, {c.color}, {c.spec_said()}, "
                      f"{c.fuel}, {c.transmission}. Branch {c.branch_id}.")
         media.extend(c.image_urls[:3])
     if licence_note:

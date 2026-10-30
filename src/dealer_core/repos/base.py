@@ -7,7 +7,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from ..models import Booking, Car, NewBooking, SearchFilters
+from ..models import Booking, Car, CarStatus, NewBooking, SearchFilters
+from ..site.details import CarDetails, SiteInfo
 
 
 class InventoryRepository(Protocol):
@@ -21,6 +22,23 @@ class InventoryRepository(Protocol):
 
     def vocabulary(self) -> dict[str, list[str]]:
         """{make: [models]} for cars that can be sold: builds the NLU make/model gazetteer from real stock."""
+
+    def details(self, stock_id: str) -> CarDetails | None:
+        """The car's spec sheet (any field None: not recorded), or None when there is none."""
+
+    def details_many(self, stock_ids) -> dict[str, CarDetails]: ...
+
+    def showroom(self) -> SiteInfo:
+        """Hours, locations, phone, WhatsApp, email (SiteInfo() when none was imported)."""
+
+    def version(self) -> int:
+        """Goes up with every change to the stock (an import, a car sold): the website API's cache key."""
+
+    def snapshot(self) -> dict[str, tuple[Car, CarDetails | None]]: ...
+
+    def apply_sync(self, cars: list[Car], details: list[CarDetails], statuses: dict[str, CarStatus], showroom: SiteInfo | None,
+                   meta: dict[str, str]) -> None:
+        """One transaction (inventory/sync.py): upsert the cars and spec sheets, set the statuses, the showroom and the meta."""
 
 
 class BookingRepository(Protocol):

@@ -157,9 +157,9 @@ def car_summary(c: CarView, branch_name: str) -> str:
 def more_details(c: CarView, branch_name: str) -> str:
     """"yes" to "would you like to hear more, or book a test drive?": the details, then the booking offer."""
     gearbox = f"{'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox"
-    service = "a full service history" if c.service_history else "no service history on file"
+    service = c.service_said()
     # only what the listing did not already say (it gave the name, kilometres and price)
-    return (f"It's {c.color}, {c.regional_spec} spec, with {gearbox} and {service}, at our {branch_name}. "
+    return (f"It's {c.color}, {c.spec_said()}, with {gearbox} and {service}, at our {branch_name}. "
             "Would you like to book a test drive?")
 
 
@@ -168,8 +168,8 @@ def attribute_clause(key: str, c: CarView, branch_name: str) -> str | None:
         "km": f"it has {c.km:,} kilometres", "color": f"it's {c.color}", "year": f"it's a {c.year} model",
         "price": f"it's priced at {money(c.price)}", "fuel": ("it's electric" if c.fuel == "electric" else "it's a hybrid" if c.fuel == "hybrid" else f"it runs on {c.fuel}"),
         "transmission": f"it has {'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox",
-        "spec": f"it's {c.regional_spec} spec",
-        "service": "it has a full service history" if c.service_history else "there is no service history on file",
+        "spec": f"it's {c.spec_name} spec" if c.spec_name else "its regional spec isn't recorded",
+        "service": {True: "it has a full service history", False: "there is no service history on file", None: "its service history isn't recorded"}[c.service_history],
         "branch": f"it's at our {branch_name}",
         "availability": {"available": "it's still available", "reserved": "it's currently reserved", "sold": "it has been sold"}[c.status.value],
     }.get(key)

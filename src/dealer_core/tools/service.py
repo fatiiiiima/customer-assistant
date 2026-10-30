@@ -14,6 +14,7 @@ from ..errors import (BookingNotFound, CarNotFound, CarUnavailable, DuplicateBoo
 from ..models import Booking, Car, CarStatus, CarView, NewBooking, SearchFilters
 from ..policy.negotiation import DecisionKind, NegotiationEngine, NegotiationState
 from ..repos.base import BookingRepository, InventoryRepository
+from ..site.details import CarDetails, SiteInfo
 from .escalation import EscalationReason, EscalationSink, make_handoff
 from .messaging import MessageChannel, compose_details
 from .phones import normalize_phone
@@ -36,9 +37,17 @@ class DealerService:
         self.channels, self.escalations, self.clock = channels, escalations, clock
         self.slots = SlotService(cfg, bookings, clock)
         self.negotiation = NegotiationEngine(cfg.negotiation)
-        from ..site.details import SiteInfo
 
-        self.site = SiteInfo()          # spec sheets and showroom details (filled from the website's data.js in the portal profile)
+    # ---- spec sheets and showroom: read from the database on every use (a price or a sale changes during a call) --------------------
+    def details(self, stock_id: str | None) -> CarDetails | None:
+        """The car's spec sheet; any field None is "not recorded". None when the car has none (or no car)."""
+        return self.inventory.details(stock_id) if stock_id else None
+
+    def details_for(self, stock_ids) -> dict[str, CarDetails]:
+        return self.inventory.details_many([s for s in stock_ids if s])
+
+    def showroom(self) -> SiteInfo:
+        return self.inventory.showroom()
 
     # ---- search / read -----------------------------------------------------------------------------------------
     def search_cars(self, filters: SearchFilters, limit: int = VOICE_MAX_CARS) -> SearchResult:

@@ -33,8 +33,8 @@ def pg_url():
 def pgdb(pg_url):
     db = PgDb(pg_url)
     with db.tx() as c:                                           # a clean database for every test
-        c.run("DROP TABLE IF EXISTS bookings")
-        c.run("DROP TABLE IF EXISTS cars")
+        for table in ("bookings", "car_details", "showroom", "inventory_meta", "cars"):
+            c.run(f"DROP TABLE IF EXISTS {table}")
     return PgDb(pg_url)
 
 
@@ -97,8 +97,8 @@ def test_a_whole_booking_call_through_the_app_lands_in_postgres(pg_url):
 
     clean = PgDb(pg_url)
     with clean.tx() as c:                                                    # only this site's stock in the database
-        c.run("DROP TABLE IF EXISTS bookings")
-        c.run("DROP TABLE IF EXISTS cars")
+        for table in ("bookings", "car_details", "showroom", "inventory_meta", "cars"):
+            c.run(f"DROP TABLE IF EXISTS {table}")
 
     def worker():
         cfg = load_config(environ={}, overlay=ROOT / "config" / "portal.yaml")
@@ -120,8 +120,8 @@ def test_workers_starting_at_the_same_moment_all_get_their_tables(pg_url):
     """12 Oct-style start-up race: three workers creating the schema at once must not fail (it did, before the advisory lock)."""
     clean = PgDb(pg_url)
     with clean.tx() as c:
-        c.run("DROP TABLE IF EXISTS bookings")
-        c.run("DROP TABLE IF EXISTS cars")
+        for table in ("bookings", "car_details", "showroom", "inventory_meta", "cars"):
+            c.run(f"DROP TABLE IF EXISTS {table}")
     errors, barrier = [], threading.Barrier(6)
 
     def start():
