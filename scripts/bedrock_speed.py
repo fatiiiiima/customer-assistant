@@ -19,7 +19,7 @@ Two steps:
       Sends those prompts, word for word, to each model: 1 warm-up call, then every captured decision (17) and 10 follow-ups (28 calls a model).
       This COSTS MONEY. The key is read from BEDROCK_API_KEY and never printed or saved.
 
-Results: a table here and benchmarks/results/bedrock_speed_<date>.json (ignored by git). Times are measured from this machine, so they include
+Results: a table here and benchmarks/results/bedrock_speed_<date>_<time>.json, one file a run (ignored by git). Times are measured from this machine, so they include
 the network trip to the region; `network` is the time of a plain GET /models, the floor under every call.
 
 The agent's client sends a few fields only vLLM knows (continue_final_message, structured_outputs, chat_template_kwargs). If a model refuses
@@ -41,10 +41,8 @@ import json
 import math
 import os
 import re
-import statistics as st
 import sys
 import time
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +75,7 @@ TARGET_MS = 300                      # ARCH_PLAN: the model's part of a reply
 # ------------------------------------------------------------------------------------------------ capture (local, free)
 def capture(out: Path) -> int:
     from compare_agent_models import CONVERSATIONS
+
     from dealer_core.agent.engine import DECIDE_SYSTEM
     from dealer_core.app import build_app
     from dealer_core.cli.chat import start
@@ -207,7 +206,7 @@ class MessagesBackend:
 
         r = self.client.post(f"{self.base}/messages", json=self._body(system, user, max_tokens, temperature), timeout=deadline_s or 10.0)
         if r.status_code >= 400:
-            raise BackendError(f"bedrock:{self.model} HTTP {r.status_code}: {r.text[:200]}")
+            raise BackendError(f"bedrock:{self.model} HTTP {r.status_code}: {r.text[:400]}")
         out = r.json()
         self.usage["prompt_tokens"] += (out.get("usage") or {}).get("input_tokens") or 0
         self.usage["completion_tokens"] += (out.get("usage") or {}).get("output_tokens") or 0
@@ -235,7 +234,7 @@ def decide(b, rec: dict) -> str:
     raw = b.choose(rec["system"], rec["user"], rec["options"], rec["max_tokens"], 10.0) if rec["options"] else None
     if raw is None:
         raw = b.lead_in(rec["system"], rec["user"], rec["max_tokens"], None, 10.0)
-    return re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S).strip()
+    return re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
 
 
 def tool_of(raw: str) -> str:
@@ -260,7 +259,7 @@ def pct(xs: list[float], p: float) -> float | None:
 
 
 def short(e: Exception) -> str:
-    return f"{type(e).__name__}: {e}"[:200]
+    return f"{type(e).__name__}: {e}"[:400]
 
 
 def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follow: int, say=print, plain: bool = False,
@@ -277,7 +276,7 @@ def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follo
         try:
             b.client.get(f"{base}/models", timeout=10.0)                # the plain route, for every model alike
             out["network_ms"].append(round((time.perf_counter() - t0) * 1000))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure is recorded for that model and the run goes on
             out["errors"].append(f"network: {short(e)}")
     for retry in ((False, True) if n_decide and not plain else ()):  # the warm-up, not counted (none when only follow-ups are asked for)
         if retry:
@@ -285,7 +284,7 @@ def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follo
         try:
             decide(b, decisions[0])
             break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure is recorded for that model and the run goes on
             out["errors"].append(f"warm-up ({out['mode']}): {short(e)}")
             if "HTTP 400" not in str(e) or retry:
                 say(f"  {model}: the warm-up failed ({short(e)}); skipped")
@@ -298,14 +297,14 @@ def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follo
             out["decide"].append({"ms": round((time.perf_counter() - t0) * 1000), "customer": rec["customer"], "raw": raw[:80],
                                   "listed": raw in rec["options"], "tool": tool, "want": rec.get("want"),
                                   "right": None if not rec.get("want") else tool == rec["want"]})
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure is recorded for that model and the run goes on
             out["errors"].append(f"decide: {short(e)}")
     streams0 = b.streams
     for rec in (follows * n_follow)[:n_follow]:
         try:
             ms, sentence = follow_up(b, rec)
             out["follow_up"].append({"ms": None if ms is None else round(ms), "customer": rec["customer"], "said_first": rec["prefill"][-60:], "sentence": sentence})
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any failure is recorded for that model and the run goes on
             out["errors"].append(f"follow-up: {short(e)}")
     out["prefill_refused"] = b.streams - streams0 > len(out["follow_up"]) + sum(x.startswith("follow-up") for x in out["errors"])
     out["constrained_choice"] = bool(getattr(b, "can_choose", False)) and not b.plain
@@ -329,7 +328,7 @@ def table(rows: list[dict]) -> str:
     lines = [head, "-" * len(head)]
     for s in rows:
         ms = lambda a, b: f"{a if a is not None else '-'}/{b if b is not None else '-'}"
-        lines.append(f"{s['model']:36s} {s['mode']:6s} {str(s['network_p50'] or '-'):>8s} {ms(s['decide_p50'], s['decide_p90']):>15s} {s['right']:>6s} "
+        lines.append(f"{s['model']:36s} {s['mode']:6s} {s['network_p50'] or '-'!s:>8s} {ms(s['decide_p50'], s['decide_p90']):>15s} {s['right']:>6s} "
                      f"{ms(s['follow_p50'], s['follow_p90']):>18s} {s['errors']:>6d}")
     return "\n".join(lines)
 
@@ -367,7 +366,7 @@ def run(a) -> int:
             print(f"  {r['model']}: {e}")
         for x in r["follow_up"][:2]:
             print(f"  {r['model']} follow-up: \"{x['said_first']}\" -> \"{x['sentence']}\"")
-    out = ROOT / "benchmarks" / "results" / f"bedrock_speed_{date.today().isoformat()}.json"
+    out = ROOT / "benchmarks" / "results" / f"bedrock_speed_{time.strftime('%Y-%m-%d_%H%M%S')}.json"     # one file a run: a later run never overwrites an earlier one
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"base": a.base, "summary": rows, "results": results}, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"\nsaved {out.relative_to(ROOT)}")

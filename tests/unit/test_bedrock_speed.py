@@ -171,7 +171,7 @@ def test_a_claude_model_goes_through_the_messages_api_with_the_begun_reply_conti
     r = bs.one_model("anthropic.claude-haiku-4-5", "https://fake/v1", RECORDS, 2, 1, say=lambda *_: None)
     assert not r["errors"] and [x["tool"] for x in r["decide"]] == ["search_cars"] * 2
     assert r["follow_up"][0]["sentence"] == "Would you like to hear more?" and not r["prefill_refused"]
-    streamed = [b for b in seen if b["stream"]][0]
+    streamed = next(b for b in seen if b["stream"])
     assert streamed["messages"][-1] == {"role": "assistant", "content": "There are 4 Toyotas in stock right now."}
     assert r["usage_non_streamed"]["prompt_tokens"] == 40 * 3 and KEY not in json.dumps(r)
 

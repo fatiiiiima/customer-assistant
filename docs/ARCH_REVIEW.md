@@ -1532,3 +1532,29 @@ The region stays `us-east-1`; it is the region where the company's key has these
 * By default every captured decision (17) is sent, so all three conversations are covered.
 
 Tests: `test_bedrock_speed.py` has 10 tests, all against fake servers.
+
+## 56. Six Bedrock models compared, and the local model on the same prompts (30 Oct, run by the owner; local baseline run here)
+
+MEASURED with `scripts/bedrock_speed.py run`. Each model got the 17 captured decisions (12 with a known right action) and 10 follow-ups, one call at a time, from this M3 Pro to `us-east-1`. The settings were `--reasoning none --service-tier priority`, applied only where a model's card allows them. Raw figures (ignored by git):
+* `benchmarks/results/bedrock_speed_2026-10-30_1451_six_models.json`
+* `benchmarks/results/bedrock_speed_2026-10-30_local_qwen4b.json`
+
+| model | settings sent | decide p50 / p90 | right | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `nvidia.nemotron-nano-3-30b` | reasoning none, priority | 500 / 650 ms | **12/12** | 894 / 1,086 ms |
+| `google.gemma-4-26b-a4b` (`/openai/v1`) | reasoning none, priority | 490 / 660 ms | 11/12 | 945 / 1,065 ms |
+| `mistral.ministral-3-8b-instruct` | priority | 440 / 497 ms | 11/12 | empty (10 of 10) |
+| `mistral.ministral-3-3b-instruct` | priority | 501 / 522 ms | 11/12 | empty (10 of 10) |
+| `openai.gpt-6-luna` | – | refused: "not available for this account" (HTTP 401) | | |
+| `anthropic.claude-haiku-4-5` | – | refused: HTTP 403 `permission_error` (message cut off) | | |
+| *local* Qwen3-4B-Instruct-2507 (MLX, `127.0.0.1:8003`) | – | 393 / 509 ms | 11/12 | 603 / 712 ms |
+
+What it shows:
+* **Nemotron Nano 3 30B and Gemma 4 26B both work end to end.** They make the decision and write a usable follow-up.
+  * Nemotron got every labelled action right, including "I want something sporty" (both Ministrals answered `none`) and "can I see it this weekend" (Gemma and the local model answered `check_slots`).
+  * Their follow-ups read naturally and stay on the code's question, for example "Would you like to schedule a test drive?" and "Do you have a specific model or budget in mind?".
+* **Bedrock decisions are about 100 to 150 ms slower than the local model at p50** (440 to 500 ms against 393 ms). Most of that is the network: the plain `GET /models` took 221 to 1,556 ms this time, with p50s between 352 and 1,511 ms, much noisier than in section 54. The model's own share looks small (INFERRED).
+* **Both Ministrals again wrote no follow-up.** The decisions work, so the call itself is fine. The 3-call `--plain` retest in section 55 is still the way to find out whether continuing a begun reply is the cause. If the owner ran it earlier, its file was overwritten by this run; the script now writes one file per run.
+* **GPT-6 Luna and Claude Haiku 4.5** are on the key's model list but refused for this account: 401 "not available for this account" and 403 `permission_error`. Both are billed through AWS Marketplace, per their cards. INFERRED: someone with the account's admin rights must enable them, for example a Marketplace subscription or Anthropic's use-case form. The script now keeps 400 characters of an error, so the next run shows the full reason.
+* What it means for the 1 s rule, INFERRED: speech recognition takes about 0.27 s (worker log, 30 Oct). Add a 0.5 to 0.65 s decision and eve's first sound (under about 0.16 s, section 41), and a turn that needs the model lands at about 0.9 to 1.1 s. That is the same budget the local model has today plus about 0.1 to 0.15 s. Only 2 of 17 captured turns needed the model, and the `bridge_after_ms` "Let me check." can cover those.
+* Not covered here: many callers at once. Bedrock should not slow down with more callers the way one laptop does (INFERRED); the local figures are for one caller.
