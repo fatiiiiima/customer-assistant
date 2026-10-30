@@ -184,7 +184,7 @@ def test_more_about_the_car_in_focus_is_answered_by_code_from_its_details():
     for line in ("Is there anything else about the car that you'll know?", "Is there anything else about the car that I need to know?",
                  "what else should I know about it", "tell me more about it", "anything else I should know", "I'd like to know more"):
         e, b = agent(None)
-        e.svc.site.cars["S1042"] = site_details("S1042", "A desert-proof legend with proper go-anywhere presence")
+        e.svc.inventory.put_details(site_details("S1042", "A desert-proof legend with proper go-anywhere presence"))
         s = e.new_session()
         said(e, s, "tell me about the Land Cruiser")
         asked = len(b.prompts)

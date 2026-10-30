@@ -1,11 +1,14 @@
-"""Everything else the website knows, read from the same `site/data.js`: the full spec sheet of each car, and the showroom details.
+"""The spec sheet of a car and the showroom details, and the demo reader of the website's `site/data.js`.
 
-A car on the site is built with
+The spec sheets and the showroom details live in the database (tables car_details and showroom; inventory/ imports them from whatever the
+dealership keeps). Every field but the stock id may be None: "not recorded", said as such, never guessed (owner, 30 Oct).
+
+data.js (the demo stock) builds a car with
   car(id, make, model, year, price, km, body, fuel, seats, colourName, colourHex, hp, nm, engine, drivetrain, accel0to100, topSpeed,
       consumption, bootLitres, interior, owners, features[], blurb)
-and data.js then derives, for every car: condition "Used", transmission (single-speed if electric, else automatic), GCC specs, accident-free,
-the service history from the owner count, a warranty from age and mileage, and an inspection score out of 150. Those rules are copied here
-(`derived`) so the voice agent says exactly what the car page shows; tests compare the two.
+and then derives, for every car: condition "Used", transmission (single-speed if electric, else automatic), GCC specs, accident-free,
+the service history from the owner count, a market price, a warranty from age and mileage, and an inspection score out of 150. Those rules are
+copied here (`derived`), worded as the car page shows them, so the demo import holds what the page says; tests compare the two.
 
 Showroom details (hours, locations, phone, WhatsApp, email) come from window.CONFIG in the same file.
 """
@@ -18,28 +21,31 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class CarDetails:
     stock_id: str
-    full_model: str                 # with the trim, as the page shows it ("Land Cruiser GXR")
-    colour_name: str                # the marketing colour ("Pearl White")
-    seats: int
-    power_hp: int
-    torque_nm: int
-    engine: str
-    drive: str
-    accel_0_100: float
-    top_speed: int
-    consumption: str
-    boot_litres: int
-    interior: str
-    owners: int
-    features: tuple[str, ...]
-    blurb: str
-    transmission: str
-    doors: int
-    spec: str
-    accident: str
-    service: str
-    warranty: str
-    inspection: int                 # checks passed, out of 150
+    full_model: str | None = None           # with the trim, as the page shows it ("Land Cruiser GXR")
+    colour_name: str | None = None          # the marketing colour ("Pearl White")
+    seats: int | None = None
+    power_hp: int | None = None
+    torque_nm: int | None = None
+    engine: str | None = None
+    drive: str | None = None
+    accel_0_100: float | None = None
+    top_speed: int | None = None
+    consumption: str | None = None
+    boot_litres: int | None = None
+    interior: str | None = None
+    owners: int | None = None
+    features: tuple[str, ...] = ()
+    blurb: str | None = None
+    transmission: str | None = None
+    doors: int | None = None
+    spec: str | None = None                 # "GCC specs"
+    accident: str | None = None             # "Accident-free"
+    service: str | None = None              # "Full dealer service history"
+    warranty: str | None = None             # "12 months / 20,000 km"
+    inspection: int | None = None           # checks passed, out of 150
+    colour_hex: str | None = None           # for the website's colour swatch
+    condition: str | None = None            # "Used"
+    market_price: int | None = None         # a market reference price (the site's price rating)
 
 
 @dataclass(frozen=True)
@@ -59,7 +65,18 @@ class SiteInfo:
     email: str = ""
     locations: tuple[Location, ...] = ()
     deposit: int = 0
-    cars: dict[str, CarDetails] = field(default_factory=dict)
+    cars: dict[str, CarDetails] = field(default_factory=dict)      # only as read from a data.js; the voice agent reads spec sheets from the database
+
+    def plain(self) -> dict:
+        """The showroom details as plain JSON (the database row and the website API), without the cars."""
+        return {"open_hour": self.open_hour, "close_hour": self.close_hour, "location": self.location, "phone": self.phone, "whatsapp": self.whatsapp,
+                "email": self.email, "deposit": self.deposit, "locations": [{"name": x.name, "address": x.address, "hours": x.hours} for x in self.locations]}
+
+    @classmethod
+    def from_plain(cls, d: dict) -> "SiteInfo":
+        return cls(open_hour=int(d.get("open_hour", 9)), close_hour=int(d.get("close_hour", 20)), location=d.get("location", ""), phone=d.get("phone", ""),
+                   whatsapp=d.get("whatsapp", ""), email=d.get("email", ""), deposit=int(d.get("deposit", 0)),
+                   locations=tuple(Location(x.get("name", ""), x.get("address", ""), x.get("hours", "")) for x in d.get("locations", ())))
 
 
 def _js_args(call: str) -> list[str]:
@@ -127,14 +144,25 @@ def _call_bodies(js: str) -> list[str]:
     return out
 
 
-def derived(index: int, year: int, km: int, fuel: str, body: str, owners: int, site_year: int = 2026) -> dict:
-    """The fields data.js computes for every car (keep in step with the .map() and car() in data.js)."""
+MARKET_FACTORS = (1.06, 1.02, 1.09, 1.04, 0.99, 1.07, 1.03, 1.05, 1.08, 1.01, 1.06, 1.04, 1.1, 1.02, 1.05, 1.07, 0.98, 1.06, 1.03, 1.05, 1.09, 1.02, 1.04, 1.07)
+
+
+def _js_round(x: float) -> int:
+    """JavaScript's Math.round (halves go up)."""
+    import math
+
+    return math.floor(x + 0.5)
+
+
+def derived(index: int, year: int, km: int, fuel: str, body: str, owners: int, price: int = 0, site_year: int = 2026) -> dict:
+    """The fields data.js computes for every car, worded as the page shows them (keep in step with the .map() and car() in data.js)."""
     age = site_year - year
-    return {"transmission": "single-speed" if fuel.lower() == "electric" else "automatic",
+    return {"condition": "Used", "transmission": "Single-speed" if fuel.lower() == "electric" else "Automatic",
             "doors": 2 if body == "Coupe" else 5 if body in ("Hatchback", "Van") else 4,
-            "spec": "GCC specs", "accident": "accident-free",
-            "service": "full dealer service history" if owners == 1 else "full service history",
-            "warranty": "12 months or 20,000 kilometres" if age <= 5 and km <= 80000 else "6 months or 10,000 kilometres",
+            "spec": "GCC specs", "accident": "Accident-free",
+            "service": "Full dealer service history" if owners == 1 else "Full service history",
+            "market_price": _js_round(price * MARKET_FACTORS[index % 24] / 500) * 500,
+            "warranty": "12 months / 20,000 km" if age <= 5 and km <= 80000 else "6 months / 10,000 km",
             "inspection": 146 + (index % 5)}
 
 
@@ -146,8 +174,8 @@ def parse_site(js: str) -> SiteInfo:
             continue
         sid, year, km, body_type, fuel, owners = _str(a[0]), int(_num(a[3])), int(_num(a[5])), _str(a[6]), _str(a[7]), int(_num(a[20]))
         feats = tuple(_str(x) for x in _js_args(a[21].strip()[1:-1])) if a[21].strip().startswith("[") else ()
-        d = derived(i, year, km, fuel, body_type, owners)
-        cars[sid] = CarDetails(stock_id=sid, full_model=_str(a[2]), colour_name=_str(a[9]), seats=int(_num(a[8])), power_hp=int(_num(a[11])),
+        d = derived(i, year, km, fuel, body_type, owners, int(_num(a[4])))
+        cars[sid] = CarDetails(stock_id=sid, full_model=_str(a[2]), colour_name=_str(a[9]), colour_hex=_str(a[10]), seats=int(_num(a[8])), power_hp=int(_num(a[11])),
                                torque_nm=int(_num(a[12])), engine=_str(a[13]), drive=_str(a[14]), accel_0_100=_num(a[15]), top_speed=int(_num(a[16])),
                                consumption=_str(a[17]), boot_litres=int(_num(a[18])), interior=_str(a[19]), owners=owners, features=feats, blurb=_str(a[22]),
                                **d)

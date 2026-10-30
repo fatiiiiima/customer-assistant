@@ -135,3 +135,15 @@ def test_refused_twice_the_code_s_own_question_is_said():
     s = e.new_session()
     out = list(e._prefix_reply(s, "do you have one under 60,000", {"facts": [FACTS]}, CIVIC, "Would you like to hear more about it?", TurnDebug()))
     assert out[-1] == "Would you like to hear more about it?"
+
+
+@pytest.mark.parametrize("sentence,caller", [
+    ("Does it come with a warranty?", "does it come with a warranty"),
+    ("Does it have a sunroof?", "does it come with a sunroof"),
+])
+def test_the_callers_own_question_said_back_is_refused(sentence, caller):
+    """30 Oct, a call on the stock database: "I don't have the warranty on record for this car. Does it come with a warranty?"."""
+    p = problems(engine(), sentence, "Anything else you'd like to know about it?", prefix="I don't have the warranty on record for this car.", caller=caller)
+    assert any("own question" in x for x in p), p
+    assert problems(engine(), "Is there anything else you'd like to know?", "Anything else you'd like to know about it?",
+                    prefix="I don't have the warranty on record for this car.", caller=caller) == []

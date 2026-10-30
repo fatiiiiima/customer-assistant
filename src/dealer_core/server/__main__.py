@@ -44,6 +44,9 @@ def main() -> int:
     ap.add_argument("--fixed-silence", action="store_true", help="end turns after a fixed silence instead of Smart Turn")
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--stt-model", help="OpenVINO Whisper folder under models/ov (default voice.stt_model)")
+    ap.add_argument("--inventory", choices=["auto", "db", "site"], default="auto",
+                    help="db: the cars already in the database (DATABASE_URL); site: import the site's data.js (the demo stock) first; "
+                         "auto (default): db when the database has cars, else site")
     a = ap.parse_args()
 
     import uvicorn
@@ -59,7 +62,17 @@ def main() -> int:
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
     if a.tts:
         cfg.tts.backend = a.tts
-    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
+    inventory = a.inventory
+    if inventory == "auto":                                        # a database with stock in it is never overwritten by the demo file
+        import os
+
+        from ..inventory import open_db
+        from ..models import SearchFilters
+
+        url = os.environ.get("DATABASE_URL", "") or cfg.app.database_url
+        inventory = "db" if url and open_db(url, cfg.app.db_pool_size)[0].count(SearchFilters(include_unavailable=True)) else "site"
+    print(f"Stock: {'the database' if inventory == 'db' else data_js}", flush=True)
+    app = build_app(cfg, inventory="db" if inventory == "db" else "portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
                     quality=a.quality)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)
@@ -76,7 +89,7 @@ def main() -> int:
                         smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs, default_mode="handsfree" if a.hands_free else "tap", half_duplex=a.mute_while_speaking, barge_in=cfg.voice.barge_in and not a.no_barge_in)
     import os
 
-    state_url = a.state_url or os.environ.get("STATE_URL") or os.environ.get("DATABASE_URL") or cfg.app.database_url
+    state_url = shared_state_url(a.state_url, os.environ, cfg.app.database_url)
     if state_url:
         from ..shared.state import CallStore, WorkerRegistry, open_store
 
@@ -101,6 +114,13 @@ def main() -> int:
     server = DrainingServer(uvicorn.Config(create_server(state, origins), host=a.host, port=a.port, log_level="warning"), state)
     server.run()
     return 0
+
+
+def shared_state_url(arg: str, environ, config_url: str) -> str:
+    """Where workers share call state: --state-url, STATE_URL, else the database when it is PostgreSQL. A SQLite stock database
+    (sqlite:///stock.db) is one machine's file, not a place for workers to share calls: "" (each worker keeps its own calls)."""
+    db = environ.get("DATABASE_URL") or config_url or ""
+    return arg or environ.get("STATE_URL") or (db if db.startswith(("postgresql://", "postgres://")) else "")
 
 
 if __name__ == "__main__":

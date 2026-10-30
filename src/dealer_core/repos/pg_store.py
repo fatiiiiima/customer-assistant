@@ -23,6 +23,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ..errors import (BookingNotFound, CarNotFound, CarUnavailable, DuplicateBooking, NotModifiable, SlotTaken,
                       StaleBooking)
 from ..models import Booking, BookingStatus, BodyType, Car, CarStatus, NewBooking, SearchFilters
+from ..site.details import CarDetails, SiteInfo
+from .rows import DETAIL_COLS, detail_columns_sql, detail_values, details_from_row
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS cars (
@@ -41,6 +43,15 @@ SCHEMA = [
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_car ON bookings(customer_phone, stock_id) WHERE status = 'booked'",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_slot ON bookings(customer_phone, slot_start) WHERE status = 'booked'",
     "CREATE INDEX IF NOT EXISTS ix_bookings_branch ON bookings(branch_id, slot_start) WHERE status = 'booked'",
+    # an imported stock list may not say a car's regional spec or service history: NULL, "not recorded" (a no-op on a database that has them already)
+    "ALTER TABLE cars ALTER COLUMN regional_spec DROP NOT NULL",
+    "ALTER TABLE cars ALTER COLUMN service_history DROP NOT NULL",
+    # the spec sheet of each car (NULL: not recorded), the showroom details (one row, JSON) and the stock's version (bumped by every change)
+    "CREATE TABLE IF NOT EXISTS car_details (stock_id TEXT PRIMARY KEY REFERENCES cars(stock_id), {details})",
+    "CREATE INDEX IF NOT EXISTS ix_details_seats ON car_details(seats)",
+    "CREATE INDEX IF NOT EXISTS ix_details_power ON car_details(power_hp)",
+    "CREATE TABLE IF NOT EXISTS showroom (id INTEGER PRIMARY KEY CHECK (id = 1), info TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS inventory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 ]
 _COLS = ("stock_id, vin, make, model, year, km, price, floor_price, status, branch_id, body_type, fuel, transmission, color, "
          "regional_spec, service_history, image_urls")
@@ -92,7 +103,7 @@ class PgDb:
         with self.tx() as c:
             c.run("SELECT pg_advisory_xact_lock(424201)")         # workers starting together create the tables one at a time
             for stmt in SCHEMA:
-                c.run(stmt)
+                c.run(stmt.replace("{details}", detail_columns_sql("INTEGER", "DOUBLE PRECISION")))
 
     def _get(self):
         try:
@@ -155,7 +166,7 @@ def _car(r: dict) -> Car:
     return Car(stock_id=r["stock_id"], vin=r["vin"], make=r["make"], model=r["model"], year=r["year"], km=r["km"], price=r["price"],
                floor_price=r["floor_price"], status=CarStatus(r["status"]), branch_id=r["branch_id"], body_type=BodyType(r["body_type"]),
                fuel=r["fuel"], transmission=r["transmission"], color=r["color"], regional_spec=r["regional_spec"],
-               service_history=bool(r["service_history"]), image_urls=tuple(json.loads(r["image_urls"])))
+               service_history=None if r["service_history"] is None else bool(r["service_history"]), image_urls=tuple(json.loads(r["image_urls"])))
 
 
 def _booking(r: dict) -> Booking:
@@ -184,6 +195,7 @@ class PgInventoryRepo:
             c.run("UPDATE cars SET status = :s WHERE stock_id = :i", s=status.value, i=stock_id)
             if not c.row_count:
                 raise CarNotFound(stock_id)
+            _bump(c)
 
     @staticmethod
     def _where(f: SearchFilters) -> tuple[str, dict]:
@@ -195,7 +207,7 @@ class PgInventoryRepo:
             if val is not None:
                 where.append(f"{col} {op} :{key}")
                 p[key] = val
-        for col, val in (("make", f.make), ("model", f.model), ("color", f.color)):
+        for col, val in (("make", f.make), ("model", f.model), ("color", f.color), ("fuel", f.fuel)):
             if val:
                 where.append(f"LOWER({col}) = :{col}")
                 p[col] = val.strip().lower()
@@ -208,11 +220,15 @@ class PgInventoryRepo:
                 names.append(f":x{i}")
                 p[f"x{i}"] = sid
             where.append(f"stock_id NOT IN ({','.join(names)})")
+        for col, val, key in (("seats", f.min_seats, "seats"), ("power_hp", f.min_power, "power")):
+            if val is not None:
+                where.append(f"stock_id IN (SELECT stock_id FROM car_details WHERE {col} >= :{key})")
+                p[key] = val
         return (" WHERE " + " AND ".join(where)) if where else "", p
 
-    def search(self, filters: SearchFilters, limit: int = 10) -> list[Car]:
+    def search(self, filters: SearchFilters, limit: int = 10, offset: int = 0) -> list[Car]:
         w, p = self._where(filters)
-        return [_car(r) for r in self.db.rows(f"SELECT * FROM cars{w} ORDER BY price, stock_id LIMIT :lim", lim=limit, **p)]
+        return [_car(r) for r in self.db.rows(f"SELECT * FROM cars{w} ORDER BY {_ORDER[filters.sort]} LIMIT :lim OFFSET :off", lim=limit, off=offset, **p)]
 
     def count(self, filters: SearchFilters) -> int:
         w, p = self._where(filters)
@@ -227,6 +243,79 @@ class PgInventoryRepo:
         for r in self.db.rows("SELECT DISTINCT make, model FROM cars WHERE status = 'available' ORDER BY make, model"):
             vocab.setdefault(r["make"].lower(), []).append(r["model"].lower())
         return vocab
+
+    # ---- spec sheets, showroom, sync (inventory/sync.py) --------------------------------------------------------
+    def details(self, stock_id: str) -> CarDetails | None:
+        rows = self.db.rows("SELECT * FROM car_details WHERE stock_id = :i", i=stock_id)
+        return details_from_row(rows[0]) if rows else None
+
+    def details_many(self, stock_ids) -> dict[str, CarDetails]:
+        ids = list(dict.fromkeys(stock_ids))
+        if not ids:
+            return {}
+        rows = self.db.rows("SELECT * FROM car_details WHERE stock_id = ANY(CAST(:ids AS TEXT[]))", ids=ids)
+        return {r["stock_id"]: details_from_row(r) for r in rows}
+
+    def put_details(self, d: CarDetails) -> None:
+        with self.db.tx() as c:
+            _put_details(c, d)
+            _bump(c)
+
+    def showroom(self) -> SiteInfo:
+        rows = self.db.rows("SELECT info FROM showroom WHERE id = 1")
+        return SiteInfo.from_plain(json.loads(rows[0]["info"])) if rows else SiteInfo()
+
+    def version(self) -> int:
+        rows = self.db.rows("SELECT value FROM inventory_meta WHERE key = 'version'")
+        return int(rows[0]["value"]) if rows else 0
+
+    def meta(self, key: str) -> str | None:
+        rows = self.db.rows("SELECT value FROM inventory_meta WHERE key = :k", k=key)
+        return rows[0]["value"] if rows else None
+
+    def snapshot(self) -> dict[str, tuple[Car, CarDetails | None]]:
+        """Every car (sold ones too) with its spec sheet: what a sync compares the new stock list with."""
+        details = {r["stock_id"]: details_from_row(r) for r in self.db.rows("SELECT * FROM car_details")}
+        return {r["stock_id"]: (_car(r), details.get(r["stock_id"])) for r in self.db.rows("SELECT * FROM cars")}
+
+    def apply_sync(self, cars: list[Car], details: list[CarDetails], statuses: dict[str, CarStatus], showroom: SiteInfo | None,
+                   meta: dict[str, str]) -> None:
+        """One transaction: insert or replace these cars and spec sheets, set these statuses, the showroom and the meta, and bump the version."""
+        with self.db.tx() as c:
+            c.run("SELECT pg_advisory_xact_lock(424202)")                  # two imports at once run one after the other
+            for car in cars:
+                c.run(f"INSERT INTO cars ({_COLS}) VALUES (:a,:b,:c,:d,:e,:f,:g,:h,:i,:j,:k,:l,:m,:n,:o,:p,:q) ON CONFLICT (stock_id) DO UPDATE SET "
+                      "vin=EXCLUDED.vin, make=EXCLUDED.make, model=EXCLUDED.model, year=EXCLUDED.year, km=EXCLUDED.km, price=EXCLUDED.price, "
+                      "floor_price=EXCLUDED.floor_price, status=EXCLUDED.status, branch_id=EXCLUDED.branch_id, body_type=EXCLUDED.body_type, "
+                      "fuel=EXCLUDED.fuel, transmission=EXCLUDED.transmission, color=EXCLUDED.color, regional_spec=EXCLUDED.regional_spec, "
+                      "service_history=EXCLUDED.service_history, image_urls=EXCLUDED.image_urls",
+                      a=car.stock_id, b=car.vin, c=car.make, d=car.model, e=car.year, f=car.km, g=car.price, h=car.floor_price, i=car.status.value,
+                      j=car.branch_id, k=car.body_type.value, l=car.fuel, m=car.transmission, n=car.color, o=car.regional_spec,
+                      p=car.service_history, q=json.dumps(list(car.image_urls)))
+            for d in details:
+                _put_details(c, d)
+            for sid, st in statuses.items():
+                c.run("UPDATE cars SET status = :s WHERE stock_id = :i", s=st.value, i=sid)
+            if showroom is not None:
+                c.run("INSERT INTO showroom VALUES (1, :v) ON CONFLICT (id) DO UPDATE SET info = EXCLUDED.info", v=json.dumps(showroom.plain()))
+            for k, v in meta.items():
+                c.run("INSERT INTO inventory_meta VALUES (:k, :v) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", k=k, v=v)
+            _bump(c)
+
+
+_ORDER = {"price": "price, stock_id",
+          "power": "(SELECT power_hp FROM car_details d WHERE d.stock_id = cars.stock_id) DESC NULLS LAST, price, stock_id"}
+
+
+def _put_details(c, d: CarDetails) -> None:
+    names = ", ".join(DETAIL_COLS)
+    c.run(f"INSERT INTO car_details (stock_id, {names}) VALUES (:sid, {', '.join(':' + x for x in DETAIL_COLS)}) ON CONFLICT (stock_id) DO UPDATE SET "
+          + ", ".join(f"{x}=EXCLUDED.{x}" for x in DETAIL_COLS), sid=d.stock_id, **dict(zip(DETAIL_COLS, detail_values(d))))
+
+
+def _bump(c) -> None:
+    """The stock changed: the website's cached copy is out of date."""
+    c.run("INSERT INTO inventory_meta VALUES ('version', '1') ON CONFLICT (key) DO UPDATE SET value = (CAST(inventory_meta.value AS INTEGER) + 1)::TEXT")
 
 
 class PgBookingRepo:

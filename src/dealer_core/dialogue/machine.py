@@ -606,14 +606,14 @@ class DialogueEngine:
         key = next(iter(claims), None) or (keys[0] if keys else "color")
         show = {"color": lambda c: f"is {c.color}", "km": lambda c: f"has {c.km:,} kilometres", "year": lambda c: f"is a {c.year}",
                 "fuel": lambda c: f"runs on {c.fuel}", "transmission": lambda c: f"has {'an' if c.transmission.startswith('a') else 'a'} {c.transmission} gearbox",
-                "spec": lambda c: f"is {c.regional_spec} spec", "service": lambda c: "has a full service history" if c.service_history else "has no service history on file"}
+                "spec": lambda c: f"is {c.spec_said()}", "service": lambda c: f"has {c.service_said()}"}
         get = show.get(key, show["color"])
         names = [f"{c.make} {c.model}" for c in cars]
         said = " and ".join(f"the {n} {get(c)}" for n, c in zip(names, cars))
         verdict, ask = "", "Which one would you like to hear more about?"
         if key in claims:
             value = {"color": lambda c: c.color, "year": lambda c: str(c.year), "transmission": lambda c: c.transmission.lower(),
-                     "fuel": lambda c: c.fuel.lower(), "spec": lambda c: c.regional_spec.upper()}[key]
+                     "fuel": lambda c: c.fuel.lower(), "spec": lambda c: (c.spec_name or "").upper()}[key]
             want = claims[key]
             match = [n for n, c in zip(names, cars) if value(c).lower() == want.lower()]
             if not match:
@@ -630,7 +630,7 @@ class DialogueEngine:
     def _confirm_claims(self, s: Session, car, claims: dict[str, str]) -> str:
         """A yes/no question about the car ("is it red?"): answer yes or no first, then say what it actually is."""
         actual = {"color": car.color, "year": str(car.year), "transmission": car.transmission.lower(), "fuel": car.fuel.lower(),
-                  "spec": car.regional_spec.upper()}
+                  "spec": (car.spec_name or "").upper()}
         words = {"color": "{}", "year": "a {} model", "transmission": "{}", "fuel": "{}", "spec": "{} spec"}
         wrong = [k for k, v in claims.items() if actual[k].lower() != v.lower()]
         if wrong:
