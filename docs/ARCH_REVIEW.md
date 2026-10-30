@@ -1222,3 +1222,63 @@ Not changed:
 Tests: `test_background_voices.py`, 5 new.
 
 `python -m pytest tests/unit`: 1,381 passed, 40 skipped.
+
+## 49. The caller speaks first; silence on the line; a call carried on after it ends (30 Oct, the owner)
+
+Branch `feat/caller-first-silence`. The owner asked for three things:
+* "User should start speaking."
+* "If the model doesn't hear anything, it should ask an are you still there question."
+* "If the user starts again within some time, it should remember the previous session."
+
+None of this existed: the agent greeted at once, waited for ever, and a call that ended was forgotten. The page sent a new call id each time, and without a database the server kept no calls at all.
+
+The owner chose the times (3 s / 8 s / 7 s / 15 min):
+* **Caller first** (`voice.greet_if_quiet_secs`, 3). The call opens listening. The greeting is said only after 3 s of quiet (in tap mode the microphone is open from the start, and closes for the greeting). Talking that gives no turn (the room, section 46) puts the greeting off until it is quiet again.
+* **"Hello? Are you still there?"** (`voice.still_there_secs`, 8): after 8 s of quiet once the agent has finished speaking.
+* **Hang-up** (`voice.hang_up_secs`, 7): 7 s more of quiet gets "I'll end the call here. Tap the microphone any time to carry on where we left off." Once that has been heard, the server sends `end` and closes the call. The page says it ended after a quiet spell.
+* **Carried on** (`voice.calls_kept_secs`, 900): calls are kept for 15 minutes after their last turn. A single worker without a database now keeps them in memory. The page remembers the call id for 15 minutes (`wzLastCall` in the browser) and sends it back with `returning`. The conversation (car, filters, booking in progress) carries on. If the visitor says nothing for 3 s, the agent says "Welcome back. Where were we?".
+* **The clock** stops while either side is talking or a reply is being made, and starts again from its stage after. A turn acted on, or a "speak up", restarts it from 8 s. After the caller's goodbye (`end_call`) there is no clock.
+
+Code: `brain.begin`, `_arm_quiet`, `_quiet_reached`; `server/app.py` (`before_greeting`, `silent_end`, `ready.listen`); `server/__main__.py` (an in-memory `CallStore`); `site/voice.js` in the website repository (uncommitted there, beside the earlier `?mic=raw` change).
+
+**Found on the test call and fixed:**
+* The clock had been started by a turn taken while the agent was still audible. It now never runs while the agent is audible.
+* Our voices do not mark the end of a sentence, so Pipecat reports "bot stopped speaking" 3 s after the audio ends (`BOT_VAD_STOP_FALLBACK_SECS`). Those 3 s are now taken off the waits that start then. Before this, "are you still there?" came 11.0 s after the agent's last word.
+
+MEASURED, a hands-free test worker (port 8767, the 4B model on MLX, eve), with a scripted caller speaking one line and then silence:
+
+| what | when |
+|---|---|
+| silent from the start: greeting | 3.1 s after the call opened |
+| "Hello? Are you still there?" | 8.0 s after the agent's last word |
+| the goodbye | 6.9 s after "are you still there?" ended |
+| the call closed | 2.9 s after the goodbye ended (the late report above, not taken off here) |
+| back with the same call id | `resumed: true`; "Welcome back. Where were we?" 3.0 s later |
+
+Not changed: the caller's own goodbye still does not close the call (it never did); the visitor hangs up.
+
+Tests: `test_silence.py`, 12 new.
+
+## 50. Eve a little slower (30 Oct, the owner: "the way they do on Fish Audio. Right now it's speaking too fast")
+
+Same branch. In `scripts/pocket_server.py`:
+* `--speed` goes from 1.1 to 1.0 (the model's own pace).
+* `--max-pause-ms` goes from 120 to 250, so the short pause at a comma is kept and only long gaps are cut.
+
+MEASURED, eve, the greeting and two typical replies (6 sentences, 0.25 s between sentences); samples in `logs/voice_samples/for_boss/speed/`:
+
+| sample | length | words a minute |
+|---|---|---|
+| a. before: 1.1×, pauses ≤ 120 ms | 19.0 s | 174 |
+| b. 1.0×, pauses ≤ 120 ms | 20.5 s | 161 |
+| c. 1.0×, pauses as made | 21.2 s | 156 |
+| d. 0.95×, pauses as made | 22.4 s | 147 |
+| **e. chosen: 1.0×, pauses ≤ 250 ms** | 21.1 s | 156 |
+
+How Fish Audio paces its voices was not measured here; e is a GUESS at "a little slower, natural". Other paces need no code change: `--speed 0.95`, or `--max-pause-ms 120`.
+
+The eve server on 8040 was restarted with the new defaults. A worker keeps the phrases it made at start-up (at the old pace) until it is restarted.
+
+Tests: `test_voice_compare.py`, 2 new.
+
+`python -m pytest tests/unit`: 1,395 passed, 40 skipped.

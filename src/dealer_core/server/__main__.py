@@ -81,9 +81,13 @@ def main() -> int:
         from ..shared.state import CallStore, WorkerRegistry, open_store
 
         store = open_store(state_url, pool_size=cfg.app.db_pool_size)
-        state.calls, state.registry = CallStore(store), WorkerRegistry(store)
+        state.calls, state.registry = CallStore(store, ttl_s=cfg.voice.calls_kept_secs), WorkerRegistry(store)
         state.worker_id = a.worker_id or f"{a.host}:{a.port}"
         state.public_url = a.public_url or f"ws://{a.host}:{a.port}/voice"
+    else:                                                     # one worker: calls kept in this process, so a visitor who hangs up and comes back carries on (section 49)
+        from ..shared.state import CallStore, MemoryStore
+
+        state.calls = CallStore(MemoryStore(), ttl_s=cfg.voice.calls_kept_secs)
     from .metrics import Metrics
 
     if cfg.voice.admission:

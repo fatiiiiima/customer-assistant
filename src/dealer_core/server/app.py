@@ -315,7 +315,9 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     transport = FastAPIWebsocketTransport(ws, FastAPIWebsocketParams(
         audio_in_enabled=True, audio_out_enabled=True, audio_in_sample_rate=STT_RATE, audio_out_sample_rate=parts.tts_engine.sample_rate,
         serializer=PortalSerializer(), session_timeout=None))
-    gate = MicGate(start_open=False) if tap else None          # tap mode: the greeting is spoken first, the visitor taps to reply
+    vcfg = state.cfg.voice
+    greet_after = getattr(vcfg, "greet_if_quiet_secs", 0.0) or 0.0
+    gate = MicGate(start_open=greet_after > 0) if tap else None  # tap mode: the visitor speaks first (the greeting only after a quiet start), then taps to reply
 
     grace = getattr(getattr(state.cfg, "voice", None), "tap_grace_secs", 0) or 0
 
@@ -331,10 +333,21 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         await mic_off()
 
     resumable = bool(saver is not None and await asyncio.to_thread(state.calls.exists, call_id))   # a reconnect: no greeting again
+    returning = resumable and bool(hello.get("returning"))    # the visitor hung up (or was hung up on) and came back: "Welcome back" if they say nothing
+
+    async def before_greeting() -> None:                      # tap mode: the visitor did not speak first; the microphone closes for the greeting, as before
+        if gate is not None:
+            await gate.set_open(False)
+            await send({"type": "mic", "on": False, "reason": "greeting"})
+
+    async def silent_end() -> None:                           # nobody answered "are you still there?": hang up; the call is kept, so the visitor can carry on
+        await send({"type": "end", "reason": "silence"})
+        await worker.cancel()
     pipeline, brain = build_pipeline(app, parts, transport.input(), transport.output(), stop_secs=app.service.cfg.voice.tap_stop_secs if tap and state.smart_turn else state.stop_secs,
                                      mic_gate=gate, on_user_stop=turn_over if tap else None,
                                      half_duplex=state.half_duplex, gate_tail_secs=0.2, barge_in=state.barge_in and not tap, smart_turn=state.smart_turn, smart_fallback_secs=state.smart_fallback_secs, probes=probes, on_turn=on_turn, on_heard=on_heard, on_say=on_say,
-                                     speak_opening=not resumable)
+                                     speak_opening=not resumable, greet_after=greet_after, still_there_after=getattr(vcfg, "still_there_secs", 0.0),
+                                     hang_up_after=getattr(vcfg, "hang_up_secs", 0.0), welcome_back=returning, on_before_greeting=before_greeting, on_silent_end=silent_end)
     brain_ref["brain"] = brain
     def prepare() -> bool:                                    # database reads, in a thread: the event loop keeps every other call's audio moving
         resumed_ = bool(resumable and state.calls.load(call_id, brain.session, app.service))
@@ -354,8 +367,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     async def _gone(_transport, _ws) -> None:
         await worker.cancel()
 
-    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree", "resumed": resumed})
-    if resumed:
+    await send({"type": "ready", "sample_rate": parts.tts_engine.sample_rate, "mode": "tap" if tap else "handsfree", "resumed": resumed, "listen": greet_after > 0})
+    if resumed and not returning:
         await send({"type": "line", "who": "agent", "turn": 0, "text": "Sorry, we got cut off for a moment. I'm back: where were we?"})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
