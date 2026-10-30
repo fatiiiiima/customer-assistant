@@ -31,6 +31,7 @@ from .tts import PiperSherpa
 from ..agent.wording import NARROW_QUESTIONS
 from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
 from ..agent.wording import OPENERS
+from ..dialogue.templates import greeting
 
 STT_RATE = 16000
 
@@ -108,8 +109,7 @@ def slot_offer_openings(split=None) -> list[str]:
 def common_phrases(cfg: Config) -> list[str]:
     """What Wazir says word for word again and again: rendered once at start-up by voices that are slow to make speech."""
     name = cfg.app.agent_name
-    who = f"I'm {name}, and I'm here to help you find your perfect car." if name else "How can I help you find a car?"
-    return [f"Hi, welcome to the AGMC dealership! {who} What are you looking for today?",
+    return [greeting(name) if name else "Hello, welcome to AGMC. What kind of car are you after?",
             "Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?",
             "Would you like to come and see it?", "Want to book a test drive?", "Shall I set up a test drive for you?",
             "Sure! What day would you like to come in?", "Of course. What day and time suit you?", "What day and time work for you?",
