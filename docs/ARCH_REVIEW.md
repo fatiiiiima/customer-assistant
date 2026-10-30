@@ -1345,3 +1345,65 @@ The eve server on 8040 was restarted with the new defaults. A worker keeps the p
 Tests: `test_voice_compare.py`, 2 new.
 
 `python -m pytest tests/unit`: 1,395 passed, 40 skipped; with sections 47 and 48 merged in, 1,418 passed, 40 skipped.
+
+## 51. The cars come from the database, not from data.js (30 Oct, ARCH_PLAN step 0; the owner: "build it in the smartest way you can")
+
+Branch `feat/inventory-db`. Nobody can say yet where the dealership keeps its real stock, so nothing here assumes a layout. There is one database and one way in: an import of whatever list they have. The voice agent and the website read only the database.
+
+**Tables** (SQLite and PostgreSQL, created at start; existing PostgreSQL databases are altered in place):
+* `cars`: unchanged, except `regional_spec` and `service_history` may now be NULL.
+* `car_details`: the spec sheet. Every column but the stock id may be NULL, meaning "not recorded".
+* `showroom`: one row (JSON) with the hours, locations, phone, WhatsApp and email.
+* `inventory_meta`: the stock's version (bumped by every import and every status change), when it was last imported, and the last import's report.
+
+**Import** (`src/dealer_core/inventory/`, `python -m dealer_core.inventory headings|import|status|serve`):
+* CSV, TSV, Excel and JSON. Excel is read with the standard library, so nothing is installed. JSON finds the list of cars wherever it sits. The site's data.js is the demo source.
+* A column is recognised by its heading, however it is spelt: "Stock No.", "Ref" and "stock_id" are the stock id; "Price (AED)", "Asking price" and "AED" are the price. A heading that is not recognised is reported, never guessed at; `--map` names it. `headings FILE` shows how a file would be read before anything is written.
+* Values are read as typed: "AED 245,000", "189k", "38,000 km", "Saloon", "crossover", "Mercedes-Benz".
+* A row that cannot be read is skipped with its row number and the reason. A missing required column (stock id, make, model, year, price, mileage, body) writes nothing.
+* Only what the list says is stored. A missing warranty, accident record, spec or service history stays NULL; it is not set to "GCC" or "full service history" as before. With no floor price, the floor is the list price (prices are fixed).
+* Sync rules, all in one transaction:
+  * Only the difference is written; an unchanged list writes nothing.
+  * A car that is no longer listed is marked sold. Its bookings stay.
+  * A sold car that is listed again is back in stock.
+  * A car reserved here stays reserved unless the list has a status column.
+* Safety: a list that would take more than half the cars on sale off sale (a half-exported file, the wrong sheet) is refused unless `--force`. `--dry-run` writes nothing. A refusal exits 1, so a scheduled import can raise the alarm.
+
+**Voice agent**:
+* `svc.site` (a copy of data.js held in memory) is gone. `svc.details(id)`, `svc.details_for(ids)` and `svc.showroom()` read the database on every use, so a price change or a sale shows on the next turn.
+* "Seven seats", "something sporty" and the fuel type are now part of the SQL search. They used to be filtered in Python over the first 200 results, which would miss cars at 5,000.
+* What the spec sheet does not record is said to be not on record ("I don't have the warranty on record for this car"), following the owner's rule that an unknown fact is said to be unknown. "Tell me more", comparisons and "which is the most powerful" leave out what is not recorded.
+* The database keeps values as the dealership typed them ("Accident-free", "12 months / 20,000 km"); the answers word them for speech ("accident-free", "12 months or 20,000 kilometres").
+* The voice server takes its stock from the database when the database has cars, and imports the demo data.js only when it is empty (`--inventory auto|db|site`). A real database is never overwritten by the demo file.
+
+**Website API** (`python -m dealer_core.inventory serve`, read-only; never the floor price or the VIN):
+* `/api/cars`: filtered and paged in SQL.
+* `/api/cars/{id}`, `/api/showroom` and `/api/health`.
+* `/api/site-cars.js`: `window.CARS` in the shape the pages use today, plus the showroom details in `window.CONFIG`. It is built once per stock version and carries an ETag. Today's pages would load it after data.js and need no other change. That change to the site is not made here.
+
+**Load test**, MEASURED on this M3 Pro, `scripts/inventory_load_test.py`: 5,000 generated cars imported through the CSV importer, 300 timed repetitions of each read; the raw figures are in `benchmarks/results/inventory_load_2026-10-30.json` (ignored by git, on this machine).
+
+| operation | SQLite (memory) p50 / p99 | PostgreSQL (local) p50 / p99 |
+|---|---|---|
+| first import of 5,000 cars | 0.16 s | 2.96 s |
+| the same list again (nothing written) | 0.18 s | 0.20 s |
+| search: make + budget (voice) | 0.38 / 0.63 ms | 0.65 / 0.85 ms |
+| search: 7+ seats, most powerful first (voice) | 1.53 / 2.97 ms | 2.27 / 3.71 ms |
+| one car's spec sheet (voice) | 0.01 / 0.02 ms | 0.19 / 0.23 ms |
+| make/model vocabulary (voice) | 0.30 / 0.34 ms | 1.48 / 1.61 ms |
+| `GET /api/cars`, a page of 24 (site) | 2.94 / 3.50 ms | 4.27 / 4.76 ms |
+| `GET /api/site-cars.js`, cached (site) | 1.09 / 1.33 ms | 1.23 / 1.57 ms |
+| `site-cars.js` rebuilt after a change | 111 ms | 115 ms |
+
+* Every read a voice turn makes is under 4 ms at p99, against the 20 ms GUESS target in ARCH_PLAN. The database is not what will hold a reply back.
+* MEASURED: `site-cars.js` is 3.3 MB at 5,000 cars, because today's pages load every car up front. That is fine at 24 cars. Beyond a few hundred, the pages should ask `/api/cars` for one page at a time (INFERRED). That is site work, not done here.
+* The PostgreSQL figures are on a local unix socket. A database across a network adds its round trip to each read (UNKNOWN until the real host is known).
+
+Not done:
+* The website pages still read data.js.
+* No scheduled import, because the source is unknown. Once it is known, the import is one command on a timer.
+* Photos (`image_urls`) are imported but not yet used by the voice agent.
+
+Tests: `test_inventory_db.py` (19 new) and `test_pg_store.py` (1 new, against PostgreSQL). `test_pg_store.py` and `test_live_call_fixes.py` were updated for the new tables.
+
+`python -m pytest tests/unit`: 1,438 passed, 40 skipped.
