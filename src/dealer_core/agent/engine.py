@@ -1018,8 +1018,9 @@ class AgentEngine:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # not clear: the details are read back again and the question asked again
         if s.state in (State.SLOT, State.CONTACT) or s.draft_slot:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # a booking is being arranged: carry on with it (it asks for what is missing), not the car's facts
-        if ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words):
-            return {"tool": "search_cars", "via": "rules"}
+        about_it = s.car and re.search(r"\b(?:it|its|it's|this one|that one|this car|that car)\b", words) and not _CHEAPER.search(words)
+        if not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words)):
+            return {"tool": "search_cars", "via": "rules"}             # 30 Oct replay: "Is it white?" about the Camry searched for white cars (and the Camry was lost)
         if s.car:
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}
         if s.filters or s.shown:                                           # a search is under way (29 Oct: "4 Toyotas... What budget?" then the code asked "a make, a type of car,
@@ -1146,6 +1147,9 @@ class AgentEngine:
         if not booking_flow and not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(joined) or _LOW_KM.search(joined)) \
                 and (not _OTHER_RANGE.search(joined) or searchable) and not A.superlative_topic(joined):
             return {"tool": "search_cars", "via": "rules"}                       # "an SUV under 100k", "a white one", "anything electric"
+        if not booking_flow and about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or {}).get("color") \
+                and re.search(r"\b(?:is it|is this|is that|it's|its|does it come)\b", joined) and not _CHEAPER.search(joined):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "Is it white?" about this car: its colour (30 Oct test call: the model listed every colour we have)
         if not booking_flow and (_FINANCE.search(joined) or (not s.car and _OPINION.search(joined) and not _FAMILY.search(joined))):
             return {"tool": "none", "via": "rules"}                              # finance, "something reliable": answered by code in _t_none
         if not booking_flow and not s.car and _FAMILY.search(joined):
@@ -1590,6 +1594,10 @@ class AgentEngine:
                 if rec["pushes"] >= 2:                                   # asked again: the price stays, cars near the asked price are offered instead
                     return self._cheaper_instead(s, car, words, rec, facts, dbg)
             return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask()}", "facts": facts, "awaiting": True}
+        asked_colour = (ex.search_filters(text, self.svc.inventory.vocabulary()) or {}).get("color")
+        if asked_colour and car.color and re.search(r"\b(?:is it|is this|is that|it's|its|does it come)\b", words):    # "Is it white?" about this car (30 Oct replay)
+            same = str(asked_colour).lower() in car.color.lower()
+            return {"core": f"{'Yes' if same else 'No'}, it's {car.color.lower()}. {ask()}", "facts": facts, "awaiting": True}
         if d is not None and topics and set(topics) == {"about"} and not A.asked_feature(words):
             return self._more_about(s, car, d, told, facts, ask)         # "tell me more", "anything else about it?": a group of facts not told yet
         detail = A.detail_answer(car, d, words)
