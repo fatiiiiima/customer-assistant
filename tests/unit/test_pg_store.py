@@ -135,3 +135,22 @@ def test_workers_starting_at_the_same_moment_all_get_their_tables(pg_url):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_spec_sheets_sync_and_spec_search_on_postgresql(pgdb, tmp_path):
+    """The same database-side search on the spec sheet, and the same sync, as on SQLite (test_inventory_db.py)."""
+    from .test_inventory_db import BR, fleet_csv, seeded, write
+
+    from dealer_core.inventory.sync import import_file
+    from dealer_core.models import CarStatus, SearchFilters
+    from dealer_core.site.details import CarDetails
+
+    inv = seeded(PgInventoryRepo(pgdb))
+    ids = lambda **kw: [c.stock_id for c in inv.search(SearchFilters(**kw), 10)]
+    assert ids(min_seats=7) == ["D", "A"] and ids(sort="power") == ["B", "A", "C", "D"] and ids(fuel="hybrid") == ["C"]
+    assert inv.details("A") == CarDetails("A", seats=7, power_hp=200) and set(inv.details_many(["A", "B", "Z"])) == {"A", "B"}
+    v = inv.version()
+    rep = import_file(inv, write(tmp_path, "a.csv", fleet_csv(3)), BR, missing="keep")
+    assert rep.added == ["C-0", "C-1", "C-2"] and inv.version() == v + 1 and inv.meta("synced_at")
+    rep = import_file(inv, write(tmp_path, "b.csv", fleet_csv(3, skip={1})), BR, missing="sold", force=True)
+    assert "C-1" in rep.gone and inv.get("C-1").status is CarStatus.SOLD and inv.get("A").status is CarStatus.SOLD

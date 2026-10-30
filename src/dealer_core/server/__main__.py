@@ -44,6 +44,9 @@ def main() -> int:
     ap.add_argument("--fixed-silence", action="store_true", help="end turns after a fixed silence instead of Smart Turn")
     ap.add_argument("--mode", choices=["conversational", "hybrid", "template"], help="who writes the reply; default dialogue.reply_mode")
     ap.add_argument("--stt-model", help="OpenVINO Whisper folder under models/ov (default voice.stt_model)")
+    ap.add_argument("--inventory", choices=["auto", "db", "site"], default="auto",
+                    help="db: the cars already in the database (DATABASE_URL); site: import the site's data.js (the demo stock) first; "
+                         "auto (default): db when the database has cars, else site")
     a = ap.parse_args()
 
     import uvicorn
@@ -59,7 +62,17 @@ def main() -> int:
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
     if a.tts:
         cfg.tts.backend = a.tts
-    app = build_app(cfg, inventory="portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
+    inventory = a.inventory
+    if inventory == "auto":                                        # a database with stock in it is never overwritten by the demo file
+        import os
+
+        from ..inventory import open_db
+        from ..models import SearchFilters
+
+        url = os.environ.get("DATABASE_URL", "") or cfg.app.database_url
+        inventory = "db" if url and open_db(url, cfg.app.db_pool_size)[0].count(SearchFilters(include_unavailable=True)) else "site"
+    print(f"Stock: {'the database' if inventory == 'db' else data_js}", flush=True)
+    app = build_app(cfg, inventory="db" if inventory == "db" else "portal", portal_data=data_js, backend=a.backend, reply_mode=a.mode, engine="agent" if a.agent else None, agent_prefix=True if a.prefix else None,
                     quality=a.quality)
     start(app)                                                     # loads and warms the language model
     apply_voice_profile(app, cfg)

@@ -12,7 +12,7 @@ from ..site.details import CarDetails, SiteInfo
 
 
 class InventoryRepository(Protocol):
-    def search(self, filters: SearchFilters, limit: int = 10) -> list[Car]:
+    def search(self, filters: SearchFilters, limit: int = 10, offset: int = 0) -> list[Car]:
         """Matching cars, cheapest first. Unavailable cars are excluded unless the filters ask for them."""
 
     def count(self, filters: SearchFilters) -> int:

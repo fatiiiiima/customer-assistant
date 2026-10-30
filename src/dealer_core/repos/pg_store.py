@@ -226,9 +226,9 @@ class PgInventoryRepo:
                 p[key] = val
         return (" WHERE " + " AND ".join(where)) if where else "", p
 
-    def search(self, filters: SearchFilters, limit: int = 10) -> list[Car]:
+    def search(self, filters: SearchFilters, limit: int = 10, offset: int = 0) -> list[Car]:
         w, p = self._where(filters)
-        return [_car(r) for r in self.db.rows(f"SELECT * FROM cars{w} ORDER BY {_ORDER[filters.sort]} LIMIT :lim", lim=limit, **p)]
+        return [_car(r) for r in self.db.rows(f"SELECT * FROM cars{w} ORDER BY {_ORDER[filters.sort]} LIMIT :lim OFFSET :off", lim=limit, off=offset, **p)]
 
     def count(self, filters: SearchFilters) -> int:
         w, p = self._where(filters)

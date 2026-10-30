@@ -48,18 +48,15 @@ def read_csv(text: str, delimiter: str | None = None) -> tuple[list[str], list[d
 
 def read_json(text: str) -> tuple[list[str], list[dict]]:
     """A list of objects, or an object holding one ({"cars": [...]}, {"data": {"vehicles": [...]}}...)."""
-    data = json.loads(text)
-    while isinstance(data, dict):
-        lists = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
-        nested = [v for v in data.values() if isinstance(v, dict)]
-        if lists:
-            data = max(lists, key=len)
-        elif len(nested) == 1:
-            data = nested[0]
-        else:
-            raise ValueError("no list of cars found in the JSON")
-    if not isinstance(data, list):
+    def lists_in(x) -> list[list]:
+        if isinstance(x, list):
+            return [x] if x and all(isinstance(r, dict) for r in x) else []
+        return [found for v in x.values() for found in lists_in(v)] if isinstance(x, dict) else []
+
+    found = lists_in(json.loads(text))
+    if not found:
         raise ValueError("no list of cars found in the JSON")
+    data = max(found, key=len)                                          # the longest list of objects anywhere in it
     headings: list[str] = []
     for row in data:
         for k in row:

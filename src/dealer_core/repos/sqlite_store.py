@@ -136,9 +136,9 @@ class SqliteInventoryRepo:
                 args.append(val)
         return (" WHERE " + " AND ".join(where)) if where else "", args
 
-    def search(self, filters: SearchFilters, limit: int = 10) -> list[Car]:
+    def search(self, filters: SearchFilters, limit: int = 10, offset: int = 0) -> list[Car]:
         w, args = self._where(filters)
-        return [_car(r) for r in self.db.query(f"SELECT * FROM cars{w} ORDER BY {_ORDER[filters.sort]} LIMIT ?", (*args, limit))]
+        return [_car(r) for r in self.db.query(f"SELECT * FROM cars{w} ORDER BY {_ORDER[filters.sort]} LIMIT ? OFFSET ?", (*args, limit, offset))]
 
     def count(self, filters: SearchFilters) -> int:
         w, args = self._where(filters)

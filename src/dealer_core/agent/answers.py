@@ -425,8 +425,8 @@ def best_of(cars: list[CarView], details: dict[str, CarDetails], words: str) -> 
     v, best = (max if larger else min)(scored, key=lambda x: x[0])
     d = details.get(best.stock_id)
     what = {"accel": f"nought to a hundred in {v:g} seconds", "power": f"{v} horsepower", "price": T.money(v), "year": f"a {v}",
-            "km": f"{v:,} kilometres", "economy": f"about {spoken_consumption(d.consumption)}" if d else "", "boot": f"{v} litres of boot space",
-            "seats": f"{v} seats", "family": f"{d.seats} seats and a {d.boot_litres}-litre boot" if d else ""}[key]
+            "km": f"{v:,} kilometres", "economy": f"about {spoken_consumption(d.consumption)}" if d and d.consumption else "", "boot": f"{v} litres of boot space",
+            "seats": f"{v} seats", "family": f"{d.seats} seats and a {d.boot_litres}-litre boot" if d and _known(d.seats, d.boot_litres) else ""}[key]
     among = "of these" if len(scored) > 1 else ""
     return best, f"The {topic} {among} is the {T.short_name(best)}, with {what}.".replace("  ", " ").replace(" with a ", ", a ")
 
