@@ -49,8 +49,8 @@ def fake(monkeypatch):
     def use(refuse_vllm_fields=False):
         seen, handle = server(refuse_vllm_fields)
 
-        def make(model, base, plain=False):
-            b = real(model, base, plain)
+        def make(model, base, plain=False, **kw):
+            b = real(model, base, plain, **kw)
             b.client = httpx.Client(transport=httpx.MockTransport(handle), headers=dict(b.client.headers))
             return b
 
@@ -107,3 +107,77 @@ def test_nothing_is_sent_without_the_key_and_the_cloud_switch(tmp_path, monkeypa
     assert "not sent" in capsys.readouterr().out
     monkeypatch.setenv(bs.ALLOW_ENV, "1")
     assert bs.main(["run", "--prompts", str(prompts), "--dry-run"]) == 0                         # a dry run sends nothing even with both set
+
+
+def test_plain_follow_ups_only_send_exactly_those_calls_with_no_vllm_fields(fake, capsys, tmp_path):
+    """30 Oct: Ministral 3 8B gave empty follow-ups the agent's way; the owner retests it with 3 plain calls and nothing else."""
+    seen = fake()
+    r = bs.one_model("fake.model", "https://fake/v1", RECORDS, 0, 3, say=lambda *_: None, plain=True)
+    assert r["mode"] == "plain" and not r["decide"] and len(r["follow_up"]) == 3 and len(seen) == 3       # no warm-up, no decisions
+    assert not any(k in b for b in seen for k in bs.VLLM_ONLY)
+    assert all(b["messages"][-1]["role"] == "user" and "There are 4 Toyotas" in b["messages"][-1]["content"] for b in seen)
+    prompts = tmp_path / "p.json"
+    prompts.write_text(json.dumps(RECORDS))
+    assert bs.main(["run", "--prompts", str(prompts), "--models", "fake.model", "--plain", "--decisions", "0", "--follow-ups", "3", "--dry-run"]) == 0
+    assert "1 model(s) x 3 calls" in capsys.readouterr().out
+
+
+def test_each_model_is_sent_to_the_address_its_aws_card_gives():
+    """30 Oct: Gemma 4 was refused at /v1 ("isn't supported on this route") and Haiku 4.5 does not take chat completions at all."""
+    base = "https://bedrock-mantle.us-east-1.api.aws/v1"
+    assert bs.base_for("mistral.ministral-3-8b-instruct", base) == base and bs.base_for("openai.gpt-oss-20b", base) == base
+    assert bs.base_for("google.gemma-4-26b-a4b", base) == "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
+    assert bs.base_for("openai.gpt-6-luna", base) == "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
+    assert bs.base_for("google.gemma-3-4b-it", base) == base
+    assert bs.base_for("anthropic.claude-haiku-4-5", base) == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1"
+
+
+def test_reasoning_effort_service_tier_and_newer_openai_fields_are_sent(fake):
+    fake()
+    body = bs.make_backend("openai.gpt-6-luna", "https://fake/v1", reasoning="none", tier="priority")._body("S", "U", 16, 0.0)
+    assert body["reasoning_effort"] == "none" and "service_tier" not in body                     # GPT-6 Luna: Standard tier only
+    assert body["max_completion_tokens"] == 16 and "max_tokens" not in body and "temperature" not in body
+    body = bs.make_backend("nvidia.nemotron-nano-3-30b", "https://fake/v1", reasoning="none", tier="priority")._body("S", "U", 16, 0.0)
+    assert body["reasoning_effort"] == "none" and body["service_tier"] == "priority" and body["max_tokens"] == 16
+    plain = bs.make_backend("mistral.ministral-3-8b-instruct", "https://fake/v1")._body("S", "U", 16, 0.0)
+    assert plain["max_tokens"] == 16 and "reasoning_effort" not in plain and "service_tier" not in plain
+
+
+def test_a_claude_model_goes_through_the_messages_api_with_the_begun_reply_continued(monkeypatch):
+    monkeypatch.setenv(bs.KEY_ENV, KEY)
+    seen = []
+
+    def handle(request):
+        if request.url.path == "/v1/models":                                                   # the network timing, on the plain route
+            return httpx.Response(401)
+        assert request.url.path == "/anthropic/v1/messages"
+        assert request.headers["x-api-key"] == KEY and request.headers["anthropic-version"] == "2023-06-01"
+        body = json.loads(request.content)
+        seen.append(body)
+        if body["stream"]:
+            events = [{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Would you like "}},
+                      {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "to hear more? Yes."}}, {"type": "message_stop"}]
+            return httpx.Response(200, content="".join(f"event: x\ndata: {json.dumps(e)}\n\n" for e in events).encode())
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "search_cars"}], "usage": {"input_tokens": 40, "output_tokens": 2}})
+
+    real = bs.make_backend
+
+    def make(model, base, plain=False, reasoning=None, tier=None):
+        b = real(model, base, plain, reasoning, tier)
+        b.client = httpx.Client(transport=httpx.MockTransport(handle), headers=dict(b.client.headers))
+        return b
+
+    monkeypatch.setattr(bs, "make_backend", make)
+    r = bs.one_model("anthropic.claude-haiku-4-5", "https://fake/v1", RECORDS, 2, 1, say=lambda *_: None)
+    assert not r["errors"] and [x["tool"] for x in r["decide"]] == ["search_cars"] * 2
+    assert r["follow_up"][0]["sentence"] == "Would you like to hear more?" and not r["prefill_refused"]
+    streamed = [b for b in seen if b["stream"]][0]
+    assert streamed["messages"][-1] == {"role": "assistant", "content": "There are 4 Toyotas in stock right now."}
+    assert r["usage_non_streamed"]["prompt_tokens"] == 40 * 3 and KEY not in json.dumps(r)
+
+
+def test_reasoning_and_tier_go_only_to_models_whose_card_takes_them():
+    assert bs.applies("mistral.ministral-3-8b-instruct", "none", "priority") == (None, "priority")
+    assert bs.applies("nvidia.nemotron-nano-3-30b", "none", "priority") == ("none", "priority")
+    assert bs.applies("openai.gpt-6-luna", "none", "priority") == ("none", None)
+    assert bs.applies("anthropic.claude-haiku-4-5", "none", "priority") == (None, None)

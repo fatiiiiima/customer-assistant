@@ -1485,3 +1485,50 @@ MEASURED with `scripts/bedrock_speed.py run`, raw figures in `benchmarks/results
 * What it means for the 1 s rule, INFERRED: in the captured conversations the model decided 2 turns out of 17; the code decided the rest. On those 2, a Bedrock decision of about 0.5 to 0.7 s plus speech recognition and the first sound of the voice would land around 1 s or over. The agent's "Let me check." bridge (`bridge_after_ms`) could cover that wait, at the cost of a filler on those turns. The local model server stays the default.
 
 Token use (non-streamed calls, reported by Bedrock): about 7,700 to 7,900 input and under 60 output tokens per model.
+
+## 55. Which other Bedrock models could work; the test now reaches them (30 Oct, the owner: "we cant change the region ... are there any other models that are viable to use? please check again throughly")
+
+The region stays `us-east-1`; it is the region where the company's key has these models. The network trip measured in section 54 (about 350 to 380 ms) is a fixed cost on every model call from this laptop.
+
+**Why two models failed in section 54** (from the AWS model cards, read 30 Oct):
+* Gemma 4 models answer under `/openai/v1`, not `/v1`. A call to `/v1` gets exactly the "isn't supported on this route" error we saw. The GPT-5.x and GPT-6.x models use `/openai/v1` too.
+* Claude models on this endpoint take only Anthropic's Messages API, at `/anthropic/v1/messages`, with an `x-api-key` header and an `anthropic-version: 2023-06-01` header. They do not take chat completions.
+* Every model in the owner's list is on this endpoint (AWS endpoint table). The failures were about the request, not about access.
+
+**Levers the cards offer:**
+* **Reasoning effort.** Several models think before answering by default. It can be turned off on Nemotron Nano 3 and GPT-6 Luna (`none`). Gemma 4 takes an effort setting; whether it accepts `none` is UNKNOWN. gpt-oss goes no lower than `low`.
+* **Priority tier.** `service_tier: "priority"` is described as "the fastest response times for a price premium". It puts our requests ahead of Standard and Flex ones. It is offered for the Mistral, Gemma, Nemotron, gpt-oss and GLM models, but not for GPT-6 Luna or Claude Haiku 4.5. It may remove the queueing behind Qwen3-Next's 0.6 to 9.3 s spread (INFERRED from the endpoint docs: requests "may be briefly queued"). It cannot shorten the network trip.
+
+**Shortlist to measure next.** Speed is a GUESS for every one of them, because no card publishes latency.
+
+| model | why | route / settings |
+|---|---|---|
+| `mistral.ministral-3-8b-instruct` | MEASURED: decisions 530 / 657 ms, 6/6 right; follow-ups came back empty | `/v1`; follow-ups to be retried with `--plain` |
+| `mistral.ministral-3-3b-instruct` | same family, smaller, so probably faster; accuracy unknown | `/v1`, priority |
+| `nvidia.nemotron-nano-3-30b` | about 3B parameters used per token; reasoning can be off | `/v1`, `reasoning none`, priority |
+| `google.gemma-4-26b-a4b` | 3.8B parameters used per token | `/openai/v1`, reasoning effort, priority |
+| `openai.gpt-6-luna` | "repeatable work at scale"; reasoning can be off; $0.11 input / $0.55 output per million tokens in-region | `/openai/v1`, `reasoning none`, Standard only |
+| `anthropic.claude-haiku-4-5` | likely the most accurate small model on the list | Messages API, Standard only |
+
+**Second tier**, if the first finds nothing:
+* `mistral.ministral-3-14b-instruct`.
+* `google.gemma-4-e2b` (very small; quality risk).
+* `google.gemma-3-4b-it` and `gemma-3-12b-it` (older, no reasoning; their cards list them as Legacy).
+* `zai.glm-4.7-flash` (Legacy, end of life March 2027).
+* `openai.gpt-oss-20b` (reasoning cannot be turned off).
+
+**Not viable for a live call**, GUESS from size or design:
+* Large or reasoning-first models: DeepSeek V3.x, Kimi, MiniMax M2.x, Qwen3 235B, Mistral Large 3, GLM 4.6 / 4.7 / 5, Nemotron Super 120B, gpt-oss-120b, Grok 4.3.
+* The larger OpenAI and Claude models: GPT-5.x, GPT-6 Sol / Terra / Astra, Claude Opus / Sonnet / Fable.
+* Coding, vision and safeguard models.
+* Voxtral, which is speech recognition.
+* Qwen3-Next 80B: MEASURED too slow.
+
+**Changes to `scripts/bedrock_speed.py`:**
+* Each model is sent to the address its card gives (`base_for`). Claude goes through a small Messages API client, `MessagesBackend`, which continues the begun reply natively.
+* `--reasoning` and `--service-tier` reach only the models whose card takes them (`applies`), so one run can mix models.
+* For GPT-5.x and GPT-6.x, `max_tokens` becomes `max_completion_tokens` and temperature is left out. INFERRED from OpenAI's API for its reasoning-era models.
+* `--plain` with `--decisions 0 --follow-ups 3` retests Ministral's follow-ups in 3 calls.
+* By default every captured decision (17) is sent, so all three conversations are covered.
+
+Tests: `test_bedrock_speed.py` has 10 tests, all against fake servers.

@@ -12,8 +12,11 @@ Two steps:
       live demo; the conversations hold no real caller.
 
   uv run python scripts/bedrock_speed.py run --dry-run      what would be sent, how many calls, about how many tokens; nothing is sent
+  uv run python scripts/bedrock_speed.py run --plain --models mistral.ministral-3-8b-instruct --decisions 0 --follow-ups 3
+      3 follow-ups (no warm-up) with standard OpenAI fields only: the begun reply is told to the model in words, not continued. 30 Oct:
+      Ministral 3 8B returned empty follow-ups the agent's way (section 54); this checks whether that is the reason.
   BEDROCK_API_KEY=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/bedrock_speed.py run
-      Sends those prompts, word for word, to each model: 1 warm-up call, then 10 decisions and 10 follow-ups (21 calls a model, 84 for four).
+      Sends those prompts, word for word, to each model: 1 warm-up call, then every captured decision (17) and 10 follow-ups (28 calls a model).
       This COSTS MONEY. The key is read from BEDROCK_API_KEY and never printed or saved.
 
 Results: a table here and benchmarks/results/bedrock_speed_<date>.json (ignored by git). Times are measured from this machine, so they include
@@ -21,6 +24,15 @@ the network trip to the region; `network` is the time of a plain GET /models, th
 
 The agent's client sends a few fields only vLLM knows (continue_final_message, structured_outputs, chat_template_kwargs). If a model refuses
 the warm-up with HTTP 400, it is tried again with standard OpenAI fields only ("plain"); the table says which way worked.
+
+Per model, from the AWS model cards (30 Oct): Gemma 4 and the GPT-5.x / GPT-6.x models answer under /openai/v1, not /v1 (a call to /v1 is
+refused "isn't supported on this route"); Claude models answer only Anthropic's Messages API at /anthropic/v1/messages (x-api-key header).
+The script picks the right one from the model name, so --base stays the plain .../v1.
+
+  --reasoning none     for models that think before answering (Gemma 4, Nemotron Nano 3, GPT-6 Luna): "none" where the card allows it
+                       (gpt-oss allows "low" at the least)
+  --service-tier priority
+                       Bedrock's "fastest response times for a price premium" tier, where the model offers it (not GPT-6 Luna, not Claude)
 """
 from __future__ import annotations
 
@@ -42,6 +54,19 @@ sys.path.insert(0, str(ROOT / "scripts"))
 KEY_ENV, ALLOW_ENV = "BEDROCK_API_KEY", "VOICE_AGENT_ALLOW_CLOUD"
 BASE = "https://bedrock-mantle.us-east-1.api.aws/v1"
 MODELS = ["qwen.qwen3-next-80b-a3b-instruct", "mistral.ministral-3-8b-instruct", "anthropic.claude-haiku-4-5", "google.gemma-4-26b-a4b"]
+OPENAI_PATH = re.compile(r"^(?:google\.gemma-4|openai\.gpt-[56])")      # served under /openai/v1 on bedrock-mantle (AWS model cards)
+NEW_OPENAI = re.compile(r"^openai\.gpt-[56]")                           # OpenAI's newer models: max_completion_tokens, no temperature
+THINKS = re.compile(r"^(?:google\.gemma-4|nvidia\.nemotron-nano-3|openai\.gpt-|zai\.glm)")   # take a reasoning effort (AWS model cards)
+NO_TIER = re.compile(r"^(?:anthropic\.|openai\.gpt-[56])")              # Standard tier only on these cards: no service_tier sent
+
+
+def base_for(model: str, base: str) -> str:
+    """The address a model answers at, from the plain .../v1 one."""
+    if model.startswith("anthropic."):
+        return re.sub(r"/(?:openai/)?v1/?$", "/anthropic/v1", base)
+    if OPENAI_PATH.match(model):
+        return re.sub(r"/(?:openai/)?v1/?$", "/openai/v1", base)
+    return base
 PROMPTS = ROOT / "benchmarks" / "bedrock_speed_prompts.json"
 SITE_DATA = ROOT.parent / "bmw-portal" / "site" / "data.js"
 LOCAL = {"VA__LLM__BACKENDS__GPU_SERVER__HOST": "http://127.0.0.1:8003/v1", "VA__LLM__BACKENDS__GPU_SERVER__MODEL": "mlx-community/Qwen3-4B-Instruct-2507-4bit"}
@@ -102,10 +127,19 @@ def capture(out: Path) -> int:
 
 
 # ------------------------------------------------------------------------------------------------ run (Bedrock, costs money)
-def make_backend(model: str, base: str, plain: bool = False):
-    """The agent's own client for an OpenAI-compatible server, pointed at Bedrock, counting what it does."""
+def applies(model: str, reasoning: str | None, tier: str | None) -> tuple[str | None, str | None]:
+    """--reasoning and --service-tier only where the model's card says it takes them, so one run can mix models."""
+    return (reasoning if THINKS.match(model) else None), (None if NO_TIER.match(model) else tier)
+
+
+def make_backend(model: str, base: str, plain: bool = False, reasoning: str | None = None, tier: str | None = None):
+    """The agent's own client for an OpenAI-compatible server, pointed at Bedrock, counting what it does (a Claude model: MessagesBackend)."""
+    reasoning, tier = applies(model, reasoning, tier)
     from dealer_core.config import BackendCfg, load_config
     from dealer_core.nlu.openai_compat import OpenAICompatBackend
+
+    if model.startswith("anthropic."):
+        return MessagesBackend(model, base_for(model, base), plain)
 
     class Timed(OpenAICompatBackend):
         def __init__(self, *a):
@@ -118,6 +152,13 @@ def make_backend(model: str, base: str, plain: bool = False):
             body = super()._body(system, user, max_tokens, temperature, prefill, schema, stream)
             for k in VLLM_ONLY if self.plain else ():
                 body.pop(k, None)
+            if NEW_OPENAI.match(model):                    # OpenAI's reasoning-era models refuse max_tokens and a set temperature
+                body["max_completion_tokens"] = body.pop("max_tokens")
+                body.pop("temperature", None), body.pop("top_p", None)
+            if reasoning:
+                body["reasoning_effort"] = reasoning
+            if tier:
+                body["service_tier"] = tier
             return body
 
         def _post(self, body, timeout):
@@ -134,7 +175,59 @@ def make_backend(model: str, base: str, plain: bool = False):
             return None if self.plain else super().choose(*a, **k)
 
     llm = load_config(environ={}).llm
-    return Timed(f"bedrock:{model}", BackendCfg(runtime="openai", host=base, model=model, timeout_s=10.0, api_key_env=KEY_ENV), llm)
+    return Timed(f"bedrock:{model}", BackendCfg(runtime="openai", host=base_for(model, base), model=model, timeout_s=10.0, api_key_env=KEY_ENV), llm)
+
+
+class MessagesBackend:
+    """Claude on bedrock-mantle: Anthropic's Messages API, with the two calls the agent makes (a short answer; a streamed continuation).
+    A begun reply is continued natively (the last message is the assistant's own), or told in words with `plain`."""
+
+    def __init__(self, model: str, base: str, plain: bool = False):
+        import httpx
+
+        self.model, self.base, self.plain, self.streams, self.can_choose = model, base.rstrip("/"), plain, 0, False
+        self.usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.client = httpx.Client(timeout=10.0, headers={"x-api-key": os.environ.get(KEY_ENV, ""), "anthropic-version": "2023-06-01"})
+
+    def health(self):
+        return "Messages API (no model list on this route)"
+
+    def _body(self, system, user, max_tokens, temperature, prefill="", stream=False) -> dict:
+        if prefill and self.plain:
+            user, prefill = f"{user}\n(You have already said: \"{prefill.strip()}\". Write only what comes next.)", ""
+        messages = [{"role": "user", "content": user}] + ([{"role": "assistant", "content": prefill.rstrip()}] if prefill else [])
+        return {"model": self.model, "system": system, "messages": messages, "max_tokens": max_tokens, "stream": stream,
+                "temperature": 0.0 if temperature is None else temperature}
+
+    def choose(self, *a, **k):
+        return None
+
+    def lead_in(self, system, user, max_tokens=36, temperature=None, deadline_s=None) -> str:
+        from dealer_core.nlu.backend import BackendError
+
+        r = self.client.post(f"{self.base}/messages", json=self._body(system, user, max_tokens, temperature), timeout=deadline_s or 10.0)
+        if r.status_code >= 400:
+            raise BackendError(f"bedrock:{self.model} HTTP {r.status_code}: {r.text[:200]}")
+        out = r.json()
+        self.usage["prompt_tokens"] += (out.get("usage") or {}).get("input_tokens") or 0
+        self.usage["completion_tokens"] += (out.get("usage") or {}).get("output_tokens") or 0
+        return "".join(b.get("text", "") for b in out.get("content", []))
+
+    def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
+        from dealer_core.nlu.backend import BackendError
+
+        self.streams += 1
+        with self.client.stream("POST", f"{self.base}/messages", json=self._body(system, user, max_tokens, temperature, prefill, True),
+                                timeout=(deadline_s or 10.0) + 2) as r:
+            if r.status_code >= 400:
+                raise BackendError(f"bedrock:{self.model} HTTP {r.status_code}: {r.read()[:200]!r}")
+            for line in r.iter_lines():
+                if line.startswith("data:"):
+                    ev = json.loads(line[5:])
+                    if ev.get("type") == "content_block_delta" and ev["delta"].get("text"):
+                        yield ev["delta"]["text"]
+                    elif ev.get("type") == "message_stop":
+                        return
 
 
 def decide(b, rec: dict) -> str:
@@ -170,29 +263,31 @@ def short(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"[:200]
 
 
-def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follow: int, say=print) -> dict:
+def one_model(model: str, base: str, records: list[dict], n_decide: int, n_follow: int, say=print, plain: bool = False,
+              reasoning: str | None = None, tier: str | None = None) -> dict:
     decisions = [r for r in records if r["kind"] == "decide"]
     follows = [r for r in records if r["kind"] == "follow_up"]
-    out: dict = {"model": model, "mode": "agent", "network_ms": [], "decide": [], "follow_up": [], "errors": []}
-    b = make_backend(model, base)
+    out: dict = {"model": model, "mode": "plain" if plain else "agent", "network_ms": [], "decide": [], "follow_up": [], "errors": [],
+                 "base": base_for(model, base), "reasoning": applies(model, reasoning, tier)[0], "service_tier": applies(model, reasoning, tier)[1]}
+    b = make_backend(model, base, plain=plain, reasoning=reasoning, tier=tier)
     h = b.health()
     out["health"] = h.detail if hasattr(h, "detail") else str(h)
     for _ in range(3):
         t0 = time.perf_counter()
         try:
-            b.client.get(f"{b.base}/models", timeout=10.0)
+            b.client.get(f"{base}/models", timeout=10.0)                # the plain route, for every model alike
             out["network_ms"].append(round((time.perf_counter() - t0) * 1000))
         except Exception as e:
             out["errors"].append(f"network: {short(e)}")
-    for plain in (False, True):                                       # the warm-up, not counted
-        if plain:
-            b, out["mode"] = make_backend(model, base, plain=True), "plain"
+    for retry in ((False, True) if n_decide and not plain else ()):  # the warm-up, not counted (none when only follow-ups are asked for)
+        if retry:
+            b, out["mode"] = make_backend(model, base, plain=True, reasoning=reasoning, tier=tier), "plain"
         try:
             decide(b, decisions[0])
             break
         except Exception as e:
             out["errors"].append(f"warm-up ({out['mode']}): {short(e)}")
-            if "HTTP 400" not in str(e) or plain:
+            if "HTTP 400" not in str(e) or retry:
                 say(f"  {model}: the warm-up failed ({short(e)}); skipped")
                 return out
     for rec in (decisions * n_decide)[:n_decide]:
@@ -245,14 +340,16 @@ def run(a) -> int:
         return 2
     records = json.loads(a.prompts.read_text(encoding="utf-8"))
     n_dec, n_fol = sum(r["kind"] == "decide" for r in records), sum(r["kind"] == "follow_up" for r in records)
-    if not n_dec or (a.follow_ups and not n_fol):
+    a.decisions = n_dec if a.decisions is None else a.decisions
+    if (a.decisions and not n_dec) or (a.follow_ups and not n_fol):
         print(f"{a.prompts.name} has {n_dec} decisions and {n_fol} follow-ups; capture again")
         return 2
-    calls = 1 + a.decisions + a.follow_ups
+    calls = (1 if a.decisions and not a.plain else 0) + a.decisions + a.follow_ups
     chars = lambda kind, n: sum(len(r["system"]) + len(r["user"]) for r in ([x for x in records if x["kind"] == kind] * n)[:n])
-    est_in = (chars("decide", a.decisions + 1) + chars("follow_up", a.follow_ups)) // 4
+    n_dec_calls = calls - a.follow_ups
+    est_in = (chars("decide", n_dec_calls) + chars("follow_up", a.follow_ups)) // 4
     print(f"{len(a.models)} model(s) x {calls} calls = {len(a.models) * calls} calls to {a.base}\n"
-          f"about {est_in:,} input tokens and at most {16 * (a.decisions + 1) + 36 * a.follow_ups:,} output tokens a model (input: characters / 4, an estimate)")
+          f"about {est_in:,} input tokens and at most {16 * n_dec_calls + 36 * a.follow_ups:,} output tokens a model (input: characters / 4, an estimate)")
     if a.dry_run:
         print("dry run: nothing sent\n" + "\n".join(f"  {m}" for m in a.models))
         return 0
@@ -262,7 +359,7 @@ def run(a) -> int:
     results = []
     for m in a.models:
         print(f"{m} ...", flush=True)
-        results.append(one_model(m, a.base, records, a.decisions, a.follow_ups))
+        results.append(one_model(m, a.base, records, a.decisions, a.follow_ups, plain=a.plain, reasoning=a.reasoning, tier=a.service_tier))
     rows = [summary(r) for r in results]
     print("\nmilliseconds, from this machine (network = a plain GET /models)\n" + table(rows))
     for r in results:
@@ -285,10 +382,13 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="send them to Bedrock (costs money; --dry-run sends nothing)")
     r.add_argument("--models", nargs="+", default=MODELS)
     r.add_argument("--base", default=BASE, help="the Bedrock OpenAI-compatible endpoint (another region: change us-east-1)")
-    r.add_argument("--decisions", type=int, default=10)
+    r.add_argument("--decisions", type=int, default=None, help="default: every captured decision (17), so all three conversations are covered")
     r.add_argument("--follow-ups", type=int, default=10)
     r.add_argument("--prompts", type=Path, default=PROMPTS)
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--plain", action="store_true", help="standard OpenAI fields only, from the first call (no vLLM fields, no reply continued)")
+    r.add_argument("--reasoning", choices=["none", "minimal", "low", "medium", "high"], help="reasoning effort, for models that think first")
+    r.add_argument("--service-tier", choices=["default", "priority", "flex"], help="Bedrock service tier (priority: faster, costs more)")
     a = p.parse_args(argv)
     return capture(a.out) if a.cmd == "capture" else run(a)
 
