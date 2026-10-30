@@ -181,3 +181,31 @@ def test_reasoning_and_tier_go_only_to_models_whose_card_takes_them():
     assert bs.applies("nvidia.nemotron-nano-3-30b", "none", "priority") == ("none", "priority")
     assert bs.applies("openai.gpt-6-luna", "none", "priority") == ("none", None)
     assert bs.applies("anthropic.claude-haiku-4-5", "none", "priority") == (None, None)
+
+
+FULL = {"kind": "full_reply", "system": "WRITE", "user": "CUSTOMER (just now): a Porsche\nFACTS FROM THE SYSTEM: ...", "max_tokens": 200, "temperature": None,
+        "customer": "I am looking for a Porsche."}
+
+
+def test_whole_replies_are_timed_to_the_first_piece_and_the_end_and_a_cut_one_is_counted(fake, monkeypatch):
+    """30 Oct, the owner: which model is faster than Nemotron when it writes the whole reply (the model_only test mode)?"""
+    seen = fake()
+    r = bs.one_model("fake.model", "https://fake/v1", RECORDS + [FULL], 0, 0, say=lambda *_: None, n_full=2)
+    streamed = [b for b in seen if b.get("stream")]
+    assert len(streamed) == 3 and not any(b.get("continue_final_message") for b in streamed)      # a warm-up and two replies, none continuing a begun reply
+    assert [x["reply"] for x in r["full_reply"]] == ["Would you like to hear more? Extra."] * 2 and all(x["finished"] for x in r["full_reply"])
+    assert all(x["first_ms"] is not None and x["first_ms"] <= x["total_ms"] for x in r["full_reply"])
+    s = bs.summary(r)
+    assert s["full_n"] == 2 and s["full_finished"] == "2/2" and "reply first" in bs.table([s])
+    monkeypatch.setattr(bs, "full_reply", lambda b, rec: {**FULL, "first_ms": 400, "total_ms": 900, "words": 9, "finished": False, "reply": "I have a Macan at 149,"})
+    assert bs.summary(bs.one_model("fake.model", "https://fake/v1", RECORDS + [FULL], 0, 0, say=lambda *_: None, n_full=1))["full_finished"] == "0/1"
+
+
+def test_a_whole_reply_run_needs_its_own_prompts_and_a_dry_run_counts_them(tmp_path, capsys):
+    prompts, full = tmp_path / "p.json", tmp_path / "f.json"
+    prompts.write_text(json.dumps(RECORDS))
+    args = ["run", "--prompts", str(prompts), "--full-prompts", str(full), "--models", "a", "b", "--decisions", "0", "--follow-ups", "0", "--full-replies", "5", "--dry-run"]
+    assert bs.main(args) == 2 and "capture --full" in capsys.readouterr().out
+    full.write_text(json.dumps([FULL]))
+    assert bs.main(args) == 0
+    assert "2 model(s) x 6 calls" in capsys.readouterr().out                                        # a warm-up and 5 replies each

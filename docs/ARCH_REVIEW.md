@@ -1667,3 +1667,30 @@ Fix (`voice/pipeline.apply_voice_profile`): with `voice.model_only` the reply ca
 Also seen in the replay: to "do you have any other Porsche cars?" the model said "We don't have any other Porsche models in stock." The check notes it ("says there are no porsche cars, but there are") and, in this mode, lets it through. That is the kind of sentence the checks exist for.
 
 UNKNOWN: why the second turn took 9.7 s. The worker's own log for that turn (its "stream:" and timing lines) would say; it was not read. One way it could happen (GUESS): the stream stalled until the 6 s backend timeout, then the engine's one retry.
+
+## 62. The speed test times whole replies too (30 Oct, the owner: "what model other than nemotron would be faster? only model responses tho"; then "add a whole-reply speed test for Nemotron, Gemma 4, Ministral 3 8B and Ministral 3 3B")
+
+No model had been timed writing a whole reply. Sections 54 and 56 timed the decision and the one-sentence follow-up of the prefix level only. In the test mode of section 60 a turn is a decision and then a whole reply, written from a longer prompt (the car's full spec sheet, the conversation).
+
+`scripts/bedrock_speed.py`:
+* `capture --full` runs the three captured conversations and the owner's two test calls (`OWNER_CALLS`: the Porsche call and the Tahoe call, the owner's lines only) through the agent. It uses the test mode with the voice settings, on the local model, so it is free. Every whole-reply prompt is saved to `benchmarks/bedrock_full_reply_prompts.json`: 24 prompts, up to 200 tokens each.
+* `run --full-replies N` sends N of them to each model as the agent does: streamed, with no begun reply to continue. For each it records:
+  * the time to the first speakable piece: `writer.split_point`, a sentence or a first clause of 6+ words, which is where the voice starts;
+  * the time to the end of the reply;
+  * whether the reply was finished;
+  * the reply itself.
+
+  The table gains "reply first", "reply end" and "finished" columns. One warm-up reply is not counted. `--decisions 0 --follow-ups 0` sends whole replies only.
+* Dry run of the owner's four models with 20 replies each: 21 calls a model, about 23,300 input tokens and at most 8,400 output tokens a model. INFERRED, at section 56's priority price for Nemotron: under one US cent for Nemotron. The other models' prices were not checked.
+
+Tests: `test_bedrock_speed.py`, 2 new, against the fake server:
+* a warm-up and two replies are streamed, none continuing a begun reply;
+* the first piece comes no later than the end;
+* a cut-off reply is counted as not finished;
+* a run asks for `capture --full` when the prompts are missing, and the dry run counts the calls.
+
+Seen while capturing on the local Qwen3-4B, MEASURED as the replies it gave:
+* "I've got four Toyota models: a Corolla, a Camry, and a RAV4", which names three;
+* "I don't have mileage data for any of the three cars" when the mileage was in the facts.
+
+These are the local model's. Whether the Bedrock models do better is what the replies in the results file will show.
