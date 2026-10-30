@@ -11,8 +11,9 @@ import threading
 import time
 
 from loguru import logger
-from pipecat.frames.frames import BotStartedSpeakingFrame, Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, StartFrame, TranscriptionFrame, TTSSpeakFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.transports.base_output import BOT_VAD_STOP_FALLBACK_SECS
 
 from ..dialogue.machine import DialogueEngine
 from .services import SPEAK_UP, too_quiet_to_trust
@@ -23,6 +24,11 @@ from .services import SPEAK_UP, too_quiet_to_trust
 _MARKER_ONLY = re.compile(r"(?:(?:actually|wait|hold on|hang on|um+|uh+|er+|erm|well|so|oh|hmm+|sorry|excuse me|one moment)[\s,.!?-]*)+", re.I)
 MARKER_WAIT_S = 1.2
 
+# Silence on the line (owner, 30 Oct: "user should start speaking"; "if the model doesn't hear anything, it should ask an are you still there question"; section 49)
+STILL_THERE_ASK = "Hello? Are you still there?"
+SILENT_GOODBYE = "I'll end the call here. Tap the microphone any time to carry on where we left off."
+WELCOME_BACK = "Welcome back. Where were we?"
+
 
 def _louder(a: float | None, b: float | None) -> float | None:
     """The higher of two levels, either of which may be unknown (None)."""
@@ -31,7 +37,8 @@ def _louder(a: float | None, b: float | None) -> float | None:
 
 class DealerBrain(FrameProcessor):
     def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, speak_up: tuple[float, float] = (0.0, 0.0),
-                 background_below: float = 0.0, first_turn_below: float = 0.0, **kwargs) -> None:
+                 background_below: float = 0.0, first_turn_below: float = 0.0, greet_after: float = 0.0, still_there_after: float = 0.0, hang_up_after: float = 0.0,
+                 welcome_back: bool = False, on_before_greeting=None, on_silent_end=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine, self.session = engine, engine.new_session()
         self._speak_opening, self._on_turn = speak_opening, on_turn
@@ -64,18 +71,26 @@ class DealerBrain(FrameProcessor):
         self._caller_speaking = False                   # between the detector's "started" and "stopped" speaking
         self.playback = None                            # voice.heard.Playback: told when a reply starts, so what the caller heard of it can be worked out
         self._cut_heard: str | None = None              # the caller interrupted the reply being written: what they had heard of it (see reply_cut)
+        # Silence (section 49). The caller speaks first: the greeting (or, for a caller who came back, WELCOME_BACK) is said only after `greet_after` s of quiet. After the
+        # agent has finished speaking, `still_there_after` s of quiet gets STILL_THERE_ASK; `hang_up_after` s more gets SILENT_GOODBYE, and once that has been heard the
+        # call ends (`on_silent_end`). The clock stops while either side talks or a reply is being made, and starts again from the current stage after; a turn acted on
+        # (or a "speak up") puts it back to the start. 0 = off (greet_after 0: greet at once, as before).
+        self._greet_after, self._still_there_after, self._hang_up_after = greet_after, still_there_after, hang_up_after
+        self._welcome_back = welcome_back
+        self._on_before_greeting, self._on_silent_end = on_before_greeting, on_silent_end
+        self._quiet_stage = "off"                       # greet | first | second | ending | off
+        self._quiet_timer = None
+        self._agent_speaking = False                    # between the output's "bot started" and "bot stopped speaking": the clock does not run
+        # Our voices do not mark the end of a sentence, so the output reports "bot stopped speaking" when its queue has been empty for BOT_VAD_STOP_FALLBACK_SECS (3 s):
+        # MEASURED on a test call, 30 Oct, "are you still there?" came 11.0 s after the agent's last word instead of 8. Taken off the waits that start then.
+        self.stop_report_lag_s = float(BOT_VAD_STOP_FALLBACK_SECS)
+        self.quiet_prompts: list[str] = []              # what the silence clock said (for tests and the log)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame):
             await self.push_frame(frame, direction)
-            if self._speak_opening:
-                if self.playback is not None:
-                    self.playback.new_reply()
-                opening = self.engine.opening(self.session)
-                if self._on_say:
-                    self._on_say(opening)
-                await self.push_frame(TTSSpeakFrame(opening, append_to_context=False))
+            await self.begin()
             return
         if isinstance(frame, TranscriptionFrame):
             if self._defer_next:
@@ -100,18 +115,113 @@ class DealerBrain(FrameProcessor):
             return
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._caller_speaking = True
+            self._cancel_quiet()
             if self._marker_timer is not None:
                 self._marker_timer.cancel()                         # the rest of the sentence after "Actually," is being said: its transcript will come
                 self._marker_timer = None
                 self._marker_waiting = True
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._caller_speaking = False
+            self._arm_quiet()                                       # a reply cancels it when it starts; a turn that gets none (the room) leaves the clock running
             if self._marker_waiting:
                 self._marker_waiting = False                        # ...and if it gives no transcript after all, "Actually," is answered alone, a little later
                 self._arm_marker(self.marker_wait_s + 1.0)
         if isinstance(frame, BotStartedSpeakingFrame):
             self._open_turn = None                                  # the reply is being heard now: it can no longer be taken back
+            self._agent_speaking = True
+            self._cancel_quiet()
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._agent_speaking = False
+            if self._quiet_stage == "ending":
+                await self._end_for_silence()
+            else:
+                self._arm_quiet(already=self.stop_report_lag_s)
         await self.push_frame(frame, direction)
+
+    # ------------------------------------------------------------------------------------------------ silence
+    async def begin(self) -> None:
+        """The call has started."""
+        if (self._speak_opening or self._welcome_back) and self._greet_after:
+            self._quiet_stage = "greet"                     # the caller first: greet only if they say nothing
+            self._arm_quiet()
+        elif self._speak_opening:
+            await self._greet()
+            self._quiet_stage = "first"
+        else:
+            self._quiet_stage = "first"                     # a call carried on after a drop: listen
+            self._arm_quiet()
+
+    def _quiet_wait(self) -> float:
+        return {"greet": self._greet_after, "first": self._still_there_after, "second": self._hang_up_after, "ending": 12.0}.get(self._quiet_stage, 0.0)
+
+    def _arm_quiet(self, already: float = 0.0) -> None:
+        """`already`: seconds of the quiet that have passed before this was called."""
+        self._cancel_quiet()
+        wait = self._quiet_wait()
+        if wait > 0 and (not self._agent_speaking or self._quiet_stage == "ending"):   # while the agent is audible, its "stopped speaking" arms it
+            loop = asyncio.get_running_loop()
+            self._quiet_timer = loop.call_later(max(0.0, wait - already), lambda: loop.create_task(self._quiet_reached()))
+
+    def _cancel_quiet(self) -> None:
+        if self._quiet_timer is not None:
+            self._quiet_timer.cancel()
+            self._quiet_timer = None
+
+    def _heard_someone(self) -> None:
+        """A turn was acted on, or the caller was asked to speak up: someone is there, so the clock starts again from the beginning."""
+        if self._quiet_stage not in ("off", "ending"):
+            self._quiet_stage = "first"
+            self._arm_quiet()                                       # from the full wait (the reply, when it starts, stops the clock until it has been heard)
+
+    async def _quiet_reached(self) -> None:
+        self._quiet_timer = None
+        if self._busy.locked() or self._caller_speaking or (self._agent_speaking and self._quiet_stage != "ending"):   # not silence
+            self._arm_quiet()
+            return
+        stage = self._quiet_stage
+        if stage == "greet":
+            self._quiet_stage = "first"
+            if self._on_before_greeting:
+                await self._on_before_greeting()
+            await self._greet()
+        elif stage == "first":
+            self._quiet_stage = "second"
+            await self._say_quiet(STILL_THERE_ASK)
+        elif stage == "second":
+            self._quiet_stage = "ending"
+            await self._say_quiet(SILENT_GOODBYE)
+            self._arm_quiet()                                       # if the end of the goodbye is never reported, end anyway
+        elif stage == "ending":
+            await self._end_for_silence()
+
+    async def _greet(self) -> None:
+        if self.playback is not None:
+            self.playback.new_reply()
+        if self._welcome_back and not self._speak_opening:
+            line = WELCOME_BACK
+            self.session.remember("agent", line)
+        else:
+            line = self.engine.opening(self.session)
+        self.quiet_prompts.append(line)
+        if self._on_say:
+            self._on_say(line)
+        await self.push_frame(TTSSpeakFrame(line, append_to_context=False))
+
+    async def _say_quiet(self, line: str) -> None:
+        """Not remembered: the conversation goes on from where it was."""
+        if self.playback is not None:
+            self.playback.new_reply()
+        self.quiet_prompts.append(line)
+        if self._on_say:
+            self._on_say(line)
+        await self.push_frame(TTSSpeakFrame(line, append_to_context=False))
+
+    async def _end_for_silence(self) -> None:
+        self._cancel_quiet()
+        self._quiet_stage = "off"
+        logger.debug("brain: no answer to 'are you still there?': the call is ended (it can be carried on)")
+        if self._on_silent_end:
+            await self._on_silent_end()
 
     def turn_ended(self) -> None:
         """A turn has just ended: a first half that never produced a transcript must not swallow this one."""
@@ -204,6 +314,7 @@ class DealerBrain(FrameProcessor):
                     return
                 self._room_in_a_row = 0                 # three in a row: perhaps a caller far from the microphone, so ask once (the words are still not used)
                 self.spoken_up += 1
+                self._heard_someone()
                 if self._on_say:
                     self._on_say(SPEAK_UP)
                 await self.push_frame(TTSSpeakFrame(SPEAK_UP, append_to_context=False))
@@ -212,12 +323,14 @@ class DealerBrain(FrameProcessor):
             if self._asked_to_speak_up < 2 and too_quiet_to_trust(text, level, *self._speak_up):
                 self._asked_to_speak_up += 1            # the words are not acted on and not remembered: they are probably not what was said
                 self.spoken_up += 1
+                self._heard_someone()
                 if self._on_say:
                     self._on_say(SPEAK_UP)
                 await self.push_frame(TTSSpeakFrame(SPEAK_UP, append_to_context=False))
                 logger.debug(f"brain: too quiet to trust (level {level:.3f}), asked the caller to speak up")
                 return
             self._asked_to_speak_up = 0
+            self._heard_someone()
             if level is not None:
                 self._caller_levels = (self._caller_levels + [level])[-8:]
             self._open_turn, self._open_level = text, level
@@ -281,5 +394,8 @@ class DealerBrain(FrameProcessor):
                                       "via": d.via.split(":")[0], "model_written": bool(d.draft), "risk": d.risk, "ended": result.ended, "fallback": "FALLBACK" in d.note,
                                       "note": d.note})            # the note holds reasons and flags only: no transcript, no phone number
                 logger.debug(f"brain first sentence {first_ms:.0f} ms, intent {d.intent}, via {self.turn_log[-1]['via']}")
+                if result.ended:                                    # the caller said goodbye: no "are you still there?" after it
+                    self._cancel_quiet()
+                    self._quiet_stage = "off"
                 if self._on_turn:
                     self._on_turn(result)

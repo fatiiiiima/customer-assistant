@@ -254,6 +254,10 @@ class VoiceCfg(_Strict):
                                                  # (owner, 30 Oct: "it keeps hearing people in the background"). The owner's own turns: the quietest 0.37 of the loudest in its call, so 0.25 leaves a margin. 0 = off
     first_turn_below: float = 0.06                # hands-free: before any turn has been acted on (nothing to compare with yet), a turn whose loudest 0.3 s is under this is the room and is ignored;
                                                  # the third in a row gets a "speak up". The owner's office call (30 Oct): noise turns 0.024-0.040, the owner 0.46; recorded calls 0.10-0.27. 0 = off
+    greet_if_quiet_secs: float = 3.0              # voice server: the caller speaks first; the greeting is said only after this much quiet at the start (owner, 30 Oct). 0 = greet at once
+    still_there_secs: float = 8.0                 # voice server: after the agent has finished, this much quiet gets "Hello? Are you still there?". 0 = never
+    hang_up_secs: float = 7.0                     # ...and this much more ends the call, after "I'll end the call here...". The call can be carried on for calls_kept_secs. 0 = never
+    calls_kept_secs: float = 900.0                # a call is remembered this long after its last turn: the visitor who comes back carries on where they were (owner, 30 Oct)
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to

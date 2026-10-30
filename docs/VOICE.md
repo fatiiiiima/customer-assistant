@@ -39,8 +39,8 @@ speech-server --port 8020                              # alba, the fallback (the
 ```
 The worker uses them by default (`tts.backend: pocket`). If eve's server does not answer within 1 s, alba says that sentence. If both are down, Kokoro does,
 so a call never goes silent. To go back: `--tts kokoro` (or `chatterbox`). docs/ARCH_REVIEW.md sections 40 to 42.
-Eve speaks 1.1 times faster than the model makes it, with every pause inside a sentence cut to 120 ms (section 43), and loud sentence starts turned
-down ("Sure!", "Hi", section 44); `--speed 1.0 --max-pause-ms 0 --level 0` turns all three off.
+Eve speaks at the model's own speed, with every pause inside a sentence cut to at most 250 ms (section 50; it was 1.1 times faster with 120 ms, section 43),
+and loud sentence starts turned down ("Sure!", "Hi", section 44); `--speed 1.1 --max-pause-ms 120` is the faster pace, `--max-pause-ms 0 --level 0` turns the rest off.
 
 Hands-free with people talking nearby: before you have spoken, a turn whose level is under 0.06 is ignored (`voice.first_turn_below`; the third in a row gets
 one "speak up"); once you have spoken, a turn under a quarter of your own level is ignored (`voice.background_below`). Keep the Mac's

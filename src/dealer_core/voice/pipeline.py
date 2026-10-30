@@ -21,7 +21,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 from ..app import ROOT, App
 from ..config import Config
 from .audiotap import AudioTap
-from .brain import DealerBrain
+from .brain import SILENT_GOODBYE, WELCOME_BACK, DealerBrain
 from .mic_health import MicHealth
 from .gate import HalfDuplexGate
 from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
@@ -120,7 +120,7 @@ def common_phrases(cfg: Config) -> list[str]:
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
-            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + STILL_THERE + ["Is there a colour you'd like?"]
+            "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + STILL_THERE + ["Is there a colour you'd like?", SILENT_GOODBYE, WELCOME_BACK]
 
 
 def apply_voice_profile(app: App, cfg: Config) -> None:
@@ -165,7 +165,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                    speak_opening: bool = True, probes: dict[str, FrameProcessor] | None = None, on_turn=None, half_duplex: bool = False, on_heard=None, on_say=None,
                    smart_turn: bool = False, smart_fallback_secs: float = 1.0, gate_tail_secs: float = 0.5, barge_in: bool = False,
                    smart_short_answer_secs: float | None = None, smart_peek: bool | None = None, mic_gate=None, on_user_stop=None,
-                   seed_agent_line: str | None = None, seed_state=None):
+                   seed_agent_line: str | None = None, seed_state=None, greet_after: float = 0.0, still_there_after: float = 0.0, hang_up_after: float = 0.0,
+                   welcome_back: bool = False, on_before_greeting=None, on_silent_end=None):
     """`source` produces InputAudioRawFrame (microphone or a file); `sink` consumes the speech (speaker or a recorder).
     `probes` optionally inserts timing probes after: vad, stt, brain, tts."""
     probes = probes or {}
@@ -209,7 +210,9 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                         level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms,
                         speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below),
                         background_below=vcfg.background_below if mic_gate is None else 0.0,     # hands-free only: in tap mode the caller chose to speak
-                        first_turn_below=vcfg.first_turn_below if mic_gate is None else 0.0)
+                        first_turn_below=vcfg.first_turn_below if mic_gate is None else 0.0,
+                        greet_after=greet_after, still_there_after=still_there_after, hang_up_after=hang_up_after, welcome_back=welcome_back,
+                        on_before_greeting=on_before_greeting, on_silent_end=on_silent_end)
     brain.vad_stop_secs = stop_now
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)

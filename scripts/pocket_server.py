@@ -300,17 +300,23 @@ def serve(voice: Voice, host: str, port: int) -> None:
     httpd.serve_forever()
 
 
-def main() -> int:
+def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8040)
     ap.add_argument("--voice", default="eve", help="a built-in voice: alba, anna, eve, jane, mary, vera, ... (see the pocket-tts package)")
     ap.add_argument("--max-tokens", type=int, help="text tokens per piece (the package's default is 50, which cuts a long sentence of prices in two or three)")
     ap.add_argument("--keep-lead", action="store_true", help="send the quiet at the start of each sentence as the model makes it (by default it is cut to 30 ms)")
-    ap.add_argument("--speed", type=float, default=1.1, help="speak this many times faster, same pitch (1.0 = as the model makes it). Owner, 30 Oct: a little faster (section 43)")
+    ap.add_argument("--speed", type=float, default=1.0, help="speak this many times faster, same pitch (1.0 = as the model makes it). Owner, 30 Oct: 1.1 (section 43), then "
+                    "\"a little slower, the way they do on Fish Audio\" (section 50)")
     ap.add_argument("--level", type=float, default=0.15, help="turn down anything louder than this (50 ms level), 4 to 1, so loud sentence starts do not shout (0 = off). Owner, 30 Oct")
-    ap.add_argument("--max-pause-ms", type=int, default=120, help="shorten every pause inside a sentence to at most this (0 = as the model makes it). Owner, 30 Oct: no pauses")
-    a = ap.parse_args()
+    ap.add_argument("--max-pause-ms", type=int, default=250, help="shorten every pause inside a sentence to at most this (0 = as the model makes it). Owner, 30 Oct: no pauses "
+                    "(120), then a calmer pace (250 keeps the pause at a comma, still cuts the long ones; section 50)")
+    return ap
+
+
+def main() -> int:
+    a = parser().parse_args()
     t0 = time.perf_counter()
     voice = Voice(a.voice, a.max_tokens, trim_lead=not a.keep_lead, speed=a.speed, max_pause_ms=a.max_pause_ms, level=a.level)
     for _ in voice.chunks("Warming up the voice."):

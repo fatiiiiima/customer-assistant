@@ -107,3 +107,18 @@ def test_the_leveller_holds_back_only_its_look_ahead():
     lev = Leveller(0.15, ahead_ms=20)
     first = lev.feed(np.full(RATE // 10, 0.05, dtype=np.float32))                          # 100 ms in
     assert len(first) == RATE // 10 - RATE // 50                                          # 80 ms out at once; the last 20 ms wait for what follows
+
+
+# ------------------------------------------------------------------------------------------------ "a little slower, the way they do on Fish Audio" (owner, 30 Oct; section 50)
+def test_eve_speaks_at_the_model_s_own_speed_with_pauses_up_to_250_ms():
+    from pocket_server import parser
+
+    a = parser().parse_args([])
+    assert (a.speed, a.max_pause_ms, a.level) == (1.0, 250, 0.15)
+
+
+def test_a_comma_pause_is_kept_and_a_long_one_is_still_cut():
+    word = (0.2 * np.sin(2 * np.pi * 200 * np.arange(RATE // 4) / RATE)).astype(np.float32)
+    comma, long_gap = np.zeros(int(RATE * 0.2), dtype=np.float32), np.zeros(int(RATE * 0.6), dtype=np.float32)
+    out = streamed(PauseCap(250), np.concatenate([word, comma, word, long_gap, word]))
+    assert len(out) == 3 * len(word) + len(comma) + int(RATE * 0.25)
