@@ -1575,3 +1575,17 @@ What goes to AWS on each call (read from `engine._context` and a captured prompt
 * So a live test call should use a made-up name and number.
 
 Still UNKNOWN until the owner's live call: how the first sound feels on a real call. Section 56's INFERRED estimate is about 0.9 to 1.1 s for a turn that needs the model.
+
+## 58. "Yes" to "Would you like to hear more about it?" is decided by code, not the model (30 Oct, the owner's first live call on Nemotron, section 57)
+
+What happened (the owner's transcript):
+> I'm looking for a family, a friendly car
+> The best for a family we have is the Tahoe, with 8 seats and a 722-litre boot. Would you like to hear more about it?
+> Yes.
+> I don't have a booking to confirm yet. Which car and time would you like? Hello? Are you still there?
+
+Cause: no rule covered a plain yes to "hear more" with a car in focus, so the model decided. Replayed here on the local Qwen3-4B, the same two turns went to `get_car` and gave the Tahoe's details (MEASURED). On Nemotron, the reply shows the model picked `confirm_booking` (INFERRED from the reply text; the worker log was not read). The rule for "yes" to an invitation skips questions with "hear" in them on purpose, so nothing caught it.
+
+Fix (`engine._decide`): with a car in focus and no booking under way, a yes ("yes", "yeah sure", "okay", "sounds good" ...) to a question containing "hear more" and not "which" goes to `get_car` for that car, by rule. "Which one would you like to hear more about?" is still handled by the existing `which_car` rule. `_PLAIN_YES` now also takes "sure" after the first word ("yeah sure"). Test: `test_inventory_db.py::test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_would_pick`, with a fake model that always says `confirm_booking`. It fails without the fix.
+
+The "Hello? Are you still there?" and the "Tap to interrupt" label on the page have one cause, and it is not in the code. The page URL given in section 57 had no `&voicemode=handsfree`, so the site ran in its default tap-to-talk mode (`site/voice.js` line 30): the microphone closes while Wazir speaks and opens only on a tap. INFERRED: the caller did not tap after the reply, and the silence prompt followed. The right URL is `http://localhost:8080/?voice=ws://localhost:8767/voice&voicemode=handsfree`.

@@ -40,7 +40,7 @@ from ..tools.phones import normalize_phone, speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 
-_PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
+_PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|sure|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
 # A yes to "Shall I book it?" that names the booking (28 Oct, the owner's test call: "yes, please book it" was not a plain yes, the model was too slow, and the code
 # answered with the car's facts and another invitation). Used only while a read-back waits for the answer.
 _BOOK_YES = re.compile(r"(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|right|correct)(?: please)? )*(?:please )?"
@@ -1199,6 +1199,8 @@ class AgentEngine:
             r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
         if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and offered:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
+        if s.car and not booking_flow and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and re.search(r"\bhear more\b", q) and not re.search(r"\bwhich\b", q):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "yes" to "would you like to hear more about it?" (30 Oct, Bedrock call: the model confirmed a booking that did not exist)
         if _THANKS.fullmatch(joined) and (s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules", "thanked": True}   # mid-booking (29 Oct: "Thank you." after the number dropped the question for the name)
         if _THANKS.fullmatch(joined):
