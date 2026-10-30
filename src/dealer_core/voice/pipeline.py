@@ -28,8 +28,9 @@ from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
+from ..agent.wording import NARROW_QUESTIONS
 from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
-from ..agent.wording import NARROW_QUESTIONS, OPENERS
+from ..agent.wording import OPENERS
 
 STT_RATE = 16000
 
