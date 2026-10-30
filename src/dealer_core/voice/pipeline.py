@@ -268,11 +268,13 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     brain.playback = playback
     if mic_gate is not None:
         mic_gate.playback = playback                          # tap mode: a tap while the agent is audible interrupts it (not only while the server is still sending)
+    late = None
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
-        from .bargein import BargeIn
+        from .bargein import BargeIn, LateBargeIn
 
         stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level))
-    for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):
+        late = LateBargeIn(brain, playback)                   # words said over the agent that were too short to stop it: they stop it when recognised
+    for name, proc in (("vad", None), ("stt", stt), ("late", late), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)
         if name in probes:

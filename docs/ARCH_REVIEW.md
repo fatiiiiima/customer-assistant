@@ -1589,3 +1589,39 @@ Cause: no rule covered a plain yes to "hear more" with a car in focus, so the mo
 Fix (`engine._decide`): with a car in focus and no booking under way, a yes ("yes", "yeah sure", "okay", "sounds good" ...) to a question containing "hear more" and not "which" goes to `get_car` for that car, by rule. "Which one would you like to hear more about?" is still handled by the existing `which_car` rule. `_PLAIN_YES` now also takes "sure" after the first word ("yeah sure"). Test: `test_inventory_db.py::test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_would_pick`, with a fake model that always says `confirm_booking`. It fails without the fix.
 
 The "Hello? Are you still there?" and the "Tap to interrupt" label on the page have one cause, and it is not in the code. The page URL given in section 57 had no `&voicemode=handsfree`, so the site ran in its default tap-to-talk mode (`site/voice.js` line 30): the microphone closes while Wazir speaks and opens only on a tap. INFERRED: the caller did not tap after the reply, and the silence prompt followed. The right URL is `http://localhost:8080/?voice=ws://localhost:8767/voice&voicemode=handsfree`.
+
+## 59. Words said over the agent that were too short to stop it now stop it when recognised (30 Oct, the owner: "sometimes it cant hear me barge in well. or its like it hears me but it continues speaking the full response, my barge in response gets printed, and then it replies to that barge in response")
+
+Cause: section 34's `BargeIn` stops the agent only after 0.3 s of caller speech at level 0.01 or more while the agent is audible. A shorter turn does not stop it, but the voice detector still ends the turn, the recogniser still writes the words, and the brain answers them once the whole reply has played. That is the owner's description exactly.
+
+MEASURED with `scripts/barge_replay.py`, which replays every recorded hands-free call in `logs/audio_dump` (60 calls, 28 to 30 Oct). It uses Silero with the worker's settings, `voice/heard.Playback` fed the recorded output chunks, and the real `BargeIn.observe`. Of 132 stretches of caller speech while the agent was audible:
+* 81 stopped the agent;
+* 4 began just before the agent was audible, so `BargeIn` never considered them;
+* 47 had too little loud speech while the agent was audible (0.00 to 0.26 s).
+
+Of those 47 (the words recognised near each one, read by hand):
+* about 22 are real caller words: "Tomorrow.", "no", "Porsche.", "Test drive.", "4 in the afternoon.", "I want to hear more about the Macan.";
+* 12 are "Yes." / "Thank you." / "Thanks for watching!";
+* about 8 look invented from echo or noise: "I'm going to drive a little bit.", "All these mirrors.", "It's a little bit of a problem.";
+* 5 had no words.
+
+Loudness does not separate the groups: real one-word answers peaked at 0.011 to 0.17 and the invented ones at 0.005 to 0.07.
+
+Fix: `voice/bargein.py` `LateBargeIn`, between the recogniser and the brain. When a turn's words arrive while the agent is still audible on the page, it asks `DealerBrain.talks_over(text)`. If yes, it keeps what the caller heard of the reply (`reply_cut`), then broadcasts an interruption: the voice and the page drop the rest, a reply still being written is abandoned, and the words are answered at once. `talks_over` is no when the words are:
+* only "yes / okay / mm-hmm / thank you" or a filler (`_GOES_ALONG`): these are still answered after the reply, as before. "Yes" said over "...would you like to hear more?" is an answer, not an interruption;
+* invented by the recogniser (`_INVENTED`);
+* the room (`_is_background`, a quarter of the caller's loudest recent turn) or too quiet to trust;
+* the agent's own reply coming back through the microphone (`echoes_agent` against the reply being played).
+
+The cost is time: the stop comes when the words are recognised, about 0.3 to 0.8 s after the caller stops, not while they are speaking. That is still better than the whole reply.
+
+Tests (`test_bargein.py`, 3 new):
+* "Tomorrow.", "no", "Porsche." and a question stop it, keeping only what was heard;
+* "Yeah.", "okay", "Thank you.", "Mm-hmm.", "um", "Thanks for watching!", the agent's own question, and a turn at background level do not;
+* nothing happens once the reply has finished playing.
+
+Not checked:
+* a live call;
+* whether the room bar catches the echo-invented sentences on the owner's set-up (their levels were not replayed through `_is_background`, only through the words).
+
+On open laptop speakers the agent's own voice can be recognised as words. With a headset, or the browser's echo cancellation working, this does not come up.

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 from loguru import logger
-from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, InputAudioRawFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, InputAudioRawFrame, TranscriptionFrame, VADUserStartedSpeakingFrame,
+                                   VADUserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
@@ -63,5 +64,37 @@ class BargeIn(FrameProcessor):
         await super().process_frame(frame, direction)
         if self.observe(frame, direction):
             logger.debug("barge-in: the caller spoke over the agent")
+            await self.broadcast_interruption()
+        await self.push_frame(frame, direction)
+
+
+class LateBargeIn(FrameProcessor):
+    """Between the recogniser and the brain. A turn whose words arrive while the agent is still audible was said over it but did not stop it: BargeIn wants 0.3 s of
+    loud speech, and "Tomorrow.", "no", "Porsche." are shorter. It used to be answered after the whole reply had played (30 Oct, the owner: "it hears me but it
+    continues speaking the full response ... and then it replies to that barge in"). Now, unless the brain says it is not the caller talking over the agent
+    (`DealerBrain.talks_over`: the room, echo, invented words, a "yes" or "okay"), the agent stops there: the brain keeps what was heard of the reply, the voice and
+    the page drop the rest, and the words are answered at once."""
+
+    def __init__(self, brain, playback, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.brain, self.playback = brain, playback
+        self.interruptions = 0
+
+    def observe(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM) -> bool:
+        """The decision, without the pipeline: True when these words should stop the agent. Keeps what the caller heard of the reply (the tracker after the
+        voice would see a new reply by then)."""
+        if direction is not FrameDirection.DOWNSTREAM or not isinstance(frame, TranscriptionFrame) or not self.playback.playing():
+            return False
+        if not self.brain.talks_over(frame.text):
+            return False
+        self.brain.reply_cut(self.playback.heard())
+        self.playback.new_reply()
+        self.interruptions += 1
+        return True
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if self.observe(frame, direction):
+            logger.debug("late barge-in: words said over the agent arrived while it was still audible")
             await self.broadcast_interruption()
         await self.push_frame(frame, direction)
