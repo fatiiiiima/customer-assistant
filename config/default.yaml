@@ -101,6 +101,16 @@ llm:
       prompt_mode: static                         # one long shared start for every prompt, so the server's prefix cache is reused
       timeout_s: 8.0
       max_parallel: 16
+    bedrock_nemotron:                             # NVIDIA Nemotron Nano 3 30B on Amazon Bedrock (us-east-1), the owner's key. Dev only: the caller's words, and name and
+      runtime: openai                             # phone once given, go to AWS, so it needs VOICE_AGENT_ALLOW_CLOUD=1 and BEDROCK_API_KEY. 30 Oct, section 56: decisions
+      host: https://bedrock-mantle.us-east-1.api.aws/v1   # 500 / 650 ms (p50 / p90) from Dubai, 12/12 right; follow-ups 894 / 1,086 ms
+      model: nvidia.nemotron-nano-3-30b
+      api_key_env: AWS_BEARER_TOKEN_BEDROCK          # AWS's standard name for a Bedrock API key (the owner's .env has it)
+      cloud: true
+      extra_body: {reasoning_effort: none, service_tier: priority}   # no thinking before answering; Bedrock's faster (dearer) tier
+      prompt_mode: static
+      timeout_s: 6.0
+      max_parallel: 64
     # Disabled dev-only stub (needs VOICE_AGENT_ALLOW_CLOUD=1; synthetic data only; name read from env, never hard-coded).
     cloud_stub:
       runtime: cloud_stub

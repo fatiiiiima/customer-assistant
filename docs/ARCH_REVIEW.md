@@ -1558,3 +1558,20 @@ What it shows:
 * **GPT-6 Luna and Claude Haiku 4.5** are on the key's model list but refused for this account: 401 "not available for this account" and 403 `permission_error`. Both are billed through AWS Marketplace, per their cards. INFERRED: someone with the account's admin rights must enable them, for example a Marketplace subscription or Anthropic's use-case form. The script now keeps 400 characters of an error, so the next run shows the full reason.
 * What it means for the 1 s rule, INFERRED: speech recognition takes about 0.27 s (worker log, 30 Oct). Add a 0.5 to 0.65 s decision and eve's first sound (under about 0.16 s, section 41), and a turn that needs the model lands at about 0.9 to 1.1 s. That is the same budget the local model has today plus about 0.1 to 0.15 s. Only 2 of 17 captured turns needed the model, and the `bridge_after_ms` "Let me check." can cover those.
 * Not covered here: many callers at once. Bedrock should not slow down with more callers the way one laptop does (INFERRED); the local figures are for one caller.
+
+## 57. Nemotron Nano 3 on Bedrock as a backend for live test calls (30 Oct, the owner: "add Nemotron Nano 3 on Bedrock as a backend option for the voice agent (reasoning none, priority tier), so I can make a live test call with it")
+
+What changed:
+* `config/default.yaml` has a new backend, `llm.backends.bedrock_nemotron`. It is `runtime: openai` against `https://bedrock-mantle.us-east-1.api.aws/v1`, model `nvidia.nemotron-nano-3-30b`. The key is read from `AWS_BEARER_TOKEN_BEDROCK`, the name the owner's `.env` already uses; the key never goes in config.
+* `BackendCfg.extra_body` holds fields added to every request. For this backend they are `reasoning_effort: none` and `service_tier: priority`, the settings section 56 measured (500 / 650 ms decide, 12/12). Other backends have it empty and send exactly what they sent before.
+* `BackendCfg.cloud: true` marks a third-party service outside the company. `chain.make_backend` refuses to build such a backend unless `VOICE_AGENT_ALLOW_CLOUD=1`, the same switch the speed test uses. Without it the chain logs the backend as unavailable and runs on the next one (the local model), so a worker started by mistake sends nothing to AWS.
+* The agent's own client is used unchanged. It sends `structured_outputs` for decisions and continues the begun reply for follow-ups, both of which Nemotron took in section 56. It sends no `chat_template_kwargs`, which go only to Qwen3 models.
+* Tests: `tests/unit/test_bedrock_backend.py`, against a fake server. It checks the refusal without the switch, the Bearer key, the two extra fields, the URL, that other backends send no extra fields, and that the chain skips the Bedrock backend without the switch.
+
+What goes to AWS on each call (read from `engine._context` and a captured prompt):
+* **Decision:** the agent's instructions, then the call's state: Dubai time, the code's hint, the car in focus, the cars last shown, the search so far, and the booking draft (car, **the caller's name and phone once given**, the time, the read-back). Then the last 4 lines of the conversation and the caller's latest words. The answer is a tool name and maybe a car id.
+* **Follow-up:** the last 4 lines, the caller's words, the reply already begun, and the question the code wants asked. The answer is one sentence.
+* Audio never leaves the machine. Speech recognition and the voice (eve) stay local. No Bedrock agents, guardrails, knowledge bases or prompt templates are used. The only thing Bedrock adds is the model's own chat template, which turns the messages into the model's input format.
+* So a live test call should use a made-up name and number.
+
+Still UNKNOWN until the owner's live call: how the first sound feels on a real call. Section 56's INFERRED estimate is about 0.9 to 1.1 s for a turn that needs the model.

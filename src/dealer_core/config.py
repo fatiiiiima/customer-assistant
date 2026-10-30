@@ -71,7 +71,9 @@ class BackendCfg(_Strict):
     kv_cache_gb: float = 2.0                     # openvino batching only: memory for the shared KV cache
     max_parallel: int = 32                       # openvino batching only: requests in flight at once
     model_env: str | None = None                 # cloud_stub only: env var holding the model name (never hard-coded)
-    api_key_env: str | None = None               # cloud_stub only
+    api_key_env: str | None = None               # cloud_stub, and openai on a hosted service (Bedrock): env var holding the key (never in config)
+    extra_body: dict[str, Any] = Field(default_factory=dict)   # openai only: fields added to every request (Bedrock: reasoning_effort, service_tier)
+    cloud: bool = False                          # a third-party service outside the company (Bedrock): built only with VOICE_AGENT_ALLOW_CLOUD=1
 
 
 class LlmCfg(_Strict):
