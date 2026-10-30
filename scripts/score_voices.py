@@ -58,14 +58,15 @@ def save(path: Path, x: np.ndarray, rate: int) -> None:
         w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
 
 
-def kokoro_rows(out: Path) -> list[dict]:
+def kokoro_rows(out: Path, join_ms: int = 0, tag: str = "kokoro") -> list[dict]:
     from dealer_core.config import load_config
     from dealer_core.voice.kokoro_tts import KokoroOV
     from dealer_core.voice.pipeline import common_phrases, slot_offer_openings
     from dealer_core.voice.tts import pronounce  # noqa: F401  (the same text step the worker uses, inside KokoroOV)
 
     cfg = load_config(overlay=ROOT / "config" / "portal.yaml")
-    k = KokoroOV(ROOT / "models", cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads, opening_first=cfg.voice.opening_first)
+    k = KokoroOV(ROOT / "models", cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads, opening_first=cfg.voice.opening_first,
+                 join_silence_ms=join_ms)
     k.preload(common_phrases(cfg), first_only=slot_offer_openings(k.pieces))
     ready = dict(k._cache)
     rows = []
@@ -74,12 +75,12 @@ def kokoro_rows(out: Path) -> list[dict]:
         k._cache.update(ready)
         t0 = time.perf_counter()
         parts, first = [], None
-        for piece in k.pieces(text):
-            parts.append(k._say(piece))
+        for audio in k._joined(k.pieces(text)):                        # as the worker plays it (joins trimmed when join_ms)
+            parts.append(audio)
             first = first if first is not None else (time.perf_counter() - t0) * 1000
         made = (time.perf_counter() - t0) * 1000
         audio = np.concatenate(parts)
-        save(out / f"{i:02d}_kokoro.wav", audio, k.sample_rate)
+        save(out / f"{i:02d}_{tag}.wav", audio, k.sample_rate)
         rows.append({"first": first, "made": made, "length": len(audio) / k.sample_rate * 1000, "pauses": pauses(audio, k.sample_rate)})
     return rows
 
@@ -110,8 +111,24 @@ def main() -> int:
     ap.add_argument("--server", action="append", default=[], help="name=url of a speech server, e.g. magpie=http://127.0.0.1:8020/v1 (repeatable)")
     ap.add_argument("--voice", default="default", help="the voice field sent to the server (soniqo's server uses Magpie's default speaker whatever it says)")
     ap.add_argument("--out", type=Path, default=ROOT / "logs" / "voice_samples" / "compare")
+    ap.add_argument("--trim", type=int, default=40, help="also Kokoro with the joins trimmed to about this many ms (0 = not)")
+    ap.add_argument("--texts", type=Path, help="write the sentences as the voice is given them (numbers in words) to this JSON file, for another program, and stop")
+    ap.add_argument("--extra", action="append", default=[], help="name=rows.json from another program (scripts/score_chatterbox.py), shown in the same table")
     a = ap.parse_args()
+    if a.texts:
+        import json
+
+        from dealer_core.voice.tts import pronounce
+        a.texts.write_text(json.dumps([pronounce(t) for t in SENTENCES], indent=1))
+        return 0
     results = {"kokoro": kokoro_rows(a.out)}
+    if a.trim:
+        results["kokoro-trim"] = kokoro_rows(a.out, a.trim, "kokoro-trim")
+    for spec in a.extra:
+        import json
+
+        name, path = spec.split("=", 1)
+        results[name] = json.loads(Path(path).read_text())
     for spec in a.server:
         name, url = spec.split("=", 1)
         results[name] = server_rows(name, url.rstrip("/"), a.voice, a.out)
