@@ -140,3 +140,21 @@ def test_pocket_is_the_default_voice():
     t = load_config(environ={}).tts
     assert t.backend == "pocket" and t.pocket_voice == "eve" and t.pocket_fallback_voice == "alba"
     assert t.pocket_url != t.pocket_fallback_url and 0 < t.pocket_first_timeout_s <= 1.0
+
+
+def test_pocket_gets_agmc_as_written_and_kokoro_keeps_the_spelling():
+    """Owner, 30 Oct: "when the bot says A G M C, can it say it faster". Spelled out, eve stops after every letter (section 43)."""
+    server = Server([pcm([1, 2])])
+    list(StreamingVoice("http://x/v1", Kokoro(), model="pocket", voice="eve", spell_letters=False, client=server).stream("Welcome to AGMC, a GCC SUV."))
+    assert server.asked[0]["input"] == "Welcome to AGMC, a GCC SUV."
+    from dealer_core.voice.tts import pronounce
+
+    assert "eigh gee em see" in pronounce("Welcome to AGMC.")
+
+
+def test_the_worker_sends_pocket_the_letters_as_written():
+    import inspect
+
+    from dealer_core.voice import pipeline
+
+    assert inspect.getsource(pipeline.load_engines).count("spell_letters=False") == 2

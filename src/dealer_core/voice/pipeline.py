@@ -69,8 +69,10 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
         if cfg.tts.backend == "pocket":                 # Pocket-TTS's eve; its alba from another server when that fails; Kokoro, the last resort, only when both do
             from .remote_tts import StreamingVoice
 
-            alba = StreamingVoice(cfg.tts.pocket_fallback_url, tts, model="pocket", voice=cfg.tts.pocket_fallback_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s)
-            tts = StreamingVoice(cfg.tts.pocket_url, alba, model="pocket", voice=cfg.tts.pocket_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s)
+            alba = StreamingVoice(cfg.tts.pocket_fallback_url, tts, model="pocket", voice=cfg.tts.pocket_fallback_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s,
+                                  spell_letters=False)
+            tts = StreamingVoice(cfg.tts.pocket_url, alba, model="pocket", voice=cfg.tts.pocket_voice, first_timeout_s=cfg.tts.pocket_first_timeout_s,
+                                 spell_letters=False)        # "AGMC" as written: Pocket says it quickly (section 43); Kokoro, the last resort, keeps the spelling
             stt.warm_up()
             tts.warm_up()                               # warms alba and Kokoro too (each warms its fallback)
             tts.preload(common_phrases(cfg), first_only=())          # eve's versions, made in the background (Kokoro's are not made: it speaks only if both servers are down)
@@ -205,7 +207,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         stt.on_text = lambda text: in_tap.note("stt", text)
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
                         level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms,
-                        speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below))
+                        speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below),
+                        background_below=vcfg.background_below if mic_gate is None else 0.0)     # hands-free only: in tap mode the caller chose to speak
     brain.vad_stop_secs = stop_now
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)

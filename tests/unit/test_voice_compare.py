@@ -39,3 +39,41 @@ def test_first_heard_counts_the_quiet_at_the_start(tmp_path):
         w.setframerate(RATE)
         w.writeframes((sentence(0.25) * 32767).astype(np.int16).tobytes())
     assert abs(lead_ms(p) - 250) < 1
+
+
+# ------------------------------------------------------------------------------------------------ faster, shorter pauses (owner, 30 Oct; section 43)
+from pocket_server import Faster, PauseCap  # noqa: E402
+
+
+def streamed(tool, x, step=1000):
+    return np.concatenate([tool.feed(x[i:i + step]) for i in range(0, len(x), step)] + [tool.flush()])
+
+
+def test_faster_is_shorter_at_the_same_pitch():
+    t = np.arange(RATE * 3) / RATE
+    x = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    out = streamed(Faster(1.1), x)
+    assert abs(len(out) / len(x) - 1 / 1.1) < 0.02
+    mid = out[RATE // 2: -RATE // 2]
+    assert abs(np.sum(np.diff(np.sign(mid)) != 0) / len(mid) * RATE / 2 - 220) < 3       # still 220 Hz
+    assert abs(float(np.abs(mid).max()) - 0.3) < 0.02
+
+
+def test_speed_one_leaves_the_audio_alone():
+    x = np.random.default_rng(0).normal(0, 0.1, RATE).astype(np.float32)
+    assert np.array_equal(streamed(Faster(1.0), x), x)
+
+
+def test_a_long_pause_is_cut_to_the_cap_and_a_short_one_is_left():
+    word = (0.2 * np.sin(2 * np.pi * 200 * np.arange(RATE // 4) / RATE)).astype(np.float32)
+    long_gap, short_gap = np.zeros(RATE // 2, dtype=np.float32), np.zeros(int(RATE * 0.08), dtype=np.float32)
+    out = streamed(PauseCap(120), np.concatenate([word, long_gap, word, short_gap, word]))
+    assert len(out) == 3 * len(word) + int(RATE * 0.12) + len(short_gap)
+
+
+def test_a_breath_counts_as_a_pause():
+    """Quiet means under 5% of the loudest so far, as scripts/score_voices.py counts pauses: a soft breath between words is cut too."""
+    word = (0.3 * np.sin(2 * np.pi * 200 * np.arange(RATE // 4) / RATE)).astype(np.float32)
+    breath = np.random.default_rng(1).normal(0, 0.009, RATE // 2).astype(np.float32)
+    out = streamed(PauseCap(120), np.concatenate([word, breath, word]))
+    assert len(out) == 2 * len(word) + int(RATE * 0.12)

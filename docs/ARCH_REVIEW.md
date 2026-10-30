@@ -1046,3 +1046,72 @@ Not measured:
 * The deployment, which has no Mac. Pocket runs on a CPU there, but the speech toolkit's alba build is Mac-only, so the fallback there would be alba from a second `pocket_server.py` (`--voice alba`).
 
 `python -m pytest tests/unit`: 1,332 passed, 40 skipped.
+
+## 43. The owner's hands-free call of 30 Oct: background voices, haggling, "AGMC", faster speech
+
+Branch `fix/call-30oct`. The owner's report, from a hands-free call with eve:
+1. "it keeps hearing people in the background, so it catches some random stuff and keeps replying";
+2. "i dont think it did the negotiation well";
+3. "when the bot says A G M C - can it say it faster";
+4. "can the speech model speak a little faster with no pauses?"
+
+The call was not recorded (the worker ran without `VA_DUMP_AUDIO_DIR`), so items 1 and 2 were worked from the transcript the owner pasted.
+
+**1. Background voices** (`voice.background_below`, 0.25; `brain._is_background`). In hands-free mode a turn quieter than a quarter of the loudest of the caller's last 8 answered turns is someone else in the room: it is not answered, not remembered, and gets no "speak up". It is off in tap mode, where the caller chose to speak.
+
+The bar comes from the loudest turn, not the median. In the call the room was heard before the caller spoke, so the first turns must not set the bar.
+
+MEASURED on the owner's recorded calls with reference lines: the owner's own turns ranged from 0.103 to 0.273, the quietest 0.37 of the loudest in its call. So 0.25 ignores none of them. That is 12 turns in 2 calls, so the margin is INFERRED, not settled. How loud background voices are on the owner's Mac is UNKNOWN (no recording).
+
+At the start of a call, before the caller has been answered once, a quiet room voice can still get "speak up". The input volume at 100 does not change the ratio between the caller and the room. But the page's microphone has the browser's automatic gain on by default, and that raises the room whenever the caller is quiet. `?mic=raw` switches it off (section 26).
+
+Tests: `test_background_voices.py` (5).
+
+**2. Haggling** (`engine.offers_less`, `_offer_on`). The replay of the call's turns through the engine, before the fix:
+
+| caller | before | after |
+|---|---|---|
+| (on the Camry, 74,500) "can be 70,000 in their homes instead." (misheard "Can it be 70,000 dirhams instead?") | a new budget search: "I've got the Corolla at 62,500" | "Our prices are fixed, so the 2020 Toyota Camry is 74,500 dirhams." |
+| "I can only do 60,000 dirhams." | "As a Toyota I don't have one, but there's the Civic" | "The Camry stays at 74,500 ... there's the Corolla at 62,500 and the Civic at 54,500" (the second push, section 29) |
+| "Can we do 50,000 dirhams for the Civic?" | the Civic described again, no word on price | "Our prices are fixed, so the 2018 Honda Civic is 54,500 dirhams." |
+| "Come on, 50,000?" | "I don't have anything that matches that" | "The Civic stays at 54,500 ... the lowest-priced car we have" |
+
+Words like "can it be", "can we do", "I can only do", "would you take", "instead" and "how about" now count as a push, but only with an amount below the car's price. Once the caller has pushed on a car, a bare amount counts too.
+
+"As a Toyota I don't have one" now reads "I don't have a Toyota under 60,000 dirhams, but ...".
+
+Tests: `test_haggle.py`, 12 new (including "Is it white?", "Can I see it on Tuesday?" and "What about the Corolla?" not counted as pushes).
+
+Found while replaying, not changed here: after a budget search, "Is it white?" about the Camry searches for white cars, and "Can I see it on Tuesday?" asks which car. Both happened before this change.
+
+**3. "AGMC"** (`tts.pronounce(spell_letters=False)`, `StreamingVoice(spell_letters=...)`). The letters were spelled "eigh gee em see" for Piper and Kokoro, which read "AGMC" as a word. Eve says each spelled letter as a word, with a gap after it.
+
+MEASURED, "Welcome to the {AGMC} dealership." on eve (median of 3), eight spellings tried:
+
+| spelling | sentence | gaps of 80 ms+ |
+|---|---|---|
+| "eigh gee em see" (before) | 2.22 s | 4 |
+| "AGMC" as written | **1.95 s** | 0 |
+
+Whisper small.en heard "AGMC" for every spelling. SUV and GCC behave the same way (3.81 s with 7 gaps spelled, against 3.36 s as written). Alba on the speech toolkit: 2.40 s spelled against 2.08 s as written. Eve and alba now get the letters as written; Kokoro, the last resort, keeps the spelling.
+
+**4. Faster, with short pauses** (`scripts/pocket_server.py`: `Faster`, `PauseCap`; `--speed`, default 1.1; `--max-pause-ms`, default 120). Pocket-TTS has no speed setting, so the server does both to the audio as it streams:
+* WSOLA time-stretch: same pitch; 40 ms windows, each moved by up to 10 ms to fit.
+* Pause cap: every quiet stretch inside a sentence is cut to 120 ms, keeping its two ends. Quiet means under 5% of the loudest so far, as `score_voices.py` counts pauses.
+
+Speech is never held back, only quiet. MEASURED, the 18 sentences:
+
+| eve | first heard, median / worst | pauses of 120 ms+ | longest | words a minute | Whisper words wrong |
+|---|---|---|---|---|---|
+| as before | 102 / 131 ms | 33 | 810 ms | 188 | 4.4% |
+| pauses cut to 120 ms | 104 / 135 ms | 30 (all 120 to 150 ms) | 150 ms | 201 | 3.9% |
+| **pauses cut, and 1.1 times faster (now)** | **101 / 113 ms** | **0** | under 120 ms | **219** | 3.6% |
+| pauses cut, and 1.15 times faster | 96 / 117 ms | 6 | 170 ms | 226 | 2.5% |
+
+For comparison: trimmed Kokoro 168 words a minute, Chatterbox 173. The greeting takes 5.5 s instead of 7.8 s.
+
+The five-turn test call through a test worker (prefix level, eve at the new settings): voice wait 0.09 s median, 0.11 s worst, total wait 0.76 s median. The haggling replies were as in the table above, with no fallbacks. How it sounds is for the owner to judge: samples are in `logs/voice_samples/for_boss/30oct/` (local).
+
+Tests: `test_voice_compare.py`, 4 new (shorter at the same pitch; speed 1 unchanged; a long pause cut and a short one left; a breath counts as a pause); `test_remote_tts.py`, 2 new (AGMC as written to Pocket, spelled for Kokoro; the worker sends Pocket the letters as written).
+
+`python -m pytest tests/unit`: 1,354 passed, 40 skipped.
