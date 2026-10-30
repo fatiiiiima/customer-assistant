@@ -1115,3 +1115,57 @@ The five-turn test call through a test worker (prefix level, eve at the new sett
 Tests: `test_voice_compare.py`, 4 new (shorter at the same pitch; speed 1 unchanged; a long pause cut and a short one left; a breath counts as a pause); `test_remote_tts.py`, 2 new (AGMC as written to Pocket, spelled for Kokoro; the worker sends Pocket the letters as written).
 
 `python -m pytest tests/unit`: 1,354 passed, 40 skipped.
+
+## 44. "Is it white?" keeps the car; eve no longer shouts "Sure!" and "Hi" (30 Oct, the owner)
+
+Same branch as section 43. The owner also said they had recorded the previous session. No recording of it exists:
+* the owner's worker (port 8765, started 10:16) runs without `VA_DUMP_AUDIO_DIR`;
+* nothing in `logs/audio_dump` is newer than the test calls of section 43;
+* no audio or video file was saved on the Mac that day.
+
+**Colour questions about the car being discussed.** After a budget search, "Is it white?" about the Camry was sent to a search for white cars, and the Camry was lost. So "Can I see it on Tuesday?" then asked which car. Two routes did it:
+* the code's own routing, `_code_decision`, when the model is slow or not asked: a colour was taken as a search;
+* the model, when asked: on the test call through a worker it answered "Our cars come in white, black, blue, red and silver, plus 4 other colours."
+
+Now:
+* A rule settles "is it / is this / does it come in <colour>" about the car under discussion before the model is asked.
+* The fallback no longer searches when the words are about "it".
+* `get_car` answers "No, it's brown." or "Yes, it's brown.", then the usual closing question.
+
+"Do you have a white one?", "anything cheaper" and "any under 100,000" still search. Tests: `test_call_30oct.py` (7).
+
+The same test call through a worker (prefix level, model deciding): "Is it white?" got "No, it's brown.", and "Can I see it on Tuesday?" offered Tuesday's times for the Camry. Voice wait was 0.12 s median, 0.14 s worst; total wait 0.83 s median.
+
+**"Why does she scream SURE and HI".** MEASURED on eve: she starts most sentences loud.
+* The first 0.4 s is 1.2 to 2.5 times the level of the rest of the sentence ("Hi, welcome to the AGMC dealership!" 1.35; "Welcome to the AGMC dealership!" 2.49).
+* "Sure!" said alone is the loudest thing she says: 0.196 at its loudest 0.3 s, against 0.15 to 0.18 for ordinary sentences.
+* "Hi" has the highest peak measured, 0.86.
+
+`scripts/pocket_server.py` now levels the audio as it streams (`Leveller`; `--level`, default 0.15; 0 = off):
+* whatever is louder than 0.15 over 50 ms is turned down 4 to 1;
+* the gain drops at once and comes back up gently;
+* each 10 ms frame looks 20 ms ahead, so a loud start is caught before it plays;
+* everything is then raised by 1.15, so ordinary sentences are as loud as before.
+
+MEASURED (loudest 0.3 s / peak, median of 3):
+
+| | before | levelled |
+|---|---|---|
+| "Sure!" | 0.196 / 0.51 | 0.176 / 0.59 |
+| "Hi, welcome to the AGMC dealership!" | 0.198 / 0.86 | 0.146 / 0.68 |
+| "There are 4 Toyotas in stock right now." | 0.181 / 0.73 | 0.174 / 0.60 |
+| "What budget do you have in mind ...?" | 0.170 / 0.64 | 0.163 / 0.59 |
+
+The greeting's first 0.4 s went from 0.286 to 0.203 (50 ms level, before the 1.15 raise). Every sentence now sits between 0.15 and 0.18, with peaks no higher than 0.68.
+
+First heard, the 18 sentences: 104 ms median, 128 ms worst, against 103 / 137 ms before. The 20 ms look-ahead is lost in the variation.
+
+Not changed:
+* The "!" in the wording: with "." eve says "Sure." quietly (0.055) rather than calmly.
+* Alba, the fallback (the speech toolkit's server cannot be changed from here).
+
+How it sounds is the owner's call: samples in `logs/voice_samples/for_boss/30oct/` (`*_loud_before`, `*_levelled`). Tests: `test_voice_compare.py`, 3 new.
+
+Seen on the test calls, not changed: after "I don't have a Toyota under 60,000 dirhams, but I've got the Civic", the model's closing question was "Tell me more about the Civic?", which reads like the caller's line.
+
+`python -m pytest tests/unit`: 1,364 passed, 40 skipped.

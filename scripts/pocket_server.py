@@ -135,12 +135,49 @@ class Faster:
         return np.concatenate(out)
 
 
+class Leveller:
+    """Turns down whatever is louder than `threshold` (50 ms level), by `ratio`, as the audio streams (owner, 30 Oct: "why does she scream SURE and HI").
+    Eve starts most sentences loud: MEASURED, the first 0.4 s at 1.2 to 2.5 times the level of the rest ("Hi, welcome ..." 1.35 to 1.66; "Sure!" alone
+    the loudest thing she says). The gain drops at once and comes back up gently; each 10 ms frame looks `ahead_ms` ahead, so a loud start is caught
+    before it is played, at the cost of `ahead_ms` of delay."""
+
+    def __init__(self, threshold: float = 0.15, ratio: float = 4.0, ahead_ms: int = 20, release_db_per_s: float = 30.0, makeup: float = 1.15) -> None:
+        self.frame, self.threshold, self.ratio, self.makeup = RATE // 100, threshold, ratio, makeup     # makeup: everything raised after, so ordinary sentences are as loud as before
+        self.ahead = RATE * ahead_ms // 1000
+        self.up = 10 ** (release_db_per_s / 20 / 100)                     # the most the gain may rise in one 10 ms frame
+        self.buf = np.zeros(0, dtype=np.float32)                           # not yet played: the next frame and what is ahead of it
+        self.past = np.zeros(RATE * 30 // 1000, dtype=np.float32)          # the last 30 ms played (part of the 50 ms window)
+        self.gain = 1.0
+
+    def _want(self, window: np.ndarray) -> float:
+        level = float(np.sqrt(np.mean(window * window))) if len(window) else 0.0
+        return 1.0 if level <= self.threshold else (self.threshold + (level - self.threshold) / self.ratio) / level
+
+    def _frames(self, final: bool) -> np.ndarray:
+        out = []
+        while len(self.buf) >= self.frame + (0 if final else self.ahead) and len(self.buf) > 0:
+            f = self.buf[: self.frame]
+            want = self._want(np.concatenate([self.past, self.buf[: self.frame + self.ahead]]))
+            g = want if want < self.gain else min(want, self.gain * self.up)
+            out.append(f * np.linspace(self.gain, g, len(f), dtype=np.float32) * self.makeup)
+            self.gain, self.past, self.buf = g, np.concatenate([self.past, f])[-len(self.past):], self.buf[len(f):]
+        return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
+
+    def feed(self, x: np.ndarray) -> np.ndarray:
+        self.buf = np.concatenate([self.buf, np.asarray(x, dtype=np.float32).reshape(-1)])
+        return self._frames(final=False)
+
+    def flush(self) -> np.ndarray:
+        return self._frames(final=True)
+
+
 class Voice:
-    def __init__(self, voice: str, max_tokens: int | None = None, trim_lead: bool = True, speed: float = 1.0, max_pause_ms: int = 0) -> None:
+    def __init__(self, voice: str, max_tokens: int | None = None, trim_lead: bool = True, speed: float = 1.0, max_pause_ms: int = 0,
+                 level: float = 0.0) -> None:
         from pocket_tts import TTSModel
 
         self.model = TTSModel.load_model(language="english")
-        self.default, self.trim_lead, self.speed, self.max_pause_ms = voice, trim_lead, speed, max_pause_ms
+        self.default, self.trim_lead, self.speed, self.max_pause_ms, self.level = voice, trim_lead, speed, max_pause_ms, level
         self.extra = {"max_tokens": max_tokens} if max_tokens else {}  # the package cuts text longer than this into pieces, each with its own pauses
         self.states = {voice: self.model.get_state_for_audio_prompt(voice)}
         self.lock = threading.Lock()
@@ -167,6 +204,7 @@ class Voice:
                 stop, started = threading.Event(), not self.trim_lead
                 cap = PauseCap(self.max_pause_ms) if self.max_pause_ms else None
                 faster = Faster(self.speed)
+                lev = Leveller(self.level) if self.level else None
                 try:
                     for chunk in self.model.generate_audio_stream(self.state(voice), text, stop=stop, **self.extra):
                         if background and self.live_waiting:
@@ -178,10 +216,12 @@ class Voice:
                                 continue
                             started = True
                         x = faster.feed(cap.feed(x) if cap else x)
+                        x = lev.feed(x) if lev else x
                         if len(x):
                             yield pcm16(x)
                     x = faster.feed(cap.flush()) if cap else np.zeros(0, dtype=np.float32)
                     x = np.concatenate([x, faster.flush()])
+                    x = np.concatenate([lev.feed(x), lev.flush()]) if lev else x
                     if len(x):
                         yield pcm16(x)
                 finally:
@@ -268,10 +308,11 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, help="text tokens per piece (the package's default is 50, which cuts a long sentence of prices in two or three)")
     ap.add_argument("--keep-lead", action="store_true", help="send the quiet at the start of each sentence as the model makes it (by default it is cut to 30 ms)")
     ap.add_argument("--speed", type=float, default=1.1, help="speak this many times faster, same pitch (1.0 = as the model makes it). Owner, 30 Oct: a little faster (section 43)")
+    ap.add_argument("--level", type=float, default=0.15, help="turn down anything louder than this (50 ms level), 4 to 1, so loud sentence starts do not shout (0 = off). Owner, 30 Oct")
     ap.add_argument("--max-pause-ms", type=int, default=120, help="shorten every pause inside a sentence to at most this (0 = as the model makes it). Owner, 30 Oct: no pauses")
     a = ap.parse_args()
     t0 = time.perf_counter()
-    voice = Voice(a.voice, a.max_tokens, trim_lead=not a.keep_lead, speed=a.speed, max_pause_ms=a.max_pause_ms)
+    voice = Voice(a.voice, a.max_tokens, trim_lead=not a.keep_lead, speed=a.speed, max_pause_ms=a.max_pause_ms, level=a.level)
     for _ in voice.chunks("Warming up the voice."):
         pass
     print(f"loaded in {time.perf_counter() - t0:.1f} s", flush=True)

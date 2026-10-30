@@ -77,3 +77,33 @@ def test_a_breath_counts_as_a_pause():
     breath = np.random.default_rng(1).normal(0, 0.009, RATE // 2).astype(np.float32)
     out = streamed(PauseCap(120), np.concatenate([word, breath, word]))
     assert len(out) == 2 * len(word) + int(RATE * 0.12)
+
+
+# ------------------------------------------------------------------------------------------------ "why does she scream SURE and HI" (owner, 30 Oct; section 44)
+from pocket_server import Leveller  # noqa: E402
+
+
+def loudest(x, w=1200):
+    return float(np.sqrt(np.convolve(x * x, np.ones(w) / w, "valid").max()))
+
+
+def test_a_loud_start_is_turned_down_to_about_the_rest():
+    t = np.arange(RATE) / RATE
+    loud = (0.45 * np.sin(2 * np.pi * 200 * t[: RATE * 2 // 5])).astype(np.float32)      # "HI" at three times the level of the rest
+    rest = (0.15 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    out = streamed(Leveller(0.15, makeup=1.0), np.concatenate([loud, rest]))
+    first, after = loudest(out[: len(loud)]), loudest(out[len(loud) + RATE // 4:])
+    assert first < 0.75 * loudest(loud) and abs(after - 0.106) < 0.01 and first / after < 2.2   # from 3 times the rest to about 2 (the first frames are caught late)
+    assert len(out) == len(loud) + len(rest)
+
+
+def test_ordinary_speech_is_only_raised_by_the_makeup():
+    x = (0.08 * np.sin(2 * np.pi * 200 * np.arange(RATE) / RATE)).astype(np.float32)
+    out = streamed(Leveller(0.15, makeup=1.15), x)
+    assert np.allclose(out, x * 1.15, atol=1e-4)
+
+
+def test_the_leveller_holds_back_only_its_look_ahead():
+    lev = Leveller(0.15, ahead_ms=20)
+    first = lev.feed(np.full(RATE // 10, 0.05, dtype=np.float32))                          # 100 ms in
+    assert len(first) == RATE // 10 - RATE // 50                                          # 80 ms out at once; the last 20 ms wait for what follows
