@@ -319,7 +319,7 @@ def test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_wou
     from .test_scale import Scripted, agent
 
     for answer in ("Yes.", "yeah sure", "okay", "sounds good"):
-        e, b = agent(None, backend=Scripted(["confirm_booking"] * 3))
+        e, _ = agent(None, backend=Scripted(["confirm_booking"] * 3))
         s = e.new_session()
         said(e, s, "tell me about the Land Cruiser")
         s.history.append(("agent", "The best for a family we have is the Land Cruiser, with 8 seats. Would you like to hear more about it?"))
