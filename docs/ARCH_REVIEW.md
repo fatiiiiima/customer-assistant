@@ -1426,3 +1426,377 @@ Live check after the fixes, MEASURED by a synthetic-voice call to each worker (`
 * "Can I come and see it tomorrow?" still offers tomorrow's times.
 
 `python -m pytest tests/unit`: 1,443 passed, 40 skipped.
+
+## 53. A speed test for models on Amazon Bedrock, written but not run (30 Oct, the owner: "write the speed test for the four shortlisted Bedrock models. Don't run it until I've set the key and said go.")
+
+`scripts/bedrock_speed.py` times the two jobs the agent gives a model:
+* **Deciding the next action.** This happens before the first sound of a reply, so it is the one the 1 s rule depends on. ARCH_PLAN wants the model's part under 300 ms.
+* **Writing the follow-up question** after a reply the code has begun.
+
+Shortlist, from the models the owner's key can use (a GUESS, to be measured):
+* `qwen.qwen3-next-80b-a3b-instruct`: the same family as today's Qwen3-4B, with about 3B parameters used per token.
+* `mistral.ministral-3-8b-instruct`.
+* `anthropic.claude-haiku-4-5`.
+* `google.gemma-4-26b-a4b`.
+
+Not tested, and why:
+* `kimi-k2-thinking` and `magistral`: they reason before they answer, which is slow.
+* The large models: too slow and too costly to call on every turn.
+* Coding, vision and safeguard models: the wrong kind of model for this job.
+* `voxtral`: a speech recogniser, not a chat model.
+
+How it works:
+* **`capture`** runs the three conversations from `compare_agent_models.py` through the agent on the local model server, with the website's demo cars. It saves every prompt to `benchmarks/bedrock_speed_prompts.json`.
+* The capture also records the decision prompt for turns the code decides by itself. Only 2 of 17 turns reached the model, and the same 2 prompts sent over and over would flatter a server that caches recent prompts. The file holds 17 different decision prompts (12 with a known right action) and 21 follow-ups.
+* **`run`** sends those prompts word for word through the agent's own client (`OpenAICompatBackend`), one model at a time:
+  * 1 warm-up call, then 10 decisions and 10 follow-ups: 21 calls a model, 84 for the four;
+  * about 11,000 input tokens and at most 540 output tokens a model (`--dry-run`; input estimated as characters / 4).
+* The network trip is timed separately with a plain `GET /models`.
+* It sends nothing unless `BEDROCK_API_KEY` and `VOICE_AGENT_ALLOW_CLOUD=1` are both set. The key is never printed or saved.
+
+Compatibility with Bedrock (UNKNOWN until run): the client sends three fields only vLLM knows.
+* For "pick one of these actions" and for "continue this begun reply", the client already copes with a refusal on its own: it switches to free text, or to "you have already said …". The results show when this happened (`constrained_choice`, `prefill_refused`).
+* Every call to a Qwen3 model also carries `chat_template_kwargs`, so a server that refuses unknown fields would refuse everything. In that case the script tries again with standard fields only and marks the row `plain`. If that is the mode that works, the agent's client will need the same option before it can use that model.
+
+Noticed during the capture, not followed up: in one of two local runs, "can I speak to someone" (after "the BMW M3") was answered as `get_car` by the code's rules instead of a handoff.
+
+Tests: `test_bedrock_speed.py` (5, against a fake server; nothing leaves the machine). `python -m pytest tests/unit`: 1,448 passed, 40 skipped.
+
+## 54. Bedrock speed test results (30 Oct, run by the owner from this M3 Pro, `us-east-1`)
+
+MEASURED with `scripts/bedrock_speed.py run`, raw figures in `benchmarks/results/bedrock_speed_2026-10-30.json` (ignored by git). Calls were made one at a time, 10 of each kind per model. Times are from this laptop and include the trip to `us-east-1`.
+
+| model | network (GET /models) p50 | decide p50 / p90 | right action | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `qwen.qwen3-next-80b-a3b-instruct` | 368 ms | 2,574 / 7,799 ms | 5/6 | 3,269 / 6,254 ms |
+| `mistral.ministral-3-8b-instruct` | 378 ms | 530 / 657 ms | 6/6 | no text (10 empty replies, no error) |
+| `anthropic.claude-haiku-4-5` | 561 ms | not run: "does not support the '/v1/chat/completions' API" on this endpoint | | |
+| `google.gemma-4-26b-a4b` | 346 ms | not run: "isn't supported on this route" | | |
+
+* **The network alone is over budget.** A plain `GET /models` takes 346 to 378 ms at p50, with one-off waits of 1.2 to 1.7 s. ARCH_PLAN gives the model 300 ms, and the trip to `us-east-1` uses more than that before the model starts. No model in this region can meet it from here.
+* **Ministral 3 8B** is the only one near usable:
+  * decisions in 530 ms at p50 and 657 ms at p90;
+  * all 6 labelled actions right;
+  * it is told to pick from a list, and both that and the reply prefill were accepted (no HTTP 400).
+  * But it wrote nothing for the follow-up question. The stream ended with no text and no error. INFERRED: it does not continue a reply that ends with the assistant's own message; it treats that reply as finished. Not confirmed; one cheap call in `plain` mode would settle it.
+* **Qwen3-Next 80B** is too slow for a live call: 2.6 s at p50, 7.8 s at p90, and very uneven (624 ms to 9.3 s). Its follow-up questions read well.
+* **Haiku and Gemma** need a different Bedrock API from the OpenAI-style one the agent's client speaks. Testing them means adding a second client (for Haiku, Bedrock's Converse or Messages API). UNKNOWN whether they would be faster; they pay the same network trip.
+* Only the first 10 of the 17 captured decisions were sent, so the last conversation (greeting, "something sporty", the M3, "speak to someone") was not covered.
+* What it means for the 1 s rule, INFERRED: in the captured conversations the model decided 2 turns out of 17; the code decided the rest. On those 2, a Bedrock decision of about 0.5 to 0.7 s plus speech recognition and the first sound of the voice would land around 1 s or over. The agent's "Let me check." bridge (`bridge_after_ms`) could cover that wait, at the cost of a filler on those turns. The local model server stays the default.
+
+Token use (non-streamed calls, reported by Bedrock): about 7,700 to 7,900 input and under 60 output tokens per model.
+
+## 55. Which other Bedrock models could work; the test now reaches them (30 Oct, the owner: "we cant change the region ... are there any other models that are viable to use? please check again throughly")
+
+The region stays `us-east-1`; it is the region where the company's key has these models. The network trip measured in section 54 (about 350 to 380 ms) is a fixed cost on every model call from this laptop.
+
+**Why two models failed in section 54** (from the AWS model cards, read 30 Oct):
+* Gemma 4 models answer under `/openai/v1`, not `/v1`. A call to `/v1` gets exactly the "isn't supported on this route" error we saw. The GPT-5.x and GPT-6.x models use `/openai/v1` too.
+* Claude models on this endpoint take only Anthropic's Messages API, at `/anthropic/v1/messages`, with an `x-api-key` header and an `anthropic-version: 2023-06-01` header. They do not take chat completions.
+* Every model in the owner's list is on this endpoint (AWS endpoint table). The failures were about the request, not about access.
+
+**Levers the cards offer:**
+* **Reasoning effort.** Several models think before answering by default. It can be turned off on Nemotron Nano 3 and GPT-6 Luna (`none`). Gemma 4 takes an effort setting; whether it accepts `none` is UNKNOWN. gpt-oss goes no lower than `low`.
+* **Priority tier.** `service_tier: "priority"` is described as "the fastest response times for a price premium". It puts our requests ahead of Standard and Flex ones. It is offered for the Mistral, Gemma, Nemotron, gpt-oss and GLM models, but not for GPT-6 Luna or Claude Haiku 4.5. It may remove the queueing behind Qwen3-Next's 0.6 to 9.3 s spread (INFERRED from the endpoint docs: requests "may be briefly queued"). It cannot shorten the network trip.
+
+**Shortlist to measure next.** Speed is a GUESS for every one of them, because no card publishes latency.
+
+| model | why | route / settings |
+|---|---|---|
+| `mistral.ministral-3-8b-instruct` | MEASURED: decisions 530 / 657 ms, 6/6 right; follow-ups came back empty | `/v1`; follow-ups to be retried with `--plain` |
+| `mistral.ministral-3-3b-instruct` | same family, smaller, so probably faster; accuracy unknown | `/v1`, priority |
+| `nvidia.nemotron-nano-3-30b` | about 3B parameters used per token; reasoning can be off | `/v1`, `reasoning none`, priority |
+| `google.gemma-4-26b-a4b` | 3.8B parameters used per token | `/openai/v1`, reasoning effort, priority |
+| `openai.gpt-6-luna` | "repeatable work at scale"; reasoning can be off; $0.11 input / $0.55 output per million tokens in-region | `/openai/v1`, `reasoning none`, Standard only |
+| `anthropic.claude-haiku-4-5` | likely the most accurate small model on the list | Messages API, Standard only |
+
+**Second tier**, if the first finds nothing:
+* `mistral.ministral-3-14b-instruct`.
+* `google.gemma-4-e2b` (very small; quality risk).
+* `google.gemma-3-4b-it` and `gemma-3-12b-it` (older, no reasoning; their cards list them as Legacy).
+* `zai.glm-4.7-flash` (Legacy, end of life March 2027).
+* `openai.gpt-oss-20b` (reasoning cannot be turned off).
+
+**Not viable for a live call**, GUESS from size or design:
+* Large or reasoning-first models: DeepSeek V3.x, Kimi, MiniMax M2.x, Qwen3 235B, Mistral Large 3, GLM 4.6 / 4.7 / 5, Nemotron Super 120B, gpt-oss-120b, Grok 4.3.
+* The larger OpenAI and Claude models: GPT-5.x, GPT-6 Sol / Terra / Astra, Claude Opus / Sonnet / Fable.
+* Coding, vision and safeguard models.
+* Voxtral, which is speech recognition.
+* Qwen3-Next 80B: MEASURED too slow.
+
+**Changes to `scripts/bedrock_speed.py`:**
+* Each model is sent to the address its card gives (`base_for`). Claude goes through a small Messages API client, `MessagesBackend`, which continues the begun reply natively.
+* `--reasoning` and `--service-tier` reach only the models whose card takes them (`applies`), so one run can mix models.
+* For GPT-5.x and GPT-6.x, `max_tokens` becomes `max_completion_tokens` and temperature is left out. INFERRED from OpenAI's API for its reasoning-era models.
+* `--plain` with `--decisions 0 --follow-ups 3` retests Ministral's follow-ups in 3 calls.
+* By default every captured decision (17) is sent, so all three conversations are covered.
+
+Tests: `test_bedrock_speed.py` has 10 tests, all against fake servers.
+
+## 56. Six Bedrock models compared, and the local model on the same prompts (30 Oct, run by the owner; local baseline run here)
+
+MEASURED with `scripts/bedrock_speed.py run`. Each model got the 17 captured decisions (12 with a known right action) and 10 follow-ups, one call at a time, from this M3 Pro to `us-east-1`. The settings were `--reasoning none --service-tier priority`, applied only where a model's card allows them. Raw figures (ignored by git):
+* `benchmarks/results/bedrock_speed_2026-10-30_1451_six_models.json`
+* `benchmarks/results/bedrock_speed_2026-10-30_local_qwen4b.json`
+
+| model | settings sent | decide p50 / p90 | right | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `nvidia.nemotron-nano-3-30b` | reasoning none, priority | 500 / 650 ms | **12/12** | 894 / 1,086 ms |
+| `google.gemma-4-26b-a4b` (`/openai/v1`) | reasoning none, priority | 490 / 660 ms | 11/12 | 945 / 1,065 ms |
+| `mistral.ministral-3-8b-instruct` | priority | 440 / 497 ms | 11/12 | empty (10 of 10) |
+| `mistral.ministral-3-3b-instruct` | priority | 501 / 522 ms | 11/12 | empty (10 of 10) |
+| `openai.gpt-6-luna` | – | refused: "not available for this account" (HTTP 401) | | |
+| `anthropic.claude-haiku-4-5` | – | refused: HTTP 403 `permission_error` (message cut off) | | |
+| *local* Qwen3-4B-Instruct-2507 (MLX, `127.0.0.1:8003`) | – | 393 / 509 ms | 11/12 | 603 / 712 ms |
+
+What it shows:
+* **Nemotron Nano 3 30B and Gemma 4 26B both work end to end.** They make the decision and write a usable follow-up.
+  * Nemotron got every labelled action right, including "I want something sporty" (both Ministrals answered `none`) and "can I see it this weekend" (Gemma and the local model answered `check_slots`).
+  * Their follow-ups read naturally and stay on the code's question, for example "Would you like to schedule a test drive?" and "Do you have a specific model or budget in mind?".
+* **Bedrock decisions are about 100 to 150 ms slower than the local model at p50** (440 to 500 ms against 393 ms). Most of that is the network: the plain `GET /models` took 221 to 1,556 ms this time, with p50s between 352 and 1,511 ms, much noisier than in section 54. The model's own share looks small (INFERRED).
+* **Both Ministrals again wrote no follow-up.** The decisions work, so the call itself is fine. The 3-call `--plain` retest in section 55 is still the way to find out whether continuing a begun reply is the cause. If the owner ran it earlier, its file was overwritten by this run; the script now writes one file per run.
+* **GPT-6 Luna and Claude Haiku 4.5** are on the key's model list but refused for this account: 401 "not available for this account" and 403 `permission_error`. Both are billed through AWS Marketplace, per their cards. INFERRED: someone with the account's admin rights must enable them, for example a Marketplace subscription or Anthropic's use-case form. The script now keeps 400 characters of an error, so the next run shows the full reason.
+* What it means for the 1 s rule, INFERRED: speech recognition takes about 0.27 s (worker log, 30 Oct). Add a 0.5 to 0.65 s decision and eve's first sound (under about 0.16 s, section 41), and a turn that needs the model lands at about 0.9 to 1.1 s. That is the same budget the local model has today plus about 0.1 to 0.15 s. Only 2 of 17 captured turns needed the model, and the `bridge_after_ms` "Let me check." can cover those.
+* Not covered here: many callers at once. Bedrock should not slow down with more callers the way one laptop does (INFERRED); the local figures are for one caller.
+
+## 57. Nemotron Nano 3 on Bedrock as a backend for live test calls (30 Oct, the owner: "add Nemotron Nano 3 on Bedrock as a backend option for the voice agent (reasoning none, priority tier), so I can make a live test call with it")
+
+What changed:
+* `config/default.yaml` has a new backend, `llm.backends.bedrock_nemotron`. It is `runtime: openai` against `https://bedrock-mantle.us-east-1.api.aws/v1`, model `nvidia.nemotron-nano-3-30b`. The key is read from `AWS_BEARER_TOKEN_BEDROCK`, the name the owner's `.env` already uses; the key never goes in config.
+* `BackendCfg.extra_body` holds fields added to every request. For this backend they are `reasoning_effort: none` and `service_tier: priority`, the settings section 56 measured (500 / 650 ms decide, 12/12). Other backends have it empty and send exactly what they sent before.
+* `BackendCfg.cloud: true` marks a third-party service outside the company. `chain.make_backend` refuses to build such a backend unless `VOICE_AGENT_ALLOW_CLOUD=1`, the same switch the speed test uses. Without it the chain logs the backend as unavailable and runs on the next one (the local model), so a worker started by mistake sends nothing to AWS.
+* The agent's own client is used unchanged. It sends `structured_outputs` for decisions and continues the begun reply for follow-ups, both of which Nemotron took in section 56. It sends no `chat_template_kwargs`, which go only to Qwen3 models.
+* Tests: `tests/unit/test_bedrock_backend.py`, against a fake server. It checks the refusal without the switch, the Bearer key, the two extra fields, the URL, that other backends send no extra fields, and that the chain skips the Bedrock backend without the switch.
+
+What goes to AWS on each call (read from `engine._context` and a captured prompt):
+* **Decision:** the agent's instructions, then the call's state: Dubai time, the code's hint, the car in focus, the cars last shown, the search so far, and the booking draft (car, **the caller's name and phone once given**, the time, the read-back). Then the last 4 lines of the conversation and the caller's latest words. The answer is a tool name and maybe a car id.
+* **Follow-up:** the last 4 lines, the caller's words, the reply already begun, and the question the code wants asked. The answer is one sentence.
+* Audio never leaves the machine. Speech recognition and the voice (eve) stay local. No Bedrock agents, guardrails, knowledge bases or prompt templates are used. The only thing Bedrock adds is the model's own chat template, which turns the messages into the model's input format.
+* So a live test call should use a made-up name and number.
+
+Still UNKNOWN until the owner's live call: how the first sound feels on a real call. Section 56's INFERRED estimate is about 0.9 to 1.1 s for a turn that needs the model.
+
+## 58. "Yes" to "Would you like to hear more about it?" is decided by code, not the model (30 Oct, the owner's first live call on Nemotron, section 57)
+
+What happened (the owner's transcript):
+> I'm looking for a family, a friendly car
+> The best for a family we have is the Tahoe, with 8 seats and a 722-litre boot. Would you like to hear more about it?
+> Yes.
+> I don't have a booking to confirm yet. Which car and time would you like? Hello? Are you still there?
+
+Cause: no rule covered a plain yes to "hear more" with a car in focus, so the model decided. Replayed here on the local Qwen3-4B, the same two turns went to `get_car` and gave the Tahoe's details (MEASURED). On Nemotron, the reply shows the model picked `confirm_booking` (INFERRED from the reply text; the worker log was not read). The rule for "yes" to an invitation skips questions with "hear" in them on purpose, so nothing caught it.
+
+Fix (`engine._decide`): with a car in focus and no booking under way, a yes ("yes", "yeah sure", "okay", "sounds good" ...) to a question containing "hear more" and not "which" goes to `get_car` for that car, by rule. "Which one would you like to hear more about?" is still handled by the existing `which_car` rule. `_PLAIN_YES` now also takes "sure" after the first word ("yeah sure"). Test: `test_inventory_db.py::test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_would_pick`, with a fake model that always says `confirm_booking`. It fails without the fix.
+
+The "Hello? Are you still there?" and the "Tap to interrupt" label on the page have one cause, and it is not in the code. The page URL given in section 57 had no `&voicemode=handsfree`, so the site ran in its default tap-to-talk mode (`site/voice.js` line 30): the microphone closes while Wazir speaks and opens only on a tap. INFERRED: the caller did not tap after the reply, and the silence prompt followed. The right URL is `http://localhost:8080/?voice=ws://localhost:8767/voice&voicemode=handsfree`.
+
+## 59. Words said over the agent that were too short to stop it now stop it when recognised (30 Oct, the owner: "sometimes it cant hear me barge in well. or its like it hears me but it continues speaking the full response, my barge in response gets printed, and then it replies to that barge in response")
+
+Cause: section 34's `BargeIn` stops the agent only after 0.3 s of caller speech at level 0.01 or more while the agent is audible. A shorter turn does not stop it, but the voice detector still ends the turn, the recogniser still writes the words, and the brain answers them once the whole reply has played. That is the owner's description exactly.
+
+MEASURED with `scripts/barge_replay.py`, which replays every recorded hands-free call in `logs/audio_dump` (60 calls, 28 to 30 Oct). It uses Silero with the worker's settings, `voice/heard.Playback` fed the recorded output chunks, and the real `BargeIn.observe`. Of 132 stretches of caller speech while the agent was audible:
+* 81 stopped the agent;
+* 4 began just before the agent was audible, so `BargeIn` never considered them;
+* 47 had too little loud speech while the agent was audible (0.00 to 0.26 s).
+
+Of those 47 (the words recognised near each one, read by hand):
+* about 22 are real caller words: "Tomorrow.", "no", "Porsche.", "Test drive.", "4 in the afternoon.", "I want to hear more about the Macan.";
+* 12 are "Yes." / "Thank you." / "Thanks for watching!";
+* about 8 look invented from echo or noise: "I'm going to drive a little bit.", "All these mirrors.", "It's a little bit of a problem.";
+* 5 had no words.
+
+Loudness does not separate the groups: real one-word answers peaked at 0.011 to 0.17 and the invented ones at 0.005 to 0.07.
+
+Fix: `voice/bargein.py` `LateBargeIn`, between the recogniser and the brain. When a turn's words arrive while the agent is still audible on the page, it asks `DealerBrain.talks_over(text)`. If yes, it keeps what the caller heard of the reply (`reply_cut`), then broadcasts an interruption: the voice and the page drop the rest, a reply still being written is abandoned, and the words are answered at once. `talks_over` is no when the words are:
+* only "yes / okay / mm-hmm / thank you" or a filler (`_GOES_ALONG`): these are still answered after the reply, as before. "Yes" said over "...would you like to hear more?" is an answer, not an interruption;
+* invented by the recogniser (`_INVENTED`);
+* the room (`_is_background`, a quarter of the caller's loudest recent turn) or too quiet to trust;
+* the agent's own reply coming back through the microphone (`echoes_agent` against the reply being played).
+
+The cost is time: the stop comes when the words are recognised, about 0.3 to 0.8 s after the caller stops, not while they are speaking. That is still better than the whole reply.
+
+Tests (`test_bargein.py`, 3 new):
+* "Tomorrow.", "no", "Porsche." and a question stop it, keeping only what was heard;
+* "Yeah.", "okay", "Thank you.", "Mm-hmm.", "um", "Thanks for watching!", the agent's own question, and a turn at background level do not;
+* nothing happens once the reply has finished playing.
+
+Not checked:
+* a live call;
+* whether the room bar catches the echo-invented sentences on the owner's set-up (their levels were not replayed through `_is_background`, only through the words).
+
+On open laptop speakers the agent's own voice can be recognised as words. With a headset, or the browser's echo cancellation working, this does not come up.
+
+## 60. A test mode where the model decides and writes everything (30 Oct, the owner: "i want to see how nemotron works alone, without the code")
+
+Why: the owner's Nemotron calls (section 57) ran at `--quality prefix`. There the code speaks the facts and Nemotron writes only a closing question, and the rules route most turns before the model is asked. So the calls showed little of Nemotron. MEASURED on the owner's transcript, replayed here: "How many owners has it had?", "What is the mileage?" and "Tell me about the Tahoe" were all routed by rule, with code-written replies.
+
+`voice.model_only` (`VA__VOICE__MODEL_ONLY=true`) used to do one thing: when the model gave nothing usable, nothing was said instead of the code's wording. In the agent engine it now also:
+* asks the model to decide every turn: no fixed rules first (`_fast_decide`), none of the code's own replies to a fragment, a cut-off phrase or a car name that sounds like one just listed, and none of the code's corrections of the model's choice (a pick from the list, a haggle, a quiet goodbye, a booking tool with nothing booked);
+* has the model write every reply at the full level, including lists, booking questions, the read-back and the goodbye. There is no "Let me check." bridge, no opener, no code completion of a cut reply, and no code question added at the end;
+* does not show the model the code's own answer: the "STANDARD WORDING" is left out of the prompt, so it writes from the facts alone;
+* lets everything the model writes be said. The fact guard and the reply checks only note what they would have stopped, in the turn's debug note ("model_only: said anyway; ... would have stopped: ...");
+* has no first-sentence deadline, so a slow model is waited for, up to the 4.5 s reply limit.
+
+Still the code's:
+* the tools themselves (the stock database, the slots, making the booking, reading names, numbers and times from the caller's words);
+* the fixed greeting;
+* the silence prompts.
+
+With `VA__VOICE__SILENT_TURN_FALLBACK=false`, a turn the model leaves empty is silent, and the page shows that it was.
+
+For the owner's test only: it says whatever the model says, unchecked. Production stays `model_only: false`.
+
+Tests: `tests/unit/test_model_only.py` (2). A turn the rules would route ("tell me about the Land Cruiser", then "yes") goes to the model. Only its words are said, a made-up price included and noted, and the prompt has no standard wording. Without the mode the same turn is the code's.
+
+Set aside, not committed: making "Do you have any reviews on this car?" say it has none ("reviews" as a topic that is always not on record). It is a fix to the code's own replies, which the owner is not testing now.
+
+## 61. In the test mode a reply has room for a list (30 Oct, the owner's first Nemotron-only call)
+
+The call (the owner's transcript):
+> I am looking for a Porsche.
+> I have a 2016 black Macan at 149,000 dirhams, Hello? Are you still there?
+
+The same happened again on the next turn. First sound came 2.5 s and 9.7 s after the caller.
+
+The cut: replayed here with the same settings on the local Qwen3-4B (free, `model_only` on, voice profile applied), the same turn stopped at the same place. MEASURED, the model's whole text was: "I have a 2016 Porsche Macan in black at 149,000 dirhams, a 2020 Porsche Cayenne in white at 285,000 dirhams, and a 2021 Porsche 911 in red at 495,". The reply token cap (`dialogue.max_reply_tokens` 70) ran out inside the list.
+
+The writer never speaks an unfinished sentence, so only the first clause was said. Outside the test mode the code finishes such a reply with its own facts and question (section 60 turned that off), which is why it was not heard before. INFERRED: Nemotron was cut the same way. Its first clause is the same, and nothing followed it.
+
+Fix (`voice/pipeline.apply_voice_profile`): with `voice.model_only` the reply cap is at least 200 tokens (`MODEL_ONLY_TOKENS`). With it, the same replay gave the whole list, all three cars really in stock, and "Which one would you like to hear more about?" (MEASURED, 3.0 s to the end of the reply on the local model). The prompt still asks for at most 30 words. Test: `test_model_only.py::test_in_the_test_mode_a_voice_reply_has_room_for_a_list`.
+
+Also seen in the replay: to "do you have any other Porsche cars?" the model said "We don't have any other Porsche models in stock." The check notes it ("says there are no porsche cars, but there are") and, in this mode, lets it through. That is the kind of sentence the checks exist for.
+
+UNKNOWN: why the second turn took 9.7 s. The worker's own log for that turn (its "stream:" and timing lines) would say; it was not read. One way it could happen (GUESS): the stream stalled until the 6 s backend timeout, then the engine's one retry.
+
+## 62. The speed test times whole replies too (30 Oct, the owner: "what model other than nemotron would be faster? only model responses tho"; then "add a whole-reply speed test for Nemotron, Gemma 4, Ministral 3 8B and Ministral 3 3B")
+
+No model had been timed writing a whole reply. Sections 54 and 56 timed the decision and the one-sentence follow-up of the prefix level only. In the test mode of section 60 a turn is a decision and then a whole reply, written from a longer prompt (the car's full spec sheet, the conversation).
+
+`scripts/bedrock_speed.py`:
+* `capture --full` runs the three captured conversations and the owner's two test calls (`OWNER_CALLS`: the Porsche call and the Tahoe call, the owner's lines only) through the agent. It uses the test mode with the voice settings, on the local model, so it is free. Every whole-reply prompt is saved to `benchmarks/bedrock_full_reply_prompts.json`: 24 prompts, up to 200 tokens each.
+* `run --full-replies N` sends N of them to each model as the agent does: streamed, with no begun reply to continue. For each it records:
+  * the time to the first speakable piece: `writer.split_point`, a sentence or a first clause of 6+ words, which is where the voice starts;
+  * the time to the end of the reply;
+  * whether the reply was finished;
+  * the reply itself.
+
+  The table gains "reply first", "reply end" and "finished" columns. One warm-up reply is not counted. `--decisions 0 --follow-ups 0` sends whole replies only.
+* Dry run of the owner's four models with 20 replies each: 21 calls a model, about 23,300 input tokens and at most 8,400 output tokens a model. INFERRED, at section 56's priority price for Nemotron: under one US cent for Nemotron. The other models' prices were not checked.
+
+Tests: `test_bedrock_speed.py`, 2 new, against the fake server:
+* a warm-up and two replies are streamed, none continuing a begun reply;
+* the first piece comes no later than the end;
+* a cut-off reply is counted as not finished;
+* a run asks for `capture --full` when the prompts are missing, and the dry run counts the calls.
+
+Seen while capturing on the local Qwen3-4B, MEASURED as the replies it gave:
+* "I've got four Toyota models: a Corolla, a Camry, and a RAV4", which names three;
+* "I don't have mileage data for any of the three cars" when the mileage was in the facts.
+
+These are the local model's. Whether the Bedrock models do better is what the replies in the results file will show.
+
+## 63. Whole replies on four Bedrock models (30 Oct, run by the owner)
+
+MEASURED with `scripts/bedrock_speed.py run --decisions 0 --follow-ups 0 --full-replies 20 --reasoning none --service-tier priority`, from this M3 Pro to `us-east-1`. Each model got the first 20 of the 24 prompts from section 62, one at a time. All four answered every call, with no errors. The network trip (`GET /models`) took about 365 to 390 ms at p50. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-10-30_165534.json`.
+
+| model | first speakable piece p50 / p90 | end of reply p50 / p90 | finished | replies with a figure or name not in their prompt |
+|---|---|---|---|---|
+| `mistral.ministral-3-3b-instruct` | **472 / 573 ms** | 475 / 573 ms | 19/20 | 3: two made-up booking times ("Wednesday at 10:00 AM", "10:15 AM tomorrow"); Markdown `**` in 3 replies, blank lines in more |
+| `nvidia.nemotron-nano-3-30b` | 819 / 1,115 ms | 945 / 1,332 ms | 20/20 | **0** |
+| `mistral.ministral-3-8b-instruct` | 917 / 1,416 ms | 989 / 1,244 ms | 20/20 | 3: "0 to 100 in under 3.5 seconds" and "60 km/h in 3.5 seconds" for the M3, a colleague named "Ahmad" |
+| `google.gemma-4-26b-a4b` | 1,113 / 1,357 ms | 1,259 / 1,432 ms | 20/20 | **0** |
+
+The check behind the last column compared every number in a reply, and a list of likely invented words, with the reply's own prompt (system and user text). It is not a full fact check. Read by hand, the replies also show:
+* **Nemotron**:
+  * to "do you have any other Porsche cars?" it offered "the details of the other Porsche models we keep on the lot", but there is only one Porsche;
+  * to "is it a good family car" it added an opinion ("the turbo engine is tuned for performance, not space");
+  * to "can I speak to someone" it tacked on the Range Rover Sport's colour and price.
+* **Gemma 4**:
+  * to "which one is the fastest" it did not answer ("I can compare the speeds of different models for you");
+  * to "the second one" it never named the car.
+
+  Otherwise its replies are plain and correct.
+* **Ministral 3 8B**: to "the second one" it answered about cheaper Toyotas instead.
+* **Ministral 3 3B**:
+  * replies are written for a screen (Markdown, line breaks);
+  * one reply was cut off mid-question;
+  * one said "Got seven seats?" to a caller asking for seven seats.
+
+These prompts carry the local model's earlier replies in their history (section 62 captured them on Qwen3-4B), including its mistakes. All four models saw the same history.
+
+What it means (INFERRED):
+* **The first piece usually arrives close to the whole reply.** On most replies, for all four models, the gap was under about 100 ms. Streaming the reply saves little on Bedrock from here.
+* **None of them fits the 1 s rule when the model writes the whole reply.** A turn is a decision and then a reply: about 0.27 s of recognition, a 0.45 to 0.5 s decision (section 56), 0.47 to 1.1 s to the reply's first piece, and the voice's start (under about 0.16 s, section 41). That gives about 1.35 s with Ministral 3 3B and about 1.75 s with Nemotron, at p50. The prefix level (code speaks the facts at once) stays the way to meet 1 s from this laptop.
+* **Ministral 3 3B is the only faster model, and it makes up booking times.** That is the one thing the owner's rules forbid outright. Of the four, Nemotron is the fastest with no figure invented. Gemma 4 is as clean and about 300 ms slower.
+
+## 64. The one-call turn: the action and the reply from one model call (30 Oct, the owner: "give Nemotron the likely facts up front so it picks the action and writes the reply in a single call. and maybe shorten the prompt too?")
+
+A setting, `voice.one_call` (`VA__VOICE__ONE_CALL=true`), used only with the test mode `voice.model_only` (section 60). It is off by default and the pipeline ignores it without `model_only`.
+
+How a turn runs (`AgentEngine._one_call` in `agent/engine.py`):
+1. **The code looks up the likely facts first, on a copy of the call** (`_one_call_candidates`, at most four):
+   * a car picked from the list just read out ("the second one");
+   * a car named alone;
+   * the car in focus;
+   * a search, when the words name a make, a filter or a cheaper car, or ask for a list;
+   * and always `none`.
+
+   Each runs through the usual tool on a deep copy of the session. MEASURED: about 1 ms a turn (p50; 3 ms at most) on the portal stock.
+2. **One short prompt** (`ONE_CALL_SYSTEM` and `_one_call_prompt`) holds:
+   * the time;
+   * the booking, if one is under way;
+   * the last four lines and the caller's words;
+   * each READY action with its facts (each fact given once, the price rule once);
+   * the other actions on one line.
+
+   The model writes `ACTION: <action>` on the first line and the reply on the next.
+3. **The action line is read as soon as it is complete.** What happens next depends on it:
+   * **A READY action:** the reply is spoken piece by piece as it comes. The prepared copy becomes the call's state only once a word is said.
+   * **One of the other actions** (a booking step, a comparison, the showroom's hours): the stream is closed, the tool runs, and the usual writer writes the reply in a second call, as before. The decision call is still saved.
+   * **A READY action with no reply after it:** the reply is written in a second call. On the local model this happened on 7 of 24 turns before the prompt said plainly which actions get a reply. Those turns were silent.
+   * **No action line, or an error before it:** the turn is decided by the usual decision call.
+4. As in section 60, nothing is replaced or added by code. The checks only add a note when they would have stopped a sentence.
+
+**Prompt size**, MEASURED in characters on the demo stock (tests), system and user text together:
+
+| turn | two calls (decision + writer) | one call |
+|---|---|---|
+| "do you have any Toyotas" | 7,552 | 2,097 |
+| "tell me about the Land Cruiser" | 7,137 | 1,890 |
+
+On the portal stock over the 24 test turns (`capture --full`), the average prompt per call was 4,408 characters with two calls and 2,950 with one. One call also sends one prompt a turn instead of two.
+
+**Speed on the local model** (Qwen3-4B on MLX, this M3 Pro, the same 24 turns), MEASURED:
+
+| | first piece said, p50 / p90 | whole turn, p50 / p90 |
+|---|---|---|
+| two calls | 1,585 / 2,349 ms | 2,219 / 3,394 ms |
+| one call | 1,755 / 2,293 ms | 2,433 / 3,693 ms |
+
+Locally, one call is no faster.
+* The local server has no network trip to save.
+* Its first token took 1,123 ms at p50. The one-call prompt is new from its first characters every turn, so the server cannot reuse earlier work (INFERRED).
+* The action line costs about 250 ms of writing before the reply starts.
+
+On Bedrock the saving is the decision's round trip: the network alone is about 370 to 390 ms (section 63), and the decision about 0.45 to 0.5 s (section 56). That saving is INFERRED and not measured. The owner's run below measures it:
+
+```
+uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 31 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
+```
+
+The run makes 49 calls: about 35,300 input and at most 7,100 output tokens, from the dry run. At the priority rates from AWS's page that is under 1 US cent (INFERRED). The prompts were captured on the local model (`capture --full --one-call`): 24 one-call prompts and 7 second calls. The report now prints the one-call answers apart from the second calls: how many had the reply in them, and their first piece. The baseline is two calls: the decision p50 from the same run plus Nemotron's whole-reply first piece from section 63 (819 ms p50).
+
+What the local model did with it, read by hand. These are Qwen3-4B's replies, not Nemotron's:
+* It picked a sensible action on most turns.
+* It wrote past 30 words on car details.
+* It once named the car in focus for "something cheaper" when the cheaper search was prepared.
+
+Tests (`tests/unit/test_model_only.py`, `tests/unit/test_bedrock_speed.py`) check that:
+* the facts are given up front and the reply is spoken from the one call, with no other call;
+* a pick from the list is understood;
+* an action without facts is written in a second call;
+* no action line goes back to the usual decision;
+* a READY action with no reply is not left silent;
+* the prompt is under half the two calls';
+* the setting is off without the test mode;
+* the speed test times a one-call answer from after its action line.

@@ -311,3 +311,17 @@ def test_does_it_come_with_a_warranty_is_a_question_about_the_car_not_a_visit():
     s = e.new_session()
     said(e, s, "tell me about the Land Cruiser")
     assert said(e, s, "can I come and see it tomorrow").debug.intent == "prepare_booking"            # a visit is still a visit
+
+
+def test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_would_pick():
+    """30 Oct, a live call on Nemotron (Bedrock): "Yes." after "... the Tahoe ... Would you like to hear more about it?" got "I don't have a booking to confirm yet"."""
+    from .test_live_call_fixes import said
+    from .test_scale import Scripted, agent
+
+    for answer in ("Yes.", "yeah sure", "okay", "sounds good"):
+        e, _ = agent(None, backend=Scripted(["confirm_booking"] * 3))
+        s = e.new_session()
+        said(e, s, "tell me about the Land Cruiser")
+        s.history.append(("agent", "The best for a family we have is the Land Cruiser, with 8 seats. Would you like to hear more about it?"))
+        r = said(e, s, answer)
+        assert r.debug.intent == "get_car" and r.debug.via == "agent:rules" and "booking to confirm" not in r.reply, (answer, r.reply)

@@ -69,6 +69,7 @@ class OpenAICompatBackend(NluBackend):
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
         if "qwen3" in self.cfg.model.lower() and not self.llm.think:
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        body.update(self.cfg.extra_body)                                                  # Bedrock: reasoning_effort, service_tier
         return body
 
     def _post(self, body: dict, timeout: float) -> dict:

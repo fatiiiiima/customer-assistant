@@ -123,6 +123,9 @@ def common_phrases(cfg: Config) -> list[str]:
             "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + STILL_THERE + ["Is there a colour you'd like?", SILENT_GOODBYE, WELCOME_BACK]
 
 
+MODEL_ONLY_TOKENS = 200
+
+
 def apply_voice_profile(app: App, cfg: Config) -> None:
     """Voice replies are short and time-boxed: ask for ~20 words, cap the tokens, and STOP the model at the deadline (the standard wording is then
     spoken). Text chat keeps its longer, richer replies."""
@@ -142,6 +145,10 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
         w.system = SYSTEM_VOICE
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
+    if cfg.voice.model_only:                                  # the model writes lists too (a 3-car list with prices is about 70 tokens): a reply cut there is dropped
+        w.max_tokens = max(w.max_tokens, MODEL_ONLY_TOKENS)   # and, in this mode, not finished by code (30 Oct, Nemotron: "I have a 2016 black Macan at 149,000 dirhams," and nothing)
+    if hasattr(app.engine, "one_call"):
+        app.engine.one_call = cfg.voice.model_only and cfg.voice.one_call
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
         app.engine.decide_deadline_s = cfg.voice.decide_deadline_ms / 1000
@@ -268,11 +275,13 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     brain.playback = playback
     if mic_gate is not None:
         mic_gate.playback = playback                          # tap mode: a tap while the agent is audible interrupts it (not only while the server is still sending)
+    late = None
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
-        from .bargein import BargeIn
+        from .bargein import BargeIn, LateBargeIn
 
         stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level))
-    for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):
+        late = LateBargeIn(brain, playback)                   # words said over the agent that were too short to stop it: they stop it when recognised
+    for name, proc in (("vad", None), ("stt", stt), ("late", late), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)
         if name in probes:

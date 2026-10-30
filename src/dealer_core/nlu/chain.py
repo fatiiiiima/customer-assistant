@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Iterator
 
-from ..config import BackendCfg, Config, LlmCfg
+from ..config import ALLOW_CLOUD_ENV, BackendCfg, Config, LlmCfg
 from ..dialogue.states import State
 from .backend import BackendError, BackendTimeout, IntentResult, NluBackend
 
@@ -13,7 +14,10 @@ log = logging.getLogger("dealer.nlu")
 
 
 def make_backend(name: str, b: BackendCfg, llm: LlmCfg, model_dir: Path) -> NluBackend:
-    """Instantiate a backend from its config entry. Imports stay lazy so unused runtimes need not be installed."""
+    """Instantiate a backend from its config entry. Imports stay lazy so unused runtimes need not be installed.
+    A cloud backend (the caller's words, and name and phone once given, leave the company) is refused unless VOICE_AGENT_ALLOW_CLOUD=1."""
+    if b.cloud and os.environ.get(ALLOW_CLOUD_ENV) != "1":
+        raise BackendError(f"backend {name!r} is a third-party cloud service: it needs {ALLOW_CLOUD_ENV}=1 (dev only)")
     if b.runtime == "ollama":
         from .ollama_backend import OllamaBackend
 

@@ -16,12 +16,15 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_output import BOT_VAD_STOP_FALLBACK_SECS
 
 from ..dialogue.machine import DialogueEngine
-from .services import SPEAK_UP, too_quiet_to_trust
+from .services import _INVENTED, SPEAK_UP, echoes_agent, too_quiet_to_trust
 
 
 # A turn that is only "Actually." / "Wait," / "Hold on": the start of what the caller is about to say, often followed by a pause (29 Oct, a barge-in: "Actually," was
 # answered on its own and "do you have any BMWs?" came as a turn of its own). Held up to MARKER_WAIT_S for the rest; "yes", "no" and "okay" are answers and are not held.
-_MARKER_ONLY = re.compile(r"(?:(?:actually|wait|hold on|hang on|um+|uh+|er+|erm|well|so|oh|hmm+|sorry|excuse me|one moment)[\s,.!?-]*)+", re.I)
+# Said over the agent, these do not stop it (voice/bargein.py LateBargeIn): a listener's "yes", "okay", "mm-hmm", a thank-you, or the recogniser's own fillers. Whole turns only.
+_GOES_ALONG = re.compile(r"(?:(?:yes|yeah|yep|yup|ok|okay|sure|right|alright|all right|mm+|hmm+|mhm|mm-?hmm|uh-?huh|um+|uh+|ah+|oh|i see|got it|cool|nice|great|"
+                         r"perfect|good|thanks|thank you|you|bye|so)[\s,.!?-]*)+", re.I)
+_MARKER_ONLY = re.compile(r"(?:(?:actually|wait|hold on|hang on|um+|uh+|er+|erm|well|so|oh|hmm+|sorry|excuse me|one moment)[\s,.!?-]*)+", re.IGNORECASE)
 MARKER_WAIT_S = 1.2
 
 # Silence on the line (owner, 30 Oct: "user should start speaking"; "if the model doesn't hear anything, it should ask an are you still there question"; section 49)
@@ -281,6 +284,17 @@ class DealerBrain(FrameProcessor):
         if not self._caller_levels:
             return bool(self._first_turn_below and level < self._first_turn_below)
         return bool(self._background_below and level < self._background_below * max(self._caller_levels))
+
+    def talks_over(self, text: str) -> bool:
+        """A turn recognised while the agent is still audible, which BargeIn did not stop it for: is it the caller talking over the agent? Not when it is the room
+        (`_is_background`), too quiet to trust, words the recogniser invents, the agent's own reply coming back through the microphone, or only "yes" / "okay" / "thank you"."""
+        if not text.strip() or _GOES_ALONG.fullmatch(text.strip()) or _INVENTED.search(text):
+            return False
+        level = self._level_of() if self._level_of else None
+        if self._is_background(level) or too_quiet_to_trust(text, level, *self._speak_up):
+            return False
+        playing = self.playback.text() if self.playback is not None else ""
+        return not (playing and echoes_agent(text, playing))
 
     def _keep_heard_cars(self, heard: str) -> None:
         shown = self.session.shown
