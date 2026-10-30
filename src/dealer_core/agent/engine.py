@@ -319,6 +319,9 @@ class AgentEngine:
 
     def __init__(self, svc: DealerService, backend, reply_writer: ReplyWriter | None, agent_name: str | None = None) -> None:
         self.svc, self.backend, self.reply_writer = svc, backend, reply_writer
+        # Test mode (voice.model_only; owner, 30 Oct: "i want to see how nemotron works alone, without the code"): the model decides every turn (no rules first, no
+        # code corrections of its choice) and writes every reply (full level, no code-spoken lists, booking lines, bridge or completions); the checks only note what
+        # they would have stopped; a turn it leaves empty is silent unless silent_fallback. The tools still run: the facts come from the stock and the bookings.
         self.model_only = False
         self.silent_fallback = True
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
@@ -445,7 +448,8 @@ class AgentEngine:
             yield TurnResult("Goodbye.", dbg, True)
             return
         words = ex.tokens_of(text)
-        if not words or all(w in _FILLER for w in words):                    # "the", "um": a fragment the recognizer picked up, not a request
+        mo = self.model_only                                                 # test mode: the model decides and writes every turn (see model_only in __init__)
+        if not mo and (not words or all(w in _FILLER for w in words)):      # "the", "um": a fragment the recognizer picked up, not a request
             line = "Sorry, I didn't catch that. Could you say it again?"
             dbg.intent, dbg.via, dbg.note = "none", "rules", "fragment: asked to repeat"
             s.remember("customer", text)
@@ -453,7 +457,7 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        if self._unfinished(s, words):                                    # "I'm looking for a..." / "I'm looking forward.": the end was cut off
+        if not mo and self._unfinished(s, words):                         # "I'm looking for a..." / "I'm looking forward.": the end was cut off
             line = W.pick(s, "cut_off", CUT_OFF)
             dbg.intent, dbg.via, dbg.note = "none", "rules", "cut off mid-phrase: asked again"
             s.remember("customer", text)
@@ -467,7 +471,7 @@ class AgentEngine:
             s.no_invite_until = len(s.history) + 12                        # "No, I want to know something else": no more invitations for the next few exchanges
         elif _visit_cue(joined_words):
             s.no_invite_until = 0                                          # the caller is talking about visiting: asking again is fine
-        check = self._sounds_like_shown(s, text)
+        check = None if mo else self._sounds_like_shown(s, text)
         if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
             heard, near = check
             s.shown, s.car, s.state = [near, heard], None, State.ANSWERING
@@ -478,7 +482,7 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        decision = self._fast_decide(s, text)
+        decision = None if mo else self._fast_decide(s, text)
         bridge = ""
         if decision is None and predecided is not None:
             try:
@@ -488,11 +492,11 @@ class AgentEngine:
             if decision is not None:
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "decision made during the hold"
         no_model = False
-        if decision is None and self.governor is not None and not self.governor.model_allowed():
+        if decision is None and not mo and self.governor is not None and not self.governor.model_allowed():
             decision, no_model = self._code_decision(s, text), True             # the model is overwhelmed: the code decides and speaks
             dbg.note = (dbg.note + "; " if dbg.note else "") + "model overloaded: shed, decided by code"
         if decision is None:
-            bridge = self._bridge(s, text)
+            bridge = "" if mo else self._bridge(s, text)
             if bridge:                                                     # the caller hears this while the model decides (and writes)
                 yield bridge
             t_decide = time.perf_counter()
@@ -502,13 +506,15 @@ class AgentEngine:
                 self.governor.record_decide((time.perf_counter() - t_decide) * 1000)
             else:
                 decision = self._decide(s, text)
-            if decision.get("error"):                                      # no decision within the deadline: the code decides, nothing waits longer
+            if decision.get("error") and mo:
+                dbg.note = (dbg.note + "; " if dbg.note else "") + f"model_only: no decision from the model ({decision['error']}), so no tool was run"
+            elif decision.get("error"):                                    # no decision within the deadline: the code decides, nothing waits longer
                 decision, no_model = self._code_decision(s, text), True
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "model too slow: decided by code"
         tool = decision.get("tool", "none")
         if tool not in TOOLS and tool != "booking_aside":
             tool = "none"
-        if tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
+        if not mo and tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
             # 28 Oct: nothing is booked yet, a booking is only being arranged. "Do." (for "two") and "I want to change the time", said while times were on offer, went to the tools
             # for bookings that exist and were answered "I don't see any test drives booked to move."
             if tool == "reschedule_booking":
@@ -519,7 +525,7 @@ class AgentEngine:
                 tool = "cancel_draft"
         if tool not in ("prepare_booking", "check_slots"):
             s.day_asks = 0                                                  # the booking talk was left: the next request for a day is a first ask again
-        if uncertain and tool == "end_call":                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
+        if uncertain and tool == "end_call" and not mo:                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
             line = W.pick(s, "still_there", STILL_THERE)
             dbg.intent, dbg.via, dbg.note = "none", "rules", "goodbye heard at a very low level: asked if the caller is there, did not end the call"
             s.remember("customer", text)
@@ -531,12 +537,12 @@ class AgentEngine:
         args = self._args_for(s, tool, decision.get("car_id"), tool_text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "booking_aside":
             args = {"kind": decision.get("kind")}
-        if tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
+        if not mo and tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
-        picked = ex.selection(text, s.shown) if decision.get("via") != "rules" else None      # code's own routing already looked at this
+        picked = ex.selection(text, s.shown) if decision.get("via") != "rules" and not mo else None      # code's own routing already looked at this
         if picked and tool in ("none", "check_slots", "search_cars"):
             tool, args = "get_car", {"car_id": picked}                # "tell me about the second one" is about that car, whatever the model called it
-        elif tool == "none" and s.car and (HAGGLE.search(" ".join(ex.tokens_of(text))) or self._offer_on(s, s.car, " ".join(ex.tokens_of(text)))):
+        elif not mo and tool == "none" and s.car and (HAGGLE.search(" ".join(ex.tokens_of(text))) or self._offer_on(s, s.car, " ".join(ex.tokens_of(text)))):
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
@@ -556,20 +562,20 @@ class AgentEngine:
             result["core"] = result["core"][:1].upper() + result["core"][1:]
             dbg.note = (dbg.note + "; " if dbg.note else "") + "bridge said while the model decided"
         prefix, question = self._split_core(result["core"])
-        level = "code" if no_model else self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
-        if level == "full" and tool in _FACT_TOOLS and prefix:
+        level = "full" if mo else "code" if no_model else self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
+        if level == "full" and tool in _FACT_TOOLS and prefix and not mo:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
-        speaks = self.model_speaks and level == "full"
+        speaks = (self.model_speaks or mo) and level == "full"
         quiet = speaks and not self._slow_writer()             # model_speaks: an acknowledgement only while the model is slow to its first sentence
-        opener, lead = ("", bridge) if bridge else ("" if quiet else self._opener(s, tool, result["core"]), "")
+        opener, lead = ("", bridge) if bridge else ("" if quiet or mo else self._opener(s, tool, result["core"]), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
             result["core"] = f"{opener} {_lower_first(result['core'], self._proper(s))}"
             prefix, question = self._split_core(result["core"])
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
-        if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
+        if not mo and not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word, at every level
                 spoken.append(part)
                 yield part
@@ -578,17 +584,17 @@ class AgentEngine:
             for part in _clauses(result["core"]):             # the model is overloaded or down: the code's own wording, at once
                 spoken.append(part)
                 yield part
-        elif self.prefix_mode and not s.ended and tool in EXACT_TOOLS:
+        elif self.prefix_mode and not mo and not s.ended and tool in EXACT_TOOLS:
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word; the model only chose the tool
                 spoken.append(part)
                 yield part
             self.prefix_stats = {"continuation": "exact-wording"}
-        elif level == "prefix" and self.reply_writer is not None and not s.ended and prefix:
+        elif level == "prefix" and not mo and self.reply_writer is not None and not s.ended and prefix:
             dbg.risk = result["risk"]
             for sentence in self._prefix_reply(s, text, result, prefix, question, dbg):
                 spoken.append(sentence)
                 yield sentence
-        elif self.reply_writer is not None and not s.ended:
+        elif self.reply_writer is not None and (mo or not s.ended):     # model_only: the model says the goodbye too
             facts, stable = "\n".join(result["facts"]), ""
             core, awaiting = result["core"], result["awaiting"]
             if speaks:
@@ -612,8 +618,9 @@ class AgentEngine:
                             leak = guards.leaks(sentence, allowed, self._car_words())
                             if leak:                                    # fail closed: not said; what was said stands, the code's wording follows if nothing was
                                 self.fidelity["leaks"] += 1
-                                dbg.note = (dbg.note + "; " if dbg.note else "") + "fact guard: " + "; ".join(leak)
-                                break
+                                dbg.note = (dbg.note + "; " if dbg.note else "") + ("model_only: said anyway; the fact guard would have stopped it: " if mo else "fact guard: ") + "; ".join(leak)
+                                if not mo:
+                                    break
                         if lead and len(spoken) == 1:
                             sentence = _after_opener(sentence, self._proper(s), new_sentence=not lead.rstrip().endswith(","))
                             if not sentence:
@@ -624,6 +631,8 @@ class AgentEngine:
                         yield sentence
                 info = self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
+                if info.get("would_stop"):
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: said anyway; the checks would have stopped: " + " | ".join(info["would_stop"])
                 if info.get("stopped"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
                 if info.get("stopped") == FIRST_SENTENCE_DEADLINE:        # the model is slow, not wrong: asking again would only double the wait. The code's own wording follows below,
@@ -632,11 +641,11 @@ class AgentEngine:
                     break
                 if len(spoken) > (1 if lead else 0):
                     break
-            if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
+            if lead and spoken == [lead] and not mo:            # the model gave nothing usable after the opener: the code's facts
                 spoken.append(result["core"] if bridge else _lower_first(result["core"], self._proper(s)))
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
                 yield spoken[-1]
-            if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
+            if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")) and not mo:
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:

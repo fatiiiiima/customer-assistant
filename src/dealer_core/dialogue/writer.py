@@ -631,8 +631,9 @@ class ReplyWriter:
         (a retry), without touching state other callers' turns read."""
         t0 = time.perf_counter()
         temperature = self.temperature if temperature is None else temperature
-        self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False}
-        if w.risk == "high" and not self.high_risk:
+        self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False, "would_stop": []}
+        mo = self.model_only                     # test mode: the model's own words only; the system's wording is not shown to it and the checks only note
+        if w.risk == "high" and not self.high_risk and not mo:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
             return
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
@@ -644,13 +645,15 @@ class ReplyWriter:
         max_tokens = self.max_tokens * 2 if high else self.max_tokens
         deadline = self.deadline_s * 1.6 if (high and self.deadline_s) else self.deadline_s
         user = (self.prompt_start(w) + f"{w.caller}\n\n"
-                f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
+                f"FACTS FROM THE SYSTEM:\n{w.facts}" + ("" if mo else f"\n\nSTANDARD WORDING (reference only, do not copy): {w.core}")
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
                    "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
                 + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
+                + ("\n\nThis step carries exact details from the system (day, time, car, name, phone number, price): say the ones in the FACTS exactly, as one or two "
+                   "complete, natural sentences a person would say on the phone. Do not say the visit is booked or confirmed unless the FACTS say so." if high and mo else "")
                 + ("\n\nThis step carries exact details from the system. Say the details that the STANDARD WORDING gives (day, time, car, name, phone number, price), "
                    "exactly, as one or two complete, natural sentences a person would say on the phone (not a list of details). Say NOTHING the STANDARD WORDING does not say: in particular do not say the visit is booked or "
-                   "confirmed unless it says so, and do not bring in a price that this step does not mention." if high else "")
+                   "confirmed unless it says so, and do not bring in a price that this step does not mention." if high and not mo else "")
                 + (f"\n\nThis is spoken on the phone: keep it under {words} words." if words else "")
                 + ("\n\nBegin with a very short natural reaction of at most 5 words as its own sentence (for example \"Sure thing!\" or \"Ah, good question.\"), "
                    "then give the answer." if self.opener else ""))
@@ -660,14 +663,17 @@ class ReplyWriter:
         def check(sentence: str) -> str | None:
             nonlocal stopped
             raw_first = sentence.lstrip()[:1]
-            sentence = strip_opinion(clean_draft(sentence))      # the facts without the opinions added to them
+            sentence = clean_draft(sentence) if mo else strip_opinion(clean_draft(sentence))      # the facts without the opinions added to them
             if not sentence:
                 return None
             if spoken and spoken[-1].endswith(",") and raw_first.islower() and sentence[:1].isupper():
                 sentence = sentence[:1].lower() + sentence[1:]                    # the rest of a sentence started on its first clause keeps its lower case
-            if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
+            if not spoken and _REACTION.match(sentence.strip()) and not mo:      # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
             bad = verify_sentence(sentence, w.caller, w.core, w.all_facts, history_text) + (self.extra_check(sentence) if self.extra_check else [])
+            if bad and mo:
+                self.last_stream["would_stop"].append(f"{sentence!r}: {'; '.join(bad)}")
+                return sentence
             if bad:
                 stopped = "; ".join(bad)
                 return None
@@ -692,7 +698,7 @@ class ReplyWriter:
         def pieces():
             """The model's text as it comes. With a first-sentence deadline, waiting for the first usable sentence is given up after that long."""
             source = self.backend.lead_in_stream(self.system, user, max_tokens, temperature, deadline)
-            if not self.first_deadline_s:
+            if not self.first_deadline_s or mo:
                 yield from source
                 return
             reader = _Pieces(source)

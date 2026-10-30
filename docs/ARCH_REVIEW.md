@@ -1625,3 +1625,27 @@ Not checked:
 * whether the room bar catches the echo-invented sentences on the owner's set-up (their levels were not replayed through `_is_background`, only through the words).
 
 On open laptop speakers the agent's own voice can be recognised as words. With a headset, or the browser's echo cancellation working, this does not come up.
+
+## 60. A test mode where the model decides and writes everything (30 Oct, the owner: "i want to see how nemotron works alone, without the code")
+
+Why: the owner's Nemotron calls (section 57) ran at `--quality prefix`. There the code speaks the facts and Nemotron writes only a closing question, and the rules route most turns before the model is asked. So the calls showed little of Nemotron. MEASURED on the owner's transcript, replayed here: "How many owners has it had?", "What is the mileage?" and "Tell me about the Tahoe" were all routed by rule, with code-written replies.
+
+`voice.model_only` (`VA__VOICE__MODEL_ONLY=true`) used to do one thing: when the model gave nothing usable, nothing was said instead of the code's wording. In the agent engine it now also:
+* asks the model to decide every turn: no fixed rules first (`_fast_decide`), none of the code's own replies to a fragment, a cut-off phrase or a car name that sounds like one just listed, and none of the code's corrections of the model's choice (a pick from the list, a haggle, a quiet goodbye, a booking tool with nothing booked);
+* has the model write every reply at the full level, including lists, booking questions, the read-back and the goodbye. There is no "Let me check." bridge, no opener, no code completion of a cut reply, and no code question added at the end;
+* does not show the model the code's own answer: the "STANDARD WORDING" is left out of the prompt, so it writes from the facts alone;
+* lets everything the model writes be said. The fact guard and the reply checks only note what they would have stopped, in the turn's debug note ("model_only: said anyway; ... would have stopped: ...");
+* has no first-sentence deadline, so a slow model is waited for, up to the 4.5 s reply limit.
+
+Still the code's:
+* the tools themselves (the stock database, the slots, making the booking, reading names, numbers and times from the caller's words);
+* the fixed greeting;
+* the silence prompts.
+
+With `VA__VOICE__SILENT_TURN_FALLBACK=false`, a turn the model leaves empty is silent, and the page shows that it was.
+
+For the owner's test only: it says whatever the model says, unchecked. Production stays `model_only: false`.
+
+Tests: `tests/unit/test_model_only.py` (2). A turn the rules would route ("tell me about the Land Cruiser", then "yes") goes to the model. Only its words are said, a made-up price included and noted, and the prompt has no standard wording. Without the mode the same turn is the code's.
+
+Set aside, not committed: making "Do you have any reviews on this car?" say it has none ("reviews" as a topic that is always not on record). It is a fix to the code's own replies, which the owner is not testing now.
