@@ -1557,9 +1557,11 @@ class AgentEngine:
             sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
         if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
             s.narrow_asks += 1
-            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} {'What budget do you have in mind, or is there a model you like?' if f.get('make') else 'Could you tell me your budget or a make?'}",
+            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} {W.narrow_question(f)}",
                     "facts": [f"Search for {wanted}: exactly {res.total} cars match (say the number {res.total}, never 'a few' or 'several'), too many to read out. Examples:", *sheet,
-                              "Ask one narrowing question (budget, make, body type or colour) instead of listing them all."], "awaiting": True}
+                              "Ask one narrowing question instead of listing them all, about something the customer has not said yet: "
+                              + (", ".join(k for k, have in (("budget", f.get("max_price") or f.get("min_price")), ("make", f.get("make")), ("body type", f.get("body_type")),
+                                                              ("colour", f.get("color"))) if not have) or "model") + "."], "awaiting": True}
         more = res.total - len(res.cars)
         if not res.needs_narrowing:
             s.narrow_asks = 0

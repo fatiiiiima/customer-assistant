@@ -57,6 +57,25 @@ def count_line(s: Session, total: int, cars: list[CarView], filters: dict) -> st
     return pick(s, "count", [f"We've got {total} {what} in at the moment.", f"There are {total} {what} in stock right now.", f"I've got {total} {what} for you."])
 
 
+NARROW_QUESTIONS = ["What budget do you have in mind, or is there a model you like?", "Could you tell me your budget or a make?",
+                    "Is there a make you like, or a type of car, like an SUV?", "Is there a make you like?", "Is there a model you like, or a type of car?",
+                    "Is there a model or a colour you like?"]
+
+
+def narrow_question(filters: dict) -> str:
+    """The one question asked when too many cars match: about what the caller has NOT said yet (owner, 30 Oct: "Something under 100,000." found 8 cars,
+    then "Could you tell me your budget or a make?"). Fixed wording, made by the voice before the call (`common_phrases`)."""
+    budget = filters.get("max_price") or filters.get("min_price")
+    make, body = filters.get("make"), filters.get("body_type")
+    if make and budget:
+        return NARROW_QUESTIONS[5] if body else NARROW_QUESTIONS[4]
+    if make:
+        return NARROW_QUESTIONS[0]
+    if budget:
+        return NARROW_QUESTIONS[3] if body else NARROW_QUESTIONS[2]
+    return NARROW_QUESTIONS[1]
+
+
 def list_line(s: Session, cars: list[CarView], total: int) -> str:
     """'There's the Corolla at 62,500 dirhams, the Camry at 74,500 and the RAV4 at 98,500, plus one more.' Dirhams said once."""
     same_make = len({c.make for c in cars}) == 1
