@@ -93,11 +93,8 @@ class DialogueEngine:
     def opening(self, s: Session) -> str:
         c = self.svc.get_car(s.car) if s.car else None                     # the website: the caller is already on a car's page
         name = self.svc.cfg.app.agent_name
-        if name and c is not None:
-            line = (f"Hi, welcome to the AGMC dealership! I'm {name}, and I'm here to help you find your perfect car. "
-                    f"I see you're looking at the {T.car_name(c)}. What would you like to know about it?")
-        elif name:
-            line = f"Hi, welcome to the AGMC dealership! I'm {name}, and I'm here to help you find your perfect car. What are you looking for today?"
+        if name:
+            line = T.greeting(name, c)
         elif c is not None:
             line = f"Hi, welcome to the AGMC dealership. I see you're looking at the {T.car_name(c)}. What would you like to know about it?"
         else:

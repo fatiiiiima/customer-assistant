@@ -359,9 +359,11 @@ class AgentEngine:
     def opening(self, s: Session) -> str:
         name = self.svc.cfg.app.agent_name
         c = self.svc.get_car(s.car) if s.car else None
-        who = f"I'm {name}, and I'm here to help you find your perfect car." if name else "How can I help you find a car?"
-        line = f"Hi, welcome to the AGMC dealership! {who} " + (f"I see you're looking at the {T.car_name(c)}. What would you like to know about it?"
-                                                              if c is not None else "What are you looking for today?")
+        if name:
+            line = T.greeting(name, c)
+        else:
+            line = "Hello, welcome to AGMC. " + (f"I see you're looking at the {T.short_name(c)}. Would you like the price, or to book a test drive?"
+                                                 if c is not None else "What kind of car are you after?")
         s.remember("agent", line)
         return line
 
