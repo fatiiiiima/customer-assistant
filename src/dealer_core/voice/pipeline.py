@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -49,11 +50,22 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     else:
         stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies,
                               precision=cfg.voice.stt_precision, threads=cfg.voice.stt_threads)
-    if cfg.tts.backend == "kokoro":                     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
+    if cfg.tts.backend in ("kokoro", "chatterbox"):     # Kokoro-82M on the CPU with OpenVINO (voice/kokoro_tts.py)
         from .kokoro_tts import KokoroOV
 
         tts = KokoroOV(models, voice or cfg.tts.kokoro_voice, runtime=cfg.tts.kokoro_runtime, threads=cfg.tts.threads, opening_first=cfg.voice.opening_first,
                        join_silence_ms=cfg.voice.join_silence_ms)
+        if cfg.tts.backend == "chatterbox":             # Chatterbox Turbo from its streaming server; Kokoro says a sentence when the server cannot (voice/remote_tts.py)
+            from .remote_tts import StreamingVoice
+
+            kokoro = tts
+            tts = StreamingVoice(cfg.tts.url, kokoro, first_timeout_s=cfg.tts.first_timeout_s)
+            stt.warm_up()
+            tts.warm_up()
+            kokoro_ready = kokoro.preload(common_phrases(cfg), first_only=slot_offer_openings(kokoro.pieces))     # the fallback, as Kokoro would be
+            tts.preload(common_phrases(cfg), first_only=())          # (Kokoro's part already done above; the server's made in the background)
+            logger.debug(f"voice: chatterbox at {cfg.tts.url}, Kokoro ready as fallback in {kokoro_ready:.1f} s")
+            return VoiceParts(stt, tts, hotword_groups(ROOT / cfg.stt.hotwords_file) if cfg.stt.hotwords_file else {})
     else:
         tts = PiperSherpa(models, voice or cfg.tts.voice or "joe", speaker=cfg.tts.speaker if voice is None else 0, copies=cfg.tts.copies,
                          threads=cfg.tts.threads or 4)

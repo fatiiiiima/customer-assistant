@@ -33,7 +33,7 @@ def main() -> int:
     ap.add_argument("--state-url", default=None, help="shared state for many workers: postgresql://... or redis://... (default: STATE_URL / DATABASE_URL, else none)")
     ap.add_argument("--worker-id", default=None, help="this worker's name in the registry (default host:port)")
     ap.add_argument("--public-url", default=None, help="the address pages use for this worker (default ws://host:port/voice)")
-    ap.add_argument("--tts", choices=["piper", "kokoro"], default=None, help="Wazir's voice engine (default tts.backend)")
+    ap.add_argument("--tts", choices=["piper", "kokoro", "chatterbox"], default=None, help="Wazir's voice engine (default tts.backend)")
     ap.add_argument("--voice", default=None, help="voice name for that engine (piper: joe ...; kokoro: michael, adam, george ...)")
     ap.add_argument("--backend", default="openvino_gpu", help="llm backend from config; the voice path uses openvino_gpu (the iGPU)")
     ap.add_argument("--mute-while-speaking", action="store_true", help="ignore the microphone while the agent talks (if the agent hears itself on laptop speakers; it can clip a fast reply, so it is off by default and the browser cancels echo)")

@@ -97,7 +97,9 @@ class LlmCfg(_Strict):
 
 
 class TtsCfg(_Strict):
-    backend: Literal["piper", "kokoro"] = "kokoro"
+    backend: Literal["piper", "kokoro", "chatterbox"] = "kokoro"      # chatterbox: a streaming voice server (scripts/chatterbox_server.py), Kokoro the fallback (section 39)
+    url: str = "http://127.0.0.1:8030/v1"   # chatterbox: the voice server
+    first_timeout_s: float = 2.0            # chatterbox: no audio from the server by then and the sentence is said by Kokoro
     kokoro_runtime: Literal["auto", "openvino", "onnxruntime"] = "auto"   # auto: OpenVINO on Intel / AMD, ONNX Runtime on Apple chips (OpenVINO distorts the voice there)
     kokoro_voice: str = "sarah"         # kokoro backend: sarah / heart / bella / emma (female), michael / adam / puck / eric / liam / onyx (US male), fenrir, george / lewis (UK male)
     voice: str | None = "joe"           # Piper voice folder name (see voice/tts.py VOICES). Owner choice: Joe (CC0)

@@ -911,3 +911,22 @@ MEASURED, M3 Pro, the 18 first sentences of section 33 (numbers in words, as the
 | Chatterbox Turbo, streamed every 1.0 s | 450 / 463 ms | 0.55 x | 30 | 610 ms |
 
 Trimming halves Kokoro's pauses at no cost to its first sound. Chatterbox Turbo has about as many pauses as trimmed Kokoro; streamed every second it starts in about 0.45 s and makes speech in about half the time it takes to say. Every 0.4 s it starts sooner but makes speech barely faster than it plays (0.98 x), so any hiccup would leave a gap in the middle of a sentence. Not measured: how they sound (samples of three sentences, three ways, in `logs/voice_samples/for_boss/`, local); Chatterbox with several calls at once (it runs on the GPU beside the language model; Kokoro runs on the CPU); a voice of our own choosing (Chatterbox can copy one from a 5 to 10 s sample). Chatterbox is not wired into the worker: it would be a server in the MLX environment, as Canary is (section 36), if the listening favours it. `python -m pytest tests/unit`: 1,317 passed, 40 skipped.
+
+## 39. Chatterbox Turbo in the worker, streamed, with Kokoro as the fallback (29 Oct, the owner and their boss: "Chatterbox sounds better")
+
+Branch `voice/chatterbox` (on top of PRs 31 and 32).
+
+* `scripts/chatterbox_server.py` (new; MLX environment, mlx-audio): `POST /v1/audio/speech` with `"stream": true` sends 16-bit 24 kHz audio in HTTP chunks as Chatterbox makes it (a chunk per second of speech, the setting section 38 found safe), one sentence at a time on the GPU. A sentence made ahead of time (`"priority": "low"`) stops at its next chunk when a live one is waiting.
+* `voice/remote_tts.py` (new): the worker's voice when `tts.backend: chatterbox` (`--tts chatterbox`, `VA__TTS__BACKEND=chatterbox`; the default stays Kokoro, so a machine without the server is unchanged). Each sentence is sent whole (no joins inside it) and its audio passed on as it arrives; nothing within `tts.first_timeout_s` (2 s), or no server, and Kokoro (joins trimmed, also 24 kHz) says that sentence; a server that stops mid-sentence is not followed by Kokoro saying it again. Sentences of up to 14 words are kept once made, and the phrases said all the time are made in the background once nothing has been asked for 3 s (69 of them, about 2 minutes after start).
+
+Found measuring, fixed: at first the start-up phrases went to the server while the call ran, one sentence at a time, and the caller's sentences waited behind them (voice wait 1.4 s at the median, one sentence said by Kokoro after the 2 s wait). Now they give way (above) and are only made when nothing is being said.
+
+MEASURED, M3 Pro, the same synthetic five-turn call through a test worker (hands-free, recorded, `scripts/call_latency.py`), the background phrases done:
+
+| voice, quality level | voice wait (said -> first audio), per turn | total wait, median |
+|---|---|---|
+| Kokoro, joins trimmed, prefix | 0.00 s (its openings are ready in advance) | 0.70 s |
+| Chatterbox, prefix | 0.82 to 1.42 s (median 1.04) | 1.75 s |
+| Chatterbox, code (no language model) | **0.46 to 0.47 s** | 1.14 s |
+
+Chatterbox alone starts its audio in about 0.46 s, steadily. At the prefix level the language model writes a follow-up on every turn on the same GPU at the same moment, and both slow down (the voice wait about doubles). Kokoro runs on the CPU and is not affected. So on this Mac: Chatterbox costs about 0.45 s a turn against Kokoro at the code level and about 1 s at the prefix level; on separate GPUs (the deployment) the two would not compete (UNKNOWN until measured). Not measured: several calls at once (one GPU, one sentence at a time). Tests: `test_remote_tts.py` (7). `python -m pytest tests/unit`: 1,324 passed, 40 skipped.
