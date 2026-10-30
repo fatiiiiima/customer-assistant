@@ -359,9 +359,11 @@ class AgentEngine:
     def opening(self, s: Session) -> str:
         name = self.svc.cfg.app.agent_name
         c = self.svc.get_car(s.car) if s.car else None
-        who = f"I'm {name}, and I'm here to help you find your perfect car." if name else "How can I help you find a car?"
-        line = f"Hi, welcome to the AGMC dealership! {who} " + (f"I see you're looking at the {T.car_name(c)}. What would you like to know about it?"
-                                                              if c is not None else "What are you looking for today?")
+        if name:
+            line = T.greeting(name, c)
+        else:
+            line = "Hello, welcome to AGMC. " + (f"I see you're looking at the {T.short_name(c)}. Would you like the price, or to book a test drive?"
+                                                 if c is not None else "What kind of car are you after?")
         s.remember("agent", line)
         return line
 
@@ -1557,9 +1559,11 @@ class AgentEngine:
             sheet = fact_sheet(list(res.cars), self._branch_name).splitlines()
         if res.needs_narrowing and not (unchanged and s.narrow_asks > 0):
             s.narrow_asks += 1
-            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} {'What budget do you have in mind, or is there a model you like?' if f.get('make') else 'Could you tell me your budget or a make?'}",
+            return {"core": f"{W.count_line(s, res.total, list(res.cars), f)} {W.narrow_question(f)}",
                     "facts": [f"Search for {wanted}: exactly {res.total} cars match (say the number {res.total}, never 'a few' or 'several'), too many to read out. Examples:", *sheet,
-                              "Ask one narrowing question (budget, make, body type or colour) instead of listing them all."], "awaiting": True}
+                              "Ask one narrowing question instead of listing them all, about something the customer has not said yet: "
+                              + (", ".join(k for k, have in (("budget", f.get("max_price") or f.get("min_price")), ("make", f.get("make")), ("body type", f.get("body_type")),
+                                                              ("colour", f.get("color"))) if not have) or "model") + "."], "awaiting": True}
         more = res.total - len(res.cars)
         if not res.needs_narrowing:
             s.narrow_asks = 0

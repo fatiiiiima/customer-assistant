@@ -1223,6 +1223,69 @@ Tests: `test_background_voices.py`, 5 new.
 
 `python -m pytest tests/unit`: 1,381 passed, 40 skipped.
 
+## 47. A shorter greeting (30 Oct, the owner chose option 1)
+
+Branch `fix/greeting`. The old opening was "Hi, welcome to the AGMC dealership! I'm Wazir, and I'm here to help you find your perfect car. What are you looking for today?". Problems:
+* It was long, so callers talked over it. In hands-free, that is also when office noise gets in (section 46).
+* "Welcome to the AGMC dealership" sounds like a sign, and "your perfect car" is a sales line.
+* The question was vague.
+
+New, written once in `templates.greeting` and used by the agent, the older dialogue machine and the voice's start-up list (`common_phrases`):
+* "Hello, I'm Wazir from AGMC. What kind of car are you after?"
+* On a car's page: "Hello, I'm Wazir from AGMC. I see you're looking at the Camry. Would you like the price, or to book a test drive?" The car's short name, and the two things the agent can do with it.
+
+MEASURED, eve on the running voice server (port 8040, speed 1.1):
+
+| greeting | words | length | first sound |
+|---|---|---|---|
+| old | 24 | 5.2 s | 133 ms |
+| new | 12 | 3.3 s | 98 ms |
+| old, car page | 35 | 7.6 s | 70 ms |
+| new, car page | 23 | 4.9 s | 93 ms |
+
+My estimate of 6.6 s for the old one, from words per minute, was too high. Live, the greeting is made at start-up, so its first sound does not wait for the server at all. Samples: `logs/voice_samples/for_boss/greetings/`.
+
+The answers the new questions invite, checked through the code's routing:
+* "The price." / "Price." → the car's price.
+* "A test drive." → booking that car.
+* "A Toyota." / "An SUV." → a search.
+* "A family car." → the best family car.
+
+Seen in passing, not changed: "Something under 100,000." finds 8 cars, then asks "Could you tell me your budget or a make?", though the budget was just given.
+
+Tests: `test_greeting.py`, 11 new.
+
+`python -m pytest tests/unit`: 1,392 passed, 40 skipped.
+
+## 48. Too many cars: ask about what the caller has not said (30 Oct, seen in section 47)
+
+Branch `fix/budget-reask`. "Something under 100,000." found 8 cars, then asked "Could you tell me your budget or a make?". The search's narrowing question only looked at whether a make had been given. Any other search got the budget-or-make question, even right after a budget.
+
+**Fix** (`wording.narrow_question`): the question is about what has not been said yet.
+
+| already said | asked |
+|---|---|
+| nothing, or only a type ("An SUV.") | "Could you tell me your budget or a make?" (as before) |
+| a make | "What budget do you have in mind, or is there a model you like?" (as before) |
+| a budget | "Is there a make you like, or a type of car, like an SUV?" |
+| a budget and a type | "Is there a make you like?" |
+| a make and a budget | "Is there a model you like, or a type of car?" |
+| a make, a budget and a type | "Is there a model or a colour you like?" |
+
+All six questions are fixed wording and are in the voice's start-up list (`common_phrases`), so each plays at once.
+
+At the prefix level the model rewords the question. It used to be told "budget, make, body type or colour"; it is now told only the ones still missing.
+
+Checked through the code's routing:
+* "Something under 100,000." → 8 cars, then "Is there a make you like, or a type of car, like an SUV?".
+* "An SUV under 150,000." → 8 SUVs, then "Is there a make you like?".
+
+Seen in passing, not changed: "Something between 50,000 and 80,000." is read as a budget of 130,000 (13 cars) instead of 50,000 to 80,000.
+
+Tests: `test_narrow_question.py`, 12 new.
+
+`python -m pytest tests/unit`: 1,393 passed, 40 skipped; with section 47 merged in, 1,404 passed, 40 skipped.
+
 ## 49. The caller speaks first; silence on the line; a call carried on after it ends (30 Oct, the owner)
 
 Branch `feat/caller-first-silence`. The owner asked for three things:
@@ -1281,4 +1344,4 @@ The eve server on 8040 was restarted with the new defaults. A worker keeps the p
 
 Tests: `test_voice_compare.py`, 2 new.
 
-`python -m pytest tests/unit`: 1,395 passed, 40 skipped.
+`python -m pytest tests/unit`: 1,395 passed, 40 skipped; with sections 47 and 48 merged in, 1,418 passed, 40 skipped.

@@ -13,6 +13,14 @@ HANDOFF_WAIT = "A colleague will be with you shortly."
 TOPIC_LABEL = {"warranty": "warranty", "financing": "financing", "inspection": "inspection", "trade_in": "trade-in", "documents": "documents"}
 
 
+def greeting(name: str, car: CarView | None = None) -> str:
+    """The named opening (the owner chose it 30 Oct, docs/ARCH_REVIEW.md section 47): about 3 s, one question a caller can answer with a make, a type or a
+    budget. On a car's page: that car, and the two things the agent can do with it. Fixed wording, so the voice has it ready before the call."""
+    if car is not None:
+        return f"Hello, I'm {name} from AGMC. I see you're looking at the {short_name(car)}. Would you like the price, or to book a test drive?"
+    return f"Hello, I'm {name} from AGMC. What kind of car are you after?"
+
+
 def cap(text: str) -> str:
     """Capitalise the first letter only (str.capitalize() would lower-case acronyms such as GCC)."""
     return text[:1].upper() + text[1:]

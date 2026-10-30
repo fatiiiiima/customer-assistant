@@ -28,8 +28,10 @@ from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
 from .prompts import hotword_groups, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
+from ..agent.wording import NARROW_QUESTIONS
 from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
 from ..agent.wording import OPENERS
+from ..dialogue.templates import greeting
 
 STT_RATE = 16000
 
@@ -107,16 +109,14 @@ def slot_offer_openings(split=None) -> list[str]:
 def common_phrases(cfg: Config) -> list[str]:
     """What Wazir says word for word again and again: rendered once at start-up by voices that are slow to make speech."""
     name = cfg.app.agent_name
-    who = f"I'm {name}, and I'm here to help you find your perfect car." if name else "How can I help you find a car?"
-    return [f"Hi, welcome to the AGMC dealership! {who} What are you looking for today?",
+    return [greeting(name) if name else "Hello, welcome to AGMC. What kind of car are you after?",
             "Is there anything else I can help with?", "What else can I do for you?", "Anything else you'd like to know?",
             "Would you like to come and see it?", "Want to book a test drive?", "Shall I set up a test drive for you?",
             "Sure! What day would you like to come in?", "Of course. What day and time suit you?", "What day and time work for you?",
             "When would you like to come in?", "Perfect. Can I take your name and mobile number?", "Great. What's your name and mobile number?",
             "Great. And your name, please?", "Lovely. Who should I put the booking under?", "Which one would you like to hear more about?",
-            "Could you tell me your budget or a make?", "What budget do you have in mind, or is there a model you like?",
             "Sorry, I didn't catch that. Could you say it again?", "Thank you for calling AGMC. Goodbye!", "You're welcome!",
-            "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
+            *NARROW_QUESTIONS, "Which suits you better?", "Shall I book it?", "Is that all correct now?", "Just bring your driving licence along.",
             "No problem at all, take your time.", "Our prices are fixed,"] + OPENERS + [
             "Sure.", "Sure!", "Okay.", "Great,", "Great.", "Great!", "Perfect,", "Perfect.", "Lovely,", "Lovely.", "Thanks,", "Thanks.", "Done,",
             "All set,", "Of course,", "Of course.", "No problem,", "No problem.", "Great choice.", "Good choice,", "Absolutely,", "Absolutely!",
