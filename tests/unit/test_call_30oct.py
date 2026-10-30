@@ -39,3 +39,9 @@ def test_the_colour_question_is_settled_by_the_rules_before_the_model_is_asked()
     F, e, s, said = _call("I'm looking for a Camry.")
     decision = e._fast_decide(s, "Is it white?")
     assert decision is not None and decision["tool"] == "get_car" and decision["car_id"] == s.car
+
+
+def test_one_car_offered_instead_is_asked_about_as_it_not_which_one():
+    """30 Oct: "but I've got the Civic at 54,500 dirhams. Which one would you like to hear more about?" (one car); the model then made it "Tell me more about the Civic?"."""
+    F, e, s, said = _call("I'm looking for a Toyota.", "Do you have one under 60,000?")
+    assert said[-1][1].endswith("Would you like to hear more about it?") and "Which one" not in said[-1][1]

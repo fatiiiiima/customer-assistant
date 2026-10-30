@@ -226,6 +226,11 @@ explore options option choose pick decide start continue ahead take try talk dis
 CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
 
+# A follow-up in the caller's voice (30 Oct test call: "Tell me more about the Civic?" after "I've got the Civic at 54,500 dirhams"): an order or a want
+# addressed to the agent, or the caller's own questions. The agent asks the caller ("Would you like to ...?", "Shall I ...?").
+_CALLER_VOICE = re.compile(r"\s*(?:tell me|show me|give me|send me|i want|i'd like|i would like|i'm (?:looking|interested)|do you have|have you got|what about|how about|"
+                           r"can (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive)|could (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive))\b", re.I)
+
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call", "booking_aside")
 TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
@@ -957,6 +962,8 @@ class AgentEngine:
             problems.append("too long for a follow-up")
         if question and not sentence.rstrip().endswith("?"):
             problems.append("does not ask the question the call is waiting on")
+        if _CALLER_VOICE.match(sentence):
+            problems.append("sounds like the customer, not you: ask the customer")
         return problems
 
     def _prefix_reply(self, s: Session, text: str, result: dict, prefix: str, question: str, dbg: TurnDebug):
@@ -1525,7 +1532,8 @@ class AgentEngine:
                         body = f"{lead} there are {wider.total} {what}, from {T.money(min(c.price for c in wider.cars))}. What budget would work for you?"
                     else:
                         listed = W.list_line(s, list(wider.cars), wider.total)
-                        body = f"{lead} {listed[0].lower() + listed[1:] if not listed.startswith('I') else listed} Which one would you like to hear more about?"
+                        ask_one = "Would you like to hear more about it?" if len(wider.cars) == 1 else "Which one would you like to hear more about?"   # one car: not "which one" (30 Oct)
+                        body = f"{lead} {listed[0].lower() + listed[1:] if not listed.startswith('I') else listed} {ask_one}"
                     return {"core": body, "awaiting": True,
                             "facts": [f"With everything asked ({wanted}) nothing matches. Without the earlier {limits or 'filters'}: {wider.total} {what} in stock.",
                                       "Do NOT say there are none of them in stock: there are."]}

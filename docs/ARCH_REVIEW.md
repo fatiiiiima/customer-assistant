@@ -1169,3 +1169,20 @@ How it sounds is the owner's call: samples in `logs/voice_samples/for_boss/30oct
 Seen on the test calls, not changed: after "I don't have a Toyota under 60,000 dirhams, but I've got the Civic", the model's closing question was "Tell me more about the Civic?", which reads like the caller's line.
 
 `python -m pytest tests/unit`: 1,364 passed, 40 skipped.
+
+## 45. The closing question after one car offered (30 Oct, the owner: "'Tell me more about the Civic?' reads like my line")
+
+Same branch as sections 43 and 44. On the test calls of section 44:
+* The code said "I don't have a Toyota under 60,000 dirhams, but I've got the Civic at 54,500 dirhams."
+* It then asked "Which one would you like to hear more about?", though it had offered only one car.
+* At the prefix level the model rewords that question, and it made it "Tell me more about the Civic?".
+
+Two fixes:
+* **The code's question:** when the wider search finds one car, it asks "Would you like to hear more about it?" (`_t_search_cars`, as the other one-car lists already did).
+* **The model's rewording:** a follow-up in the caller's voice is refused (`_CALLER_VOICE` in `_check_continuation`). That covers an order or a want aimed at the agent ("Tell me", "Show me", "I'd like", "I want") and the caller's own questions ("Do you have", "What about", "Can I see"). Refused twice, the code's own question is said, as for every other refusal. "Can I tell you more about it?" and "Shall I tell you more?" still pass.
+
+Tests: `test_closing_question.py`, 11 new; `test_call_30oct.py`, 1 new.
+
+MEASURED: two test calls through a worker (prefix level, the 4B model writing the follow-up). Both ended the Civic offer with "Would you like to hear more about it?".
+
+`python -m pytest tests/unit`: 1,376 passed, 40 skipped.

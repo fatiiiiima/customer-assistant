@@ -112,3 +112,26 @@ def test_the_instruction_says_to_ask_only_the_given_question():
     from dealer_core.agent.engine import CONTINUE_SYSTEM
 
     assert "EXACTLY the question" in CONTINUE_SYSTEM and "not bring up any topic" in CONTINUE_SYSTEM
+
+
+# ------------------------------------------------------------------------------------------------ the caller's voice (30 Oct test call; section 45)
+CIVIC = "I don't have a Toyota under 60,000 dirhams, but I've got the Civic at 54,500 dirhams."
+
+
+@pytest.mark.parametrize("sentence", ["Tell me more about the Civic?", "Show me the Civic?", "I'd like to hear more about the Civic?", "Can I see the Civic?",
+                                      "What about the Civic?", "Do you have more like the Civic?"])
+def test_a_follow_up_in_the_caller_s_voice_is_refused(sentence):
+    assert any("sounds like the customer" in p for p in problems(engine(), sentence, "Would you like to hear more about it?", prefix=CIVIC, caller="do you have one under 60,000"))
+
+
+@pytest.mark.parametrize("sentence", ["Would you like to hear more about the Civic?", "Shall I tell you more about the Civic?", "Can I tell you more about it?",
+                                      "Want to hear more about it?"])
+def test_the_agent_asking_the_caller_is_still_fine(sentence):
+    assert not any("sounds like the customer" in p for p in problems(engine(), sentence, "Would you like to hear more about it?", prefix=CIVIC, caller="do you have one under 60,000"))
+
+
+def test_refused_twice_the_code_s_own_question_is_said():
+    e = engine(["Tell me more about the Civic?", "Show me the Civic?"])
+    s = e.new_session()
+    out = list(e._prefix_reply(s, "do you have one under 60,000", {"facts": [FACTS]}, CIVIC, "Would you like to hear more about it?", TurnDebug()))
+    assert out[-1] == "Would you like to hear more about it?"
