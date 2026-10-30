@@ -24,9 +24,10 @@ from .tts import pronounce
 
 class StreamingVoice:
     def __init__(self, url: str, fallback, model: str = "chatterbox-turbo", voice: str | None = None, first_timeout_s: float = 2.0, cache_size: int = 300,
-                 client=None) -> None:
+                 client=None, spell_letters: bool = True) -> None:
         import httpx
 
+        self.spell_letters = spell_letters                            # False: AGMC, GCC, SUV sent as written (Pocket-TTS says them itself, faster: tts.pronounce)
         self.base, self.model, self.voice, self.fallback = url.rstrip("/"), model, voice, fallback
         self.sample_rate = fallback.sample_rate                       # 24 kHz, as the server's
         self.first_timeout_s = first_timeout_s
@@ -78,7 +79,7 @@ class StreamingVoice:
 
     def _remote(self, text: str, background: bool = False) -> Iterator[np.ndarray]:
         """The server's audio for one sentence, chunk by chunk (raises if it fails before or while sending, or, made in the background, if it gave way to a live one)."""
-        body = {"model": self.model, "input": pronounce(text), "stream": True, "response_format": "pcm", **({"voice": self.voice} if self.voice else {}),
+        body = {"model": self.model, "input": pronounce(text, self.spell_letters), "stream": True, "response_format": "pcm", **({"voice": self.voice} if self.voice else {}),
                 **({"priority": "low"} if background else {})}
         with self.client.stream("POST", f"{self.base}/audio/speech", json=body) as r:
             r.raise_for_status()

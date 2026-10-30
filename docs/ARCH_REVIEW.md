@@ -1046,3 +1046,143 @@ Not measured:
 * The deployment, which has no Mac. Pocket runs on a CPU there, but the speech toolkit's alba build is Mac-only, so the fallback there would be alba from a second `pocket_server.py` (`--voice alba`).
 
 `python -m pytest tests/unit`: 1,332 passed, 40 skipped.
+
+## 43. The owner's hands-free call of 30 Oct: background voices, haggling, "AGMC", faster speech
+
+Branch `fix/call-30oct`. The owner's report, from a hands-free call with eve:
+1. "it keeps hearing people in the background, so it catches some random stuff and keeps replying";
+2. "i dont think it did the negotiation well";
+3. "when the bot says A G M C - can it say it faster";
+4. "can the speech model speak a little faster with no pauses?"
+
+The call was not recorded (the worker ran without `VA_DUMP_AUDIO_DIR`), so items 1 and 2 were worked from the transcript the owner pasted.
+
+**1. Background voices** (`voice.background_below`, 0.25; `brain._is_background`). In hands-free mode a turn quieter than a quarter of the loudest of the caller's last 8 answered turns is someone else in the room: it is not answered, not remembered, and gets no "speak up". It is off in tap mode, where the caller chose to speak.
+
+The bar comes from the loudest turn, not the median. In the call the room was heard before the caller spoke, so the first turns must not set the bar.
+
+MEASURED on the owner's recorded calls with reference lines: the owner's own turns ranged from 0.103 to 0.273, the quietest 0.37 of the loudest in its call. So 0.25 ignores none of them. That is 12 turns in 2 calls, so the margin is INFERRED, not settled. How loud background voices are on the owner's Mac is UNKNOWN (no recording).
+
+At the start of a call, before the caller has been answered once, a quiet room voice can still get "speak up". The input volume at 100 does not change the ratio between the caller and the room. But the page's microphone has the browser's automatic gain on by default, and that raises the room whenever the caller is quiet. `?mic=raw` switches it off (section 26).
+
+Tests: `test_background_voices.py` (5).
+
+**2. Haggling** (`engine.offers_less`, `_offer_on`). The replay of the call's turns through the engine, before the fix:
+
+| caller | before | after |
+|---|---|---|
+| (on the Camry, 74,500) "can be 70,000 in their homes instead." (misheard "Can it be 70,000 dirhams instead?") | a new budget search: "I've got the Corolla at 62,500" | "Our prices are fixed, so the 2020 Toyota Camry is 74,500 dirhams." |
+| "I can only do 60,000 dirhams." | "As a Toyota I don't have one, but there's the Civic" | "The Camry stays at 74,500 ... there's the Corolla at 62,500 and the Civic at 54,500" (the second push, section 29) |
+| "Can we do 50,000 dirhams for the Civic?" | the Civic described again, no word on price | "Our prices are fixed, so the 2018 Honda Civic is 54,500 dirhams." |
+| "Come on, 50,000?" | "I don't have anything that matches that" | "The Civic stays at 54,500 ... the lowest-priced car we have" |
+
+Words like "can it be", "can we do", "I can only do", "would you take", "instead" and "how about" now count as a push, but only with an amount below the car's price. Once the caller has pushed on a car, a bare amount counts too.
+
+"As a Toyota I don't have one" now reads "I don't have a Toyota under 60,000 dirhams, but ...".
+
+Tests: `test_haggle.py`, 12 new (including "Is it white?", "Can I see it on Tuesday?" and "What about the Corolla?" not counted as pushes).
+
+Found while replaying, not changed here: after a budget search, "Is it white?" about the Camry searches for white cars, and "Can I see it on Tuesday?" asks which car. Both happened before this change.
+
+**3. "AGMC"** (`tts.pronounce(spell_letters=False)`, `StreamingVoice(spell_letters=...)`). The letters were spelled "eigh gee em see" for Piper and Kokoro, which read "AGMC" as a word. Eve says each spelled letter as a word, with a gap after it.
+
+MEASURED, "Welcome to the {AGMC} dealership." on eve (median of 3), eight spellings tried:
+
+| spelling | sentence | gaps of 80 ms+ |
+|---|---|---|
+| "eigh gee em see" (before) | 2.22 s | 4 |
+| "AGMC" as written | **1.95 s** | 0 |
+
+Whisper small.en heard "AGMC" for every spelling. SUV and GCC behave the same way (3.81 s with 7 gaps spelled, against 3.36 s as written). Alba on the speech toolkit: 2.40 s spelled against 2.08 s as written. Eve and alba now get the letters as written; Kokoro, the last resort, keeps the spelling.
+
+**4. Faster, with short pauses** (`scripts/pocket_server.py`: `Faster`, `PauseCap`; `--speed`, default 1.1; `--max-pause-ms`, default 120). Pocket-TTS has no speed setting, so the server does both to the audio as it streams:
+* WSOLA time-stretch: same pitch; 40 ms windows, each moved by up to 10 ms to fit.
+* Pause cap: every quiet stretch inside a sentence is cut to 120 ms, keeping its two ends. Quiet means under 5% of the loudest so far, as `score_voices.py` counts pauses.
+
+Speech is never held back, only quiet. MEASURED, the 18 sentences:
+
+| eve | first heard, median / worst | pauses of 120 ms+ | longest | words a minute | Whisper words wrong |
+|---|---|---|---|---|---|
+| as before | 102 / 131 ms | 33 | 810 ms | 188 | 4.4% |
+| pauses cut to 120 ms | 104 / 135 ms | 30 (all 120 to 150 ms) | 150 ms | 201 | 3.9% |
+| **pauses cut, and 1.1 times faster (now)** | **101 / 113 ms** | **0** | under 120 ms | **219** | 3.6% |
+| pauses cut, and 1.15 times faster | 96 / 117 ms | 6 | 170 ms | 226 | 2.5% |
+
+For comparison: trimmed Kokoro 168 words a minute, Chatterbox 173. The greeting takes 5.5 s instead of 7.8 s.
+
+The five-turn test call through a test worker (prefix level, eve at the new settings): voice wait 0.09 s median, 0.11 s worst, total wait 0.76 s median. The haggling replies were as in the table above, with no fallbacks. How it sounds is for the owner to judge: samples are in `logs/voice_samples/for_boss/30oct/` (local).
+
+Tests: `test_voice_compare.py`, 4 new (shorter at the same pitch; speed 1 unchanged; a long pause cut and a short one left; a breath counts as a pause); `test_remote_tts.py`, 2 new (AGMC as written to Pocket, spelled for Kokoro; the worker sends Pocket the letters as written).
+
+`python -m pytest tests/unit`: 1,354 passed, 40 skipped.
+
+## 44. "Is it white?" keeps the car; eve no longer shouts "Sure!" and "Hi" (30 Oct, the owner)
+
+Same branch as section 43. The owner also said they had recorded the previous session. No recording of it exists:
+* the owner's worker (port 8765, started 10:16) runs without `VA_DUMP_AUDIO_DIR`;
+* nothing in `logs/audio_dump` is newer than the test calls of section 43;
+* no audio or video file was saved on the Mac that day.
+
+**Colour questions about the car being discussed.** After a budget search, "Is it white?" about the Camry was sent to a search for white cars, and the Camry was lost. So "Can I see it on Tuesday?" then asked which car. Two routes did it:
+* the code's own routing, `_code_decision`, when the model is slow or not asked: a colour was taken as a search;
+* the model, when asked: on the test call through a worker it answered "Our cars come in white, black, blue, red and silver, plus 4 other colours."
+
+Now:
+* A rule settles "is it / is this / does it come in <colour>" about the car under discussion before the model is asked.
+* The fallback no longer searches when the words are about "it".
+* `get_car` answers "No, it's brown." or "Yes, it's brown.", then the usual closing question.
+
+"Do you have a white one?", "anything cheaper" and "any under 100,000" still search. Tests: `test_call_30oct.py` (7).
+
+The same test call through a worker (prefix level, model deciding): "Is it white?" got "No, it's brown.", and "Can I see it on Tuesday?" offered Tuesday's times for the Camry. Voice wait was 0.12 s median, 0.14 s worst; total wait 0.83 s median.
+
+**"Why does she scream SURE and HI".** MEASURED on eve: she starts most sentences loud.
+* The first 0.4 s is 1.2 to 2.5 times the level of the rest of the sentence ("Hi, welcome to the AGMC dealership!" 1.35; "Welcome to the AGMC dealership!" 2.49).
+* "Sure!" said alone is the loudest thing she says: 0.196 at its loudest 0.3 s, against 0.15 to 0.18 for ordinary sentences.
+* "Hi" has the highest peak measured, 0.86.
+
+`scripts/pocket_server.py` now levels the audio as it streams (`Leveller`; `--level`, default 0.15; 0 = off):
+* whatever is louder than 0.15 over 50 ms is turned down 4 to 1;
+* the gain drops at once and comes back up gently;
+* each 10 ms frame looks 20 ms ahead, so a loud start is caught before it plays;
+* everything is then raised by 1.15, so ordinary sentences are as loud as before.
+
+MEASURED (loudest 0.3 s / peak, median of 3):
+
+| | before | levelled |
+|---|---|---|
+| "Sure!" | 0.196 / 0.51 | 0.176 / 0.59 |
+| "Hi, welcome to the AGMC dealership!" | 0.198 / 0.86 | 0.146 / 0.68 |
+| "There are 4 Toyotas in stock right now." | 0.181 / 0.73 | 0.174 / 0.60 |
+| "What budget do you have in mind ...?" | 0.170 / 0.64 | 0.163 / 0.59 |
+
+The greeting's first 0.4 s went from 0.286 to 0.203 (50 ms level, before the 1.15 raise). Every sentence now sits between 0.15 and 0.18, with peaks no higher than 0.68.
+
+First heard, the 18 sentences: 104 ms median, 128 ms worst, against 103 / 137 ms before. The 20 ms look-ahead is lost in the variation.
+
+Not changed:
+* The "!" in the wording: with "." eve says "Sure." quietly (0.055) rather than calmly.
+* Alba, the fallback (the speech toolkit's server cannot be changed from here).
+
+How it sounds is the owner's call: samples in `logs/voice_samples/for_boss/30oct/` (`*_loud_before`, `*_levelled`). Tests: `test_voice_compare.py`, 3 new.
+
+Seen on the test calls, not changed: after "I don't have a Toyota under 60,000 dirhams, but I've got the Civic", the model's closing question was "Tell me more about the Civic?", which reads like the caller's line.
+
+`python -m pytest tests/unit`: 1,364 passed, 40 skipped.
+
+## 45. The closing question after one car offered (30 Oct, the owner: "'Tell me more about the Civic?' reads like my line")
+
+Same branch as sections 43 and 44. On the test calls of section 44:
+* The code said "I don't have a Toyota under 60,000 dirhams, but I've got the Civic at 54,500 dirhams."
+* It then asked "Which one would you like to hear more about?", though it had offered only one car.
+* At the prefix level the model rewords that question, and it made it "Tell me more about the Civic?".
+
+Two fixes:
+* **The code's question:** when the wider search finds one car, it asks "Would you like to hear more about it?" (`_t_search_cars`, as the other one-car lists already did).
+* **The model's rewording:** a follow-up in the caller's voice is refused (`_CALLER_VOICE` in `_check_continuation`). That covers an order or a want aimed at the agent ("Tell me", "Show me", "I'd like", "I want") and the caller's own questions ("Do you have", "What about", "Can I see"). Refused twice, the code's own question is said, as for every other refusal. "Can I tell you more about it?" and "Shall I tell you more?" still pass.
+
+Tests: `test_closing_question.py`, 11 new; `test_call_30oct.py`, 1 new.
+
+MEASURED: two test calls through a worker (prefix level, the 4B model writing the follow-up). Both ended the Civic offer with "Would you like to hear more about it?".
+
+`python -m pytest tests/unit`: 1,376 passed, 40 skipped.

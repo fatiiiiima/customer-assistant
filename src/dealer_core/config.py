@@ -250,6 +250,8 @@ class VoiceCfg(_Strict):
                                                  # (room noise kept): below 0.02 about 80% of the turns were badly wrong with the base model and 65-80% with small.en, and only 6 of 79-87 turns that were
                                                  # heard right were stopped. 0 = off
     speak_up_suspect_below: float = 0.05         # between this and the one above, only when the words look like a recogniser's invention ("please subscribe", "comments below", a lone "okay"). 0 = off
+    background_below: float = 0.25                # hands-free: a turn under this share of the loudest of the last 8 turns acted on is someone else in the room and is ignored
+                                                 # (owner, 30 Oct: "it keeps hearing people in the background"). The owner's own turns: the quietest 0.37 of the loudest in its call, so 0.25 leaves a margin. 0 = off
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to

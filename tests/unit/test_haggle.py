@@ -102,3 +102,47 @@ def test_the_count_survives_a_reconnect():
     assert fresh.haggles == s.haggles
     _, reply = F.say(e, fresh, "Come on, can you do 150?")
     assert "Q7" in reply
+
+
+# ------------------------------------------------------------------------------------------------ the owner's call, 30 Oct (section 43)
+def _call(*turns):
+    import test_sweep_fixes as F
+
+    if not F.SITE.exists():
+        pytest.skip("the website is not on this machine")
+    from dealer_core.config import load_config
+
+    e = F.SW.make_engine(load_config(environ={}, overlay=F.ROOT / "config" / "portal.yaml"), F.SITE, F.SW.TooSlow())
+    s = e.new_session()
+    return F, e, s, [F.say(e, s, t) for t in turns]
+
+
+@pytest.mark.parametrize("push", ["Can it be 70,000 dirhams instead?", "can be 70,000 in their homes instead.", "Would you take 65,000?", "I can only do 70,000."])
+def test_an_amount_offered_for_the_car_is_a_push_not_a_new_budget(push):
+    F, e, s, said = _call("I'm looking for a Toyota.", "I'm looking for a Camry.", push)
+    intent, reply = said[-1]
+    assert intent == "get_car" and "fixed" in reply and "74,500" in reply and s.haggles[s.car]["pushes"] == 1
+
+
+def test_the_second_push_in_other_words_offers_cars_near_the_amount():
+    F, e, s, said = _call("I'm looking for a Toyota.", "I'm looking for a Camry.", "Can it be 70,000 dirhams instead?", "I can only do 60,000 dirhams.")
+    intent, reply = said[-1]
+    assert "74,500" in reply and "Corolla" in reply and "Civic" in reply and s.haggles[s.car]["asked"] == 60000
+
+
+def test_an_offer_for_another_car_named_gets_that_car_s_fixed_price_and_a_bare_amount_then_counts():
+    F, e, s, said = _call("I'm looking for a Toyota.", "I'm looking for a Camry.", "Can we do 50,000 dirhams for the Civic?", "Come on, 50,000?")
+    assert said[2][0] == "get_car" and "fixed" in said[2][1] and "54,500" in said[2][1]
+    assert "54,500" in said[3][1] and s.haggles[s.car]["pushes"] == 2
+
+
+@pytest.mark.parametrize("text", ["Is it white?", "How many kilometres has it done?", "Can I see it on Tuesday?", "What about the Corolla?"])
+def test_words_without_an_amount_below_the_price_are_not_a_push(text):
+    F, e, s, said = _call("I'm looking for a Toyota.", "I'm looking for a Camry.", text)
+    assert s.haggles == {}
+
+
+def test_no_car_of_that_make_in_the_budget_is_said_plainly():
+    """30 Oct: "As a Toyota I don't have one, but there's the Civic"."""
+    F, e, s, said = _call("I'm looking for a Toyota.", "Do you have one under 60,000?")
+    assert said[-1][1].startswith("I don't have a Toyota under 60,000 dirhams, but") and "Civic" in said[-1][1]

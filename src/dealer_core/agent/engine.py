@@ -199,6 +199,16 @@ _OPINION = re.compile(r"\b(?:reliable|reliability|good (?:family )?car for (?:a 
 _SPORTY = re.compile(r"\b(?:sporty|sports car|sport car|fast|quick|performance|powerful)\b")
 _SEATS = re.compile(r"\b(seven|eight|7|8)[- ]?seat(?:s|er)?\b|\bthird row\b|\bbig family\b")
 HAGGLE = re.compile(r"\b(?:best price|lowest|discount|cheaper|lower|negotia\w*|bargain|haggle|flexible on (?:the )?price|room on (?:the )?price|reduce|knock|deal|last price|final price|do (?:it )?for|can you do)\b")
+# 30 Oct, the owner's call: "Can it be 70,000 dirhams instead?", "I can only do 60,000 dirhams.", "Can we do 50,000 dirhams for the Civic?" were read as new budgets
+# (or as asking about the Civic), so the fixed price was never said. Words like these count as a push only with an amount below the car's price (offers_less).
+_OFFER = re.compile(r"\b(?:(?:can|could|would|will)(?: we| you| it| that| i)? (?:do|be|go|make it|take|accept|let it go|sell it)|i can (?:only )?(?:do|pay|afford|go|stretch)|"
+                    r"i could (?:only )?(?:do|pay|afford)|make it|instead|how about|what about)\b")
+
+
+def offers_less(words: str, price: int) -> bool:
+    """'can it be 70,000 instead?', 'I can only do 60,000': an amount below the car's price, offered for it."""
+    asked = ex.asked_price(words, price)
+    return bool(asked and asked < price and _OFFER.search(words))
 
 CONTINUE_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership. Your reply has already begun (the start is given to you); you only add the closing question,
 in one short natural sentence. Ask EXACTLY the question you are given, only in other words: do not bring up any topic, feature, car or subject that is not in it, and do not ask a different question.
@@ -215,6 +225,11 @@ explore options option choose pick decide start continue ahead take try talk dis
      person firsthand showroom viewing appointment spin wheel yourself""".split())
 CURRENCY = re.compile(r"\b(?:dirhams?|aed|dollars?|price|prices|cost|costs|pay|payment)\b", re.I)
 POLICY = re.compile(r"\b(?:fixed|negotiat\w*|discount\w*|warrant\w*|guarant\w*|financ\w*|insur\w*|deliver\w*|return\w*|refund\w*|deposit|free|fees?|trade-?in|lowest|cheapest|best|special|promo\w*|offers?|deals?)\b", re.I)
+
+# A follow-up in the caller's voice (30 Oct test call: "Tell me more about the Civic?" after "I've got the Civic at 54,500 dirhams"): an order or a want
+# addressed to the agent, or the caller's own questions. The agent asks the caller ("Would you like to ...?", "Shall I ...?").
+_CALLER_VOICE = re.compile(r"\s*(?:tell me|show me|give me|send me|i want|i'd like|i would like|i'm (?:looking|interested)|do you have|have you got|what about|how about|"
+                           r"can (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive)|could (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive))\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call", "booking_aside")
 TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
@@ -511,7 +526,7 @@ class AgentEngine:
         picked = ex.selection(text, s.shown) if decision.get("via") != "rules" else None      # code's own routing already looked at this
         if picked and tool in ("none", "check_slots", "search_cars"):
             tool, args = "get_car", {"car_id": picked}                # "tell me about the second one" is about that car, whatever the model called it
-        elif tool == "none" and s.car and HAGGLE.search(" ".join(ex.tokens_of(text))):
+        elif tool == "none" and s.car and (HAGGLE.search(" ".join(ex.tokens_of(text))) or self._offer_on(s, s.car, " ".join(ex.tokens_of(text)))):
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
@@ -947,6 +962,8 @@ class AgentEngine:
             problems.append("too long for a follow-up")
         if question and not sentence.rstrip().endswith("?"):
             problems.append("does not ask the question the call is waiting on")
+        if _CALLER_VOICE.match(sentence):
+            problems.append("sounds like the customer, not you: ask the customer")
         return problems
 
     def _prefix_reply(self, s: Session, text: str, result: dict, prefix: str, question: str, dbg: TurnDebug):
@@ -1008,8 +1025,9 @@ class AgentEngine:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # not clear: the details are read back again and the question asked again
         if s.state in (State.SLOT, State.CONTACT) or s.draft_slot:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}    # a booking is being arranged: carry on with it (it asks for what is missing), not the car's facts
-        if ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words):
-            return {"tool": "search_cars", "via": "rules"}
+        about_it = s.car and re.search(r"\b(?:it|its|it's|this one|that one|this car|that car)\b", words) and not _CHEAPER.search(words)
+        if not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(words) or _LOW_KM.search(words) or _CHEAPER.search(words)):
+            return {"tool": "search_cars", "via": "rules"}             # 30 Oct replay: "Is it white?" about the Camry searched for white cars (and the Camry was lost)
         if s.car:
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}
         if s.filters or s.shown:                                           # a search is under way (29 Oct: "4 Toyotas... What budget?" then the code asked "a make, a type of car,
@@ -1127,7 +1145,7 @@ class AgentEngine:
                 hits = list(self.svc.inventory.search(SearchFilters(make=named0.get("make"), model=named0["model"]), 2))
                 if len(hits) == 1 and hits[0].stock_id != s.car:
                     return {"tool": "get_car", "car_id": hits[0].stock_id, "via": "rules"}   # "BMW X5", "tell me about the Land Cruiser"
-        if not booking_flow and s.car and HAGGLE.search(joined) and not _CHEAPER.search(joined) \
+        if not booking_flow and s.car and (HAGGLE.search(joined) or self._offer_on(s, s.car, joined)) and not _CHEAPER.search(joined) \
                 and not set(ex.search_filters(text, self.svc.inventory.vocabulary()) or {}) - {"max_price", "min_price"} \
                 and not ex.find_vehicle(words, self.svc.inventory.vocabulary()).get("make"):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "can you do 150,000?" is an offer on this car, not a new budget
@@ -1136,6 +1154,9 @@ class AgentEngine:
         if not booking_flow and not about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or _FUEL.search(joined) or _LOW_KM.search(joined)) \
                 and (not _OTHER_RANGE.search(joined) or searchable) and not A.superlative_topic(joined):
             return {"tool": "search_cars", "via": "rules"}                       # "an SUV under 100k", "a white one", "anything electric"
+        if not booking_flow and about_it and (ex.search_filters(text, self.svc.inventory.vocabulary()) or {}).get("color") \
+                and re.search(r"\b(?:is it|is this|is that|it's|its|does it come)\b", joined) and not _CHEAPER.search(joined):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "Is it white?" about this car: its colour (30 Oct test call: the model listed every colour we have)
         if not booking_flow and (_FINANCE.search(joined) or (not s.car and _OPINION.search(joined) and not _FAMILY.search(joined))):
             return {"tool": "none", "via": "rules"}                              # finance, "something reliable": answered by code in _t_none
         if not booking_flow and not s.car and _FAMILY.search(joined):
@@ -1500,11 +1521,19 @@ class AgentEngine:
                         body = str(said_now.get("body_type") or "")
                         thing = " ".join(x for x in (said_now.get("color"), name, body.upper() if body == "suv" else body) if x)
                         lead = f"I don't have {'an' if thing[:1].lower() in 'aeiou' else 'a'} {thing}, but"
+                    elif carried.get("make") or carried.get("body_type"):   # 30 Oct: "As a Toyota I don't have one, but" -> "I don't have a Toyota under 60,000 dirhams, but"
+                        both = {**carried, **said_now}
+                        name = next((c.make for c in self.svc.inventory.search(SearchFilters(make=both["make"]), 1)), str(both["make"]).title()) if both.get("make") else ""
+                        body = str(both.get("body_type") or "")
+                        thing = " ".join(x for x in (both.get("color"), name, body.upper() if body == "suv" else body) if x) or "car"
+                        rest = self._filters_said({k: v for k, v in both.items() if k in ("max_price", "year_min", "max_km")})
+                        lead = f"I don't have {'an' if thing[:1].lower() in 'aeiou' else 'a'} {thing}{' ' + rest if rest else ''}, but"
                     if wider.needs_narrowing:
                         body = f"{lead} there are {wider.total} {what}, from {T.money(min(c.price for c in wider.cars))}. What budget would work for you?"
                     else:
                         listed = W.list_line(s, list(wider.cars), wider.total)
-                        body = f"{lead} {listed[0].lower() + listed[1:] if not listed.startswith('I') else listed} Which one would you like to hear more about?"
+                        ask_one = "Would you like to hear more about it?" if len(wider.cars) == 1 else "Which one would you like to hear more about?"   # one car: not "which one" (30 Oct)
+                        body = f"{lead} {listed[0].lower() + listed[1:] if not listed.startswith('I') else listed} {ask_one}"
                     return {"core": body, "awaiting": True,
                             "facts": [f"With everything asked ({wanted}) nothing matches. Without the earlier {limits or 'filters'}: {wider.total} {what} in stock.",
                                       "Do NOT say there are none of them in stock: there are."]}
@@ -1564,14 +1593,19 @@ class AgentEngine:
         d = self.svc.site.cars.get(car.stock_id)
         told = s.said_about.setdefault(car.stock_id, [])
         topics = A.topics_in(words)
-        if HAGGLE.search(words) or _VALUE.search(words):                 # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
+        pushed = bool(HAGGLE.search(words)) or self._offer_on(s, car, words)
+        if pushed or _VALUE.search(words):                               # "best price?", "can you do 150?", "is that a good price?": the fixed price, said once
             rec = s.haggles.setdefault(car.stock_id, {"pushes": 0, "offered": []})
-            if HAGGLE.search(words):
+            if pushed:
                 rec["pushes"] += 1
                 rec["asked"] = ex.asked_price(words, car.price) or rec.get("asked")     # "any discount at all?" after "can you do 150?": still about 150,000
                 if rec["pushes"] >= 2:                                   # asked again: the price stays, cars near the asked price are offered instead
                     return self._cheaper_instead(s, car, words, rec, facts, dbg)
             return {"core": f"Our prices are fixed, so the {T.car_name(car)} is {T.money(car.price)}. {ask()}", "facts": facts, "awaiting": True}
+        asked_colour = (ex.search_filters(text, self.svc.inventory.vocabulary()) or {}).get("color")
+        if asked_colour and car.color and re.search(r"\b(?:is it|is this|is that|it's|its|does it come)\b", words):    # "Is it white?" about this car (30 Oct replay)
+            same = str(asked_colour).lower() in car.color.lower()
+            return {"core": f"{'Yes' if same else 'No'}, it's {car.color.lower()}. {ask()}", "facts": facts, "awaiting": True}
         if d is not None and topics and set(topics) == {"about"} and not A.asked_feature(words):
             return self._more_about(s, car, d, told, facts, ask)         # "tell me more", "anything else about it?": a group of facts not told yet
         detail = A.detail_answer(car, d, words)
@@ -1912,6 +1946,16 @@ class AgentEngine:
         if found.get("make") and self.svc.inventory.count(SearchFilters(make=found["make"], model=found.get("model"))) > 0:
             return [f"says there are no {found.get('model') or found['make']} cars, but there are"]
         return []
+
+    def _offer_on(self, s: Session, car, words: str) -> bool:
+        """An offer below this car's price: in so many words, or just the amount ("come on, 50,000?") once the caller has already pushed on it."""
+        car = self.svc.get_car(car) if isinstance(car, str) else car
+        if not car:
+            return False
+        if offers_less(words, car.price):
+            return True
+        asked = ex.asked_price(words, car.price)
+        return bool(s.haggles.get(car.stock_id, {}).get("pushes") and asked and asked < car.price and len(words.split()) <= 6)
 
     @staticmethod
     def _filters_said(f: dict) -> str:

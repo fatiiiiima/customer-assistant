@@ -27,13 +27,16 @@ PRONUNCIATIONS: list[tuple[re.Pattern, str]] = [
 ]
 
 
-def pronounce(text: str) -> str:
-    """The text as it should be SPOKEN (the transcript and the logs keep the written form)."""
+def pronounce(text: str, spell_letters: bool = True) -> str:
+    """The text as it should be SPOKEN (the transcript and the logs keep the written form). `spell_letters=False`: AGMC, GCC and SUV are left as written,
+    for a voice that says the letters itself. Pocket-TTS's eve says "eigh gee em see" with a gap after each letter: 30 Oct, the owner, "can it say AGMC
+    faster"; measured, "Welcome to the AGMC dealership." 1.95 s as written against 2.22 s spelled, with no gap of 80 ms or more (section 43)."""
     from .speech_text import speech_text
 
     text = speech_text(text)                                   # amounts, times, phone numbers, dates, car codes (see speech_text.py)
-    for pattern, spoken in PRONUNCIATIONS:
-        text = pattern.sub(spoken, text)
+    if spell_letters:
+        for pattern, spoken in PRONUNCIATIONS:
+            text = pattern.sub(spoken, text)
     return text
 
 

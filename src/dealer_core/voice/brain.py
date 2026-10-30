@@ -30,7 +30,8 @@ def _louder(a: float | None, b: float | None) -> float | None:
 
 
 class DealerBrain(FrameProcessor):
-    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, speak_up: tuple[float, float] = (0.0, 0.0), **kwargs) -> None:
+    def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, speak_up: tuple[float, float] = (0.0, 0.0),
+                 background_below: float = 0.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine, self.session = engine, engine.new_session()
         self._speak_opening, self._on_turn = speak_opening, on_turn
@@ -39,6 +40,9 @@ class DealerBrain(FrameProcessor):
         self._speak_up = speak_up                       # (very quiet, suspect) levels: see services.too_quiet_to_trust; (0, 0) = never
         self._asked_to_speak_up = 0                     # in a row: after two the words are used as they are, so a caller who cannot be louder is not stuck
         self.spoken_up = 0                              # turns answered with "speak up" (for tests and the log)
+        self._background_below = background_below      # hands-free: a turn quieter than this share of the caller's usual level is someone else in the room (0 = off)
+        self._caller_levels: list[float] = []           # levels of the last turns acted on (the caller's own voice is the loudest of them)
+        self.background = 0                             # turns ignored as background voices (for tests and the log)
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
         self.interrupted = 0                            # turns abandoned because the caller spoke over the agent
@@ -155,6 +159,14 @@ class DealerBrain(FrameProcessor):
             self._keep_heard_cars(heard)
             self.interrupted += 1
 
+    def _is_background(self, level: float | None) -> bool:
+        """A turn under `background_below` of the loudest of the last 8 turns acted on is someone else talking near the microphone. The loudest, not the
+        median: in the owner's 30 Oct call the room was heard before the caller, and those turns must not set the bar. The owner's own turns in recorded
+        calls: 0.10 to 0.27, the quietest 0.37 of the loudest (section 43)."""
+        if not self._background_below or level is None or not self._caller_levels:
+            return False
+        return level < self._background_below * max(self._caller_levels)
+
     def _keep_heard_cars(self, heard: str) -> None:
         shown = self.session.shown
         named = [c for c in shown if c.model.lower() in heard.lower()]
@@ -176,6 +188,10 @@ class DealerBrain(FrameProcessor):
                     logger.debug("brain: a too-quiet piece after a good first half was dropped")      # was held open, and the pair was refused as one: the first half is answered alone
                 else:
                     text, level = f"{carried} {text}".strip(), _louder(level, carried_level)
+            if self._is_background(level):              # 30 Oct, the owner's hands-free call: voices across the room were answered, or asked to speak up
+                self.background += 1                    # not answered, not remembered
+                logger.debug(f"brain: a turn at level {level:.3f}, under {self._background_below:.0%} of the caller's usual level, ignored as background")
+                return
             if self._asked_to_speak_up < 2 and too_quiet_to_trust(text, level, *self._speak_up):
                 self._asked_to_speak_up += 1            # the words are not acted on and not remembered: they are probably not what was said
                 self.spoken_up += 1
@@ -185,6 +201,8 @@ class DealerBrain(FrameProcessor):
                 logger.debug(f"brain: too quiet to trust (level {level:.3f}), asked the caller to speak up")
                 return
             self._asked_to_speak_up = 0
+            if level is not None:
+                self._caller_levels = (self._caller_levels + [level])[-8:]
             self._open_turn, self._open_level = text, level
             heard = False
             t0 = time.perf_counter()
