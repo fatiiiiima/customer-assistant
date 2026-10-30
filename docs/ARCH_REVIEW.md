@@ -1407,3 +1407,22 @@ Not done:
 Tests: `test_inventory_db.py` (19 new) and `test_pg_store.py` (1 new, against PostgreSQL). `test_pg_store.py` and `test_live_call_fixes.py` were updated for the new tables.
 
 `python -m pytest tests/unit`: 1,438 passed, 40 skipped.
+
+## 52. The live demo on the stock database, and what a test call on it found (30 Oct, the owner: "you can use the cars that are already there and maybe add more from your own knowledge (max 50 more)")
+
+The demo now runs on `data/stock.db` (ignored by git): the 24 data.js cars plus 50 more in `data/demo_extra_cars.csv` (AG-125 to AG-174), loaded with the importer.
+* The 50 are written from general knowledge of these models. Specs, prices and features are approximate (GUESS), not a real dealer's stock, and they have no photos.
+* A few leave facts out on purpose so "not on record" can be heard: AG-136 (no accident record, no inspection), AG-147 Tahoe (no warranty), AG-167 (no market price), AG-171 (no service history, no accident record).
+
+Four fixes, each from running it:
+1. **A "trim" column kept the model whole.** With a separate trim column, the model column was cut to its base name (`G 63` became `G`). Now the model is kept as given when a trim is present. Test: `test_with_a_trim_column_the_model_column_is_kept_whole`.
+2. **SQLite is not a place to share calls between workers.** A worker given a SQLite `DATABASE_URL` also used it for the shared call state, which is meant for PostgreSQL only. `shared_state_url` now takes `DATABASE_URL` only when it is PostgreSQL. Test: `test_a_sqlite_stock_database_is_not_used_to_share_calls_between_workers`.
+3. **"Does it come with a warranty?" was taken as a visit.** `_BOOKING_CUE` counts any "come", so the call went "Does it come with a warranty?" / "Sure! What day would you like to come in?". This was already the case before section 51, and it affected data.js cars too. "come with", "comes equipped/standard/fitted", "does it/do they/will it come" and "come on" are now taken out before every booking-cue check (`_visit_cue`). Test: `test_does_it_come_with_a_warranty_is_a_question_about_the_car_not_a_visit`, which also checks that "can I come and see it tomorrow" still books.
+4. **The model said the caller's question back.** In prefix mode, the closing question the model wrote after "I don't have the warranty on record for this car." was "Does it come with a warranty?". A follow-up that is mostly the caller's own words (2+ shared words, 60%+ of the sentence) is now refused, and the code's question is said instead. Test: `test_the_callers_own_question_said_back_is_refused`.
+
+Live check after the fixes, MEASURED by a synthetic-voice call to each worker (`--quality prefix`, Qwen3-4B on the local model server):
+* Tahoe: "I don't have the warranty on record for this car. What else would you like to know about it?"
+* Sunroof: "I don't see a sunroof in its listed features. It has eight seats, magnetic ride and rear entertainment."
+* "Can I come and see it tomorrow?" still offers tomorrow's times.
+
+`python -m pytest tests/unit`: 1,443 passed, 40 skipped.

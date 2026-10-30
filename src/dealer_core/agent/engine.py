@@ -94,6 +94,14 @@ _LOOKING_FORWARD = re.compile(r"(?:so )?(?:i'?m|i am|we'?re|we are) (?:just )?lo
 _FILLER = {"the", "a", "an", "and", "so", "uh", "um", "umm", "hmm", "er", "erm", "ah", "oh", "to", "of", "in", "is", "it", "but", "or", "well"}
 _BOOKING_CUE = re.compile(r"\b(?:book|booking|test drive|drive it|see it|come|visit|appointment|today|tomorrow|morning|afternoon|evening|tonight|"
                           r"weekend|this week|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
+# "come" that is not a visit: "come on, can you do 150?", "does it come with a warranty?", "does it come in white?", "it comes with a sunroof" (30 Oct, a test call:
+# "Does it come with a warranty?" was taken as "can I come in" and answered "What day would you like to come in?")
+_NOT_A_VISIT = re.compile(r"\bcome on\b|\bcomes? (?:with|equipped|standard|fitted)\b|\b(?:does|do|did|will|would) (?:it|they|this(?: one| car)?|that(?: one| car)?) come\b")
+
+
+def _visit_cue(text: str):
+    """A booking cue in the caller's words, once the ways of saying "come" that are not about visiting are taken out."""
+    return _BOOKING_CUE.search(_NOT_A_VISIT.sub(" ", text))
 # "any day", "whenever", "as soon as possible", "what's free", "when can I come": no day chosen, the caller wants to be offered one (27 Oct: six identical
 # "which day?" questions in a row, because none of these meant anything to the booking logic)
 _FLEXIBLE = re.compile(
@@ -457,7 +465,7 @@ class AgentEngine:
         asked = expected.last_question(s.last_agent()).lower()
         if asked and W.INVITES.search(asked) and (_NO.match(joined_words) or _NEVER_MIND.search(joined_words)) and not _PLAIN_YES.match(joined_words):
             s.no_invite_until = len(s.history) + 12                        # "No, I want to know something else": no more invitations for the next few exchanges
-        elif _BOOKING_CUE.search(joined_words):
+        elif _visit_cue(joined_words):
             s.no_invite_until = 0                                          # the caller is talking about visiting: asking again is fine
         check = self._sounds_like_shown(s, text)
         if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
@@ -960,6 +968,9 @@ class AgentEngine:
         mine = {w for w in re.findall(r"[a-z0-9']+", sentence.lower()) if len(w) > 3}
         if mine and len(mine & said) / len(mine) >= 0.6:
             problems.append("repeats what was just said")
+        theirs = {w for w in re.findall(r"[a-z0-9']+", caller.lower()) if len(w) > 3}
+        if len(mine & theirs) >= 2 and len(mine & theirs) / len(mine) >= 0.6:     # 30 Oct test call: "I don't have the warranty on record. Does it come with a warranty?"
+            problems.append("repeats the customer's own question back: ask the customer the question given")
         if len(sentence.split()) > 18:
             problems.append("too long for a follow-up")
         if question and not sentence.rstrip().endswith("?"):
@@ -1104,7 +1115,7 @@ class AgentEngine:
         if not booking_flow and s.car and "about" in A.topics_in(joined) and self._names_only_this_car(s, words):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "anything else about the car I should know?" / "what else should I know about it?"
         picked = ex.selection(text, s.shown)
-        cue = re.sub(r"\bcome on\b", "", joined)                                 # "Come on, can you do 150?" is pushing on the price, not a visit
+        cue = _NOT_A_VISIT.sub(" ", joined)                                      # "Come on, can you do 150?", "does it come with...": not a visit
         if not booking_flow and _BOOKING_CUE.search(cue) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", cue):
             # 28 Oct: "Yes, I want to come and see the Macan." is a booking, not a pick from the list: naming the car must not turn it into "tell me about it" (three times in one call)
             named_car = ex.find_vehicle(words, self.svc.inventory.vocabulary())
@@ -1194,30 +1205,30 @@ class AgentEngine:
             return {"tool": "none", "via": "rules"}                               # "thank you" after a booking is not a request to confirm it again
         if not s.car and len(s.shown) >= 2 and not booking_flow and _PLAIN_YES.fullmatch(joined) and re.search(r"\bwhich\b", q):
             return {"tool": "which_car", "via": "rules"}                          # "yes" to "which one would you like?"
-        if not s.car and s.shown and not booking_flow and (_BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(),
+        if not s.car and s.shown and not booking_flow and (_visit_cue(joined) or parse_when(text, self.svc.clock(),
                 self.svc.slots.tz(self.svc.cfg.branches[0].id)).found) and re.search(r"\b(?:book|test drive|see|come|visit|tomorrow|today|am|pm|morning|afternoon|evening|day)\b", joined):
             return {"tool": "prepare_booking", "via": "rules"}                    # a day or a booking with no car chosen: prepare_booking asks which car
         if not booking_flow and (_CHEAPER.search(joined) or ((_SPORTY.search(joined) or _SEATS.search(joined)) and not s.car)):
             return {"tool": "search_cars", "via": "rules"}                       # "something cheaper", "anything with seven seats", "something sporty"
-        if not booking_flow and s.car and _BOOKING_CUE.search(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
+        if not booking_flow and s.car and _visit_cue(joined) and re.search(r"\b(?:see|come|visit|drive|try|book|test)\b", joined):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "can I see it this weekend?"
         if not booking_flow and s.car and _SEE_CAR.search(joined) and self._invited_recently(s):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}   # "I want to see the car" after "Would you like to come and see it?"
         if not booking_flow:
-            if A.showroom_topics(joined) and not _BOOKING_CUE.search(joined) and not re.search(r"\bmy (?:number|phone|mobile|whatsapp|email)\b", joined):
+            if A.showroom_topics(joined) and not _visit_cue(joined) and not re.search(r"\bmy (?:number|phone|mobile|whatsapp|email)\b", joined):
                 return {"tool": "showroom_info", "via": "rules"}
         if s.shown and not s.car and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and expected.nothing_in_particular(text):
             return {"tool": "search_cars", "via": "rules"}                       # "any range or style" after a narrowing question: read the list out
         found = ex.find_vehicle(words, self.svc.inventory.vocabulary())
         current = self.svc.get_car(s.car) if s.car else None
-        if (found.get("make") and _LOOKING.search(joined) and not found.get("model") and not _BOOKING_CUE.search(joined)
+        if (found.get("make") and _LOOKING.search(joined) and not found.get("model") and not _visit_cue(joined)
                 and (current is None or current.make.lower() != found["make"])):
             return {"tool": "search_cars", "via": "rules"}                       # "now I'm looking for any BMW": a new search, not the car before
         if not s.car or s.ended:
             return None
         detail = (A.topics_in(joined) or A.asked_feature(joined)) and self.svc.details(s.car) is not None
         if (s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_ABOUT_THIS_CAR.search(joined) or HAGGLE.search(joined) or _VALUE.search(joined) or detail)
-                and not _BOOKING_CUE.search(joined) and not found.get("make")):
+                and not _visit_cue(joined) and not found.get("make")):
             return {"tool": "get_car", "car_id": s.car, "via": "rules"}      # "how many kilometres has it done?" is about the car just discussed
         if s.read_back and (both := re.match(r"(yes(?: please)?|yeah|yep|sure|ok(?:ay)?|correct|that'?s right|perfect)(?: and| but| also| oh and)? (.+)", joined)) \
                 and self._confirms(both[1]) and self._aside_kind(s, both[2], both[2].split(), both[2]) == "car":
