@@ -1426,3 +1426,38 @@ Live check after the fixes, MEASURED by a synthetic-voice call to each worker (`
 * "Can I come and see it tomorrow?" still offers tomorrow's times.
 
 `python -m pytest tests/unit`: 1,443 passed, 40 skipped.
+
+## 53. A speed test for models on Amazon Bedrock, written but not run (30 Oct, the owner: "write the speed test for the four shortlisted Bedrock models. Don't run it until I've set the key and said go.")
+
+`scripts/bedrock_speed.py` times the two jobs the agent gives a model:
+* **Deciding the next action.** This happens before the first sound of a reply, so it is the one the 1 s rule depends on. ARCH_PLAN wants the model's part under 300 ms.
+* **Writing the follow-up question** after a reply the code has begun.
+
+Shortlist, from the models the owner's key can use (a GUESS, to be measured):
+* `qwen.qwen3-next-80b-a3b-instruct`: the same family as today's Qwen3-4B, with about 3B parameters used per token.
+* `mistral.ministral-3-8b-instruct`.
+* `anthropic.claude-haiku-4-5`.
+* `google.gemma-4-26b-a4b`.
+
+Not tested, and why:
+* `kimi-k2-thinking` and `magistral`: they reason before they answer, which is slow.
+* The large models: too slow and too costly to call on every turn.
+* Coding, vision and safeguard models: the wrong kind of model for this job.
+* `voxtral`: a speech recogniser, not a chat model.
+
+How it works:
+* **`capture`** runs the three conversations from `compare_agent_models.py` through the agent on the local model server, with the website's demo cars. It saves every prompt to `benchmarks/bedrock_speed_prompts.json`.
+* The capture also records the decision prompt for turns the code decides by itself. Only 2 of 17 turns reached the model, and the same 2 prompts sent over and over would flatter a server that caches recent prompts. The file holds 17 different decision prompts (12 with a known right action) and 21 follow-ups.
+* **`run`** sends those prompts word for word through the agent's own client (`OpenAICompatBackend`), one model at a time:
+  * 1 warm-up call, then 10 decisions and 10 follow-ups: 21 calls a model, 84 for the four;
+  * about 11,000 input tokens and at most 540 output tokens a model (`--dry-run`; input estimated as characters / 4).
+* The network trip is timed separately with a plain `GET /models`.
+* It sends nothing unless `BEDROCK_API_KEY` and `VOICE_AGENT_ALLOW_CLOUD=1` are both set. The key is never printed or saved.
+
+Compatibility with Bedrock (UNKNOWN until run): the client sends three fields only vLLM knows.
+* For "pick one of these actions" and for "continue this begun reply", the client already copes with a refusal on its own: it switches to free text, or to "you have already said …". The results show when this happened (`constrained_choice`, `prefill_refused`).
+* Every call to a Qwen3 model also carries `chat_template_kwargs`, so a server that refuses unknown fields would refuse everything. In that case the script tries again with standard fields only and marks the row `plain`. If that is the mode that works, the agent's client will need the same option before it can use that model.
+
+Noticed during the capture, not followed up: in one of two local runs, "can I speak to someone" (after "the BMW M3") was answered as `get_car` by the code's rules instead of a handoff.
+
+Tests: `test_bedrock_speed.py` (5, against a fake server; nothing leaves the machine). `python -m pytest tests/unit`: 1,448 passed, 40 skipped.
