@@ -1186,3 +1186,39 @@ Tests: `test_closing_question.py`, 11 new; `test_call_30oct.py`, 1 new.
 MEASURED: two test calls through a worker (prefix level, the 4B model writing the follow-up). Both ended the Civic offer with "Would you like to hear more about it?".
 
 `python -m pytest tests/unit`: 1,376 passed, 40 skipped.
+
+## 46. Office noise before the caller's first turn (30 Oct, the owner: "whenever it's too loud in the office, it picks up the bg noise and tries to translate the gibberish")
+
+Branch `fix/noise-before-first-turn`. The owner's hands-free call recorded at 11:00 (`logs/audio_dump/20261030_110015_1888_in.*`). MEASURED, loudest 0.3 s before each turn end:
+
+| at | heard | level | what the agent did |
+|---|---|---|---|
+| 2.3 s | "Hi." | 0.024 | speak up |
+| 4.9 s | "I'm going to drive it." | 0.030 | "Which car would you like to test drive?" |
+| 6.3 s | "I don't know." | 0.040 | "Could you tell me a bit more…" |
+| 6.6 s | "A" | 0.040 | speak up |
+| 15.6 s | "I'm looking forward to Toyota." (the owner) | 0.464 | answered |
+
+The room's own level (median of 50 ms readings): 0.0105.
+
+**Why section 43 missed it.** The background bar is a quarter of the caller's loudest recent turn. Before any turn is acted on there is nothing to compare with, so the first noise turns went through. "I'm going to drive it." (0.030) was then answered and became the baseline.
+
+The room's level does not separate the two either: the noise turns were 8 to 39 times the room's level in the 10 s before them, the owner 36 times. Tap-mode calls of 29 Oct had real turns at 0.033 and 0.041, but in tap mode the caller chooses to speak and these bars are off.
+
+**Fix** (`voice.first_turn_below`, 0.06; `brain._is_background`). In hands-free, until a turn has been acted on, a turn under 0.06 is the room: not answered, not remembered, and not used as the baseline. The third such turn in a row gets one "speak up" (the words are still not used), so a caller who really is that far from the microphone is not ignored for ever. Once a turn has been acted on, section 43's relative bar takes over.
+
+The margin is 1.5 times the loudest noise turn (0.040) and 1.7 times under the owner's quietest hands-free turn in recorded calls (0.10). A louder office would need a higher bar (GUESS; one office recording).
+
+Replayed with the measured levels (`test_background_voices.py::test_the_office_call_answers_only_the_caller`):
+* Before: 2 noise turns answered, 2 speak-ups.
+* Now: 0 noise turns answered and 1 speak-up (on "I don't know.", the third in a row); "I'm looking forward to Toyota." is answered.
+
+INFERRED: the recogniser's level of each live segment is at most the 4 s window measured here, so every noise turn was at or under 0.040. The live log agrees: "Hi." and "A" got a speak-up, which only happens under 0.05.
+
+Not changed:
+* The words themselves. Whisper writes sentences for distant speech; the level is the only reliable sign in this call.
+* The browser's automatic gain. It raises the room while the caller is quiet. `?mic=raw` turns it off (`docs/VOICE.md`); whether this call used it: UNKNOWN.
+
+Tests: `test_background_voices.py`, 5 new.
+
+`python -m pytest tests/unit`: 1,381 passed, 40 skipped.

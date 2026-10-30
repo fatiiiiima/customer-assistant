@@ -42,7 +42,8 @@ so a call never goes silent. To go back: `--tts kokoro` (or `chatterbox`). docs/
 Eve speaks 1.1 times faster than the model makes it, with every pause inside a sentence cut to 120 ms (section 43), and loud sentence starts turned
 down ("Sure!", "Hi", section 44); `--speed 1.0 --max-pause-ms 0 --level 0` turns all three off.
 
-Hands-free with people talking nearby: once you have spoken, a turn under a quarter of your own level is ignored (`voice.background_below`). Keep the Mac's
+Hands-free with people talking nearby: before you have spoken, a turn whose level is under 0.06 is ignored (`voice.first_turn_below`; the third in a row gets
+one "speak up"); once you have spoken, a turn under a quarter of your own level is ignored (`voice.background_below`). Keep the Mac's
 input volume where your voice is clear but the room is not (about the middle), and add `?mic=raw` to the page's address to switch off the browser's
 automatic gain, which turns the room up whenever you are quiet.
 
