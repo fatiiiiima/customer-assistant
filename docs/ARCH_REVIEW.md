@@ -1694,3 +1694,37 @@ Seen while capturing on the local Qwen3-4B, MEASURED as the replies it gave:
 * "I don't have mileage data for any of the three cars" when the mileage was in the facts.
 
 These are the local model's. Whether the Bedrock models do better is what the replies in the results file will show.
+
+## 63. Whole replies on four Bedrock models (30 Oct, run by the owner)
+
+MEASURED with `scripts/bedrock_speed.py run --decisions 0 --follow-ups 0 --full-replies 20 --reasoning none --service-tier priority`, from this M3 Pro to `us-east-1`. Each model got the first 20 of the 24 prompts from section 62, one at a time. All four answered every call, with no errors. The network trip (`GET /models`) took about 365 to 390 ms at p50. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-10-30_165534.json`.
+
+| model | first speakable piece p50 / p90 | end of reply p50 / p90 | finished | replies with a figure or name not in their prompt |
+|---|---|---|---|---|
+| `mistral.ministral-3-3b-instruct` | **472 / 573 ms** | 475 / 573 ms | 19/20 | 3: two made-up booking times ("Wednesday at 10:00 AM", "10:15 AM tomorrow"); Markdown `**` in 3 replies, blank lines in more |
+| `nvidia.nemotron-nano-3-30b` | 819 / 1,115 ms | 945 / 1,332 ms | 20/20 | **0** |
+| `mistral.ministral-3-8b-instruct` | 917 / 1,416 ms | 989 / 1,244 ms | 20/20 | 3: "0 to 100 in under 3.5 seconds" and "60 km/h in 3.5 seconds" for the M3, a colleague named "Ahmad" |
+| `google.gemma-4-26b-a4b` | 1,113 / 1,357 ms | 1,259 / 1,432 ms | 20/20 | **0** |
+
+The check behind the last column compared every number in a reply, and a list of likely invented words, with the reply's own prompt (system and user text). It is not a full fact check. Read by hand, the replies also show:
+* **Nemotron**:
+  * to "do you have any other Porsche cars?" it offered "the details of the other Porsche models we keep on the lot", but there is only one Porsche;
+  * to "is it a good family car" it added an opinion ("the turbo engine is tuned for performance, not space");
+  * to "can I speak to someone" it tacked on the Range Rover Sport's colour and price.
+* **Gemma 4**:
+  * to "which one is the fastest" it did not answer ("I can compare the speeds of different models for you");
+  * to "the second one" it never named the car.
+
+  Otherwise its replies are plain and correct.
+* **Ministral 3 8B**: to "the second one" it answered about cheaper Toyotas instead.
+* **Ministral 3 3B**:
+  * replies are written for a screen (Markdown, line breaks);
+  * one reply was cut off mid-question;
+  * one said "Got seven seats?" to a caller asking for seven seats.
+
+These prompts carry the local model's earlier replies in their history (section 62 captured them on Qwen3-4B), including its mistakes. All four models saw the same history.
+
+What it means (INFERRED):
+* **The first piece usually arrives close to the whole reply.** On most replies, for all four models, the gap was under about 100 ms. Streaming the reply saves little on Bedrock from here.
+* **None of them fits the 1 s rule when the model writes the whole reply.** A turn is a decision and then a reply: about 0.27 s of recognition, a 0.45 to 0.5 s decision (section 56), 0.47 to 1.1 s to the reply's first piece, and the voice's start (under about 0.16 s, section 41). That gives about 1.35 s with Ministral 3 3B and about 1.75 s with Nemotron, at p50. The prefix level (code speaks the facts at once) stays the way to meet 1 s from this laptop.
+* **Ministral 3 3B is the only faster model, and it makes up booking times.** That is the one thing the owner's rules forbid outright. Of the four, Nemotron is the fastest with no figure invented. Gemma 4 is as clean and about 300 ms slower.
