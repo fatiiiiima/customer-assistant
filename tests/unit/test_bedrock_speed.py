@@ -209,3 +209,28 @@ def test_a_whole_reply_run_needs_its_own_prompts_and_a_dry_run_counts_them(tmp_p
     full.write_text(json.dumps([FULL]))
     assert bs.main(args) == 0
     assert "2 model(s) x 6 calls" in capsys.readouterr().out                                        # a warm-up and 5 replies each
+
+
+def test_a_one_call_answer_is_timed_from_after_its_action_line(monkeypatch):
+    """Section 64: the voice starts with the reply, not with "ACTION: ..."; an answer that is only an action line has nothing to say (a second call writes it)."""
+    class Fake:
+        def __init__(self, pieces):
+            self.pieces = pieces
+
+        def lead_in_stream(self, *a, **k):
+            yield from self.pieces
+
+    rec = {**FULL, "one_call": True}
+    r = bs.full_reply(Fake(["ACTION: get_c", "ar AG-101\nThe Macan is ", "149,000 dirhams. ", "Want a drive?"]), rec)
+    assert r["action"] == "ACTION: get_car AG-101" and r["reply"] == "The Macan is 149,000 dirhams. Want a drive?" and r["finished"]
+    r = bs.full_reply(Fake(["ACTION: showroom_info"]), rec)
+    assert r["action"] == "ACTION: showroom_info" and r["reply"] == "" and r["first_ms"] is None
+    s = bs.one_call_summary([{"action": "a", "first_ms": 500}, {"action": "b", "first_ms": None}, {"first_ms": 900}])
+    assert s["one_n"] == 2 and s["one_replied"] == 1 and s["one_first_p50"] == 500        # a second-call reply (no action) is not counted in it
+
+
+def test_capture_one_call_writes_its_own_file(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(bs, "capture_full", lambda out, one_call=False: seen.update(out=out, one_call=one_call) or 0)
+    assert bs.main(["capture", "--full", "--one-call"]) == 0 and seen == {"out": bs.ONE_CALL_PROMPTS, "one_call": True}
+    assert bs.main(["capture", "--full"]) == 0 and seen == {"out": bs.FULL_PROMPTS, "one_call": False}

@@ -218,6 +218,7 @@ class VoiceCfg(_Strict):
     barge_in_level: float = 0.01                  # ...counting audio at least this loud (speech in the owner's calls: median 0.03 to 0.05; background 0.0003 to 0.004)
     model_only: bool = False                      # False (the production behaviour): a reply the model leaves short, or a sentence the checks drop, is completed with the code's own facts and question.
                                                   # True = TEST MODE: only the model's own words are spoken, nothing in their place (27 Oct: a reply could end after its opener). Was True by default
+    one_call: bool = False                        # with model_only: the model picks the action and writes the reply in ONE call, given the likely facts up front (ARCH_REVIEW section 64)
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn

@@ -1728,3 +1728,75 @@ What it means (INFERRED):
 * **The first piece usually arrives close to the whole reply.** On most replies, for all four models, the gap was under about 100 ms. Streaming the reply saves little on Bedrock from here.
 * **None of them fits the 1 s rule when the model writes the whole reply.** A turn is a decision and then a reply: about 0.27 s of recognition, a 0.45 to 0.5 s decision (section 56), 0.47 to 1.1 s to the reply's first piece, and the voice's start (under about 0.16 s, section 41). That gives about 1.35 s with Ministral 3 3B and about 1.75 s with Nemotron, at p50. The prefix level (code speaks the facts at once) stays the way to meet 1 s from this laptop.
 * **Ministral 3 3B is the only faster model, and it makes up booking times.** That is the one thing the owner's rules forbid outright. Of the four, Nemotron is the fastest with no figure invented. Gemma 4 is as clean and about 300 ms slower.
+
+## 64. The one-call turn: the action and the reply from one model call (30 Oct, the owner: "give Nemotron the likely facts up front so it picks the action and writes the reply in a single call. and maybe shorten the prompt too?")
+
+A setting, `voice.one_call` (`VA__VOICE__ONE_CALL=true`), used only with the test mode `voice.model_only` (section 60). It is off by default and the pipeline ignores it without `model_only`.
+
+How a turn runs (`AgentEngine._one_call` in `agent/engine.py`):
+1. **The code looks up the likely facts first, on a copy of the call** (`_one_call_candidates`, at most four):
+   * a car picked from the list just read out ("the second one");
+   * a car named alone;
+   * the car in focus;
+   * a search, when the words name a make, a filter or a cheaper car, or ask for a list;
+   * and always `none`.
+
+   Each runs through the usual tool on a deep copy of the session. MEASURED: about 1 ms a turn (p50; 3 ms at most) on the portal stock.
+2. **One short prompt** (`ONE_CALL_SYSTEM` and `_one_call_prompt`) holds:
+   * the time;
+   * the booking, if one is under way;
+   * the last four lines and the caller's words;
+   * each READY action with its facts (each fact given once, the price rule once);
+   * the other actions on one line.
+
+   The model writes `ACTION: <action>` on the first line and the reply on the next.
+3. **The action line is read as soon as it is complete.** What happens next depends on it:
+   * **A READY action:** the reply is spoken piece by piece as it comes. The prepared copy becomes the call's state only once a word is said.
+   * **One of the other actions** (a booking step, a comparison, the showroom's hours): the stream is closed, the tool runs, and the usual writer writes the reply in a second call, as before. The decision call is still saved.
+   * **A READY action with no reply after it:** the reply is written in a second call. On the local model this happened on 7 of 24 turns before the prompt said plainly which actions get a reply. Those turns were silent.
+   * **No action line, or an error before it:** the turn is decided by the usual decision call.
+4. As in section 60, nothing is replaced or added by code. The checks only add a note when they would have stopped a sentence.
+
+**Prompt size**, MEASURED in characters on the demo stock (tests), system and user text together:
+
+| turn | two calls (decision + writer) | one call |
+|---|---|---|
+| "do you have any Toyotas" | 7,552 | 2,097 |
+| "tell me about the Land Cruiser" | 7,137 | 1,890 |
+
+On the portal stock over the 24 test turns (`capture --full`), the average prompt per call was 4,408 characters with two calls and 2,950 with one. One call also sends one prompt a turn instead of two.
+
+**Speed on the local model** (Qwen3-4B on MLX, this M3 Pro, the same 24 turns), MEASURED:
+
+| | first piece said, p50 / p90 | whole turn, p50 / p90 |
+|---|---|---|
+| two calls | 1,585 / 2,349 ms | 2,219 / 3,394 ms |
+| one call | 1,755 / 2,293 ms | 2,433 / 3,693 ms |
+
+Locally, one call is no faster.
+* The local server has no network trip to save.
+* Its first token took 1,123 ms at p50. The one-call prompt is new from its first characters every turn, so the server cannot reuse earlier work (INFERRED).
+* The action line costs about 250 ms of writing before the reply starts.
+
+On Bedrock the saving is the decision's round trip: the network alone is about 370 to 390 ms (section 63), and the decision about 0.45 to 0.5 s (section 56). That saving is INFERRED and not measured. The owner's run below measures it:
+
+```
+uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 31 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
+```
+
+The run makes 49 calls: about 35,300 input and at most 7,100 output tokens, from the dry run. At the priority rates from AWS's page that is under 1 US cent (INFERRED). The prompts were captured on the local model (`capture --full --one-call`): 24 one-call prompts and 7 second calls. The report now prints the one-call answers apart from the second calls: how many had the reply in them, and their first piece. The baseline is two calls: the decision p50 from the same run plus Nemotron's whole-reply first piece from section 63 (819 ms p50).
+
+What the local model did with it, read by hand. These are Qwen3-4B's replies, not Nemotron's:
+* It picked a sensible action on most turns.
+* It wrote past 30 words on car details.
+* It once named the car in focus for "something cheaper" when the cheaper search was prepared.
+
+Tests (`tests/unit/test_model_only.py`, `tests/unit/test_bedrock_speed.py`) check that:
+* the facts are given up front and the reply is spoken from the one call, with no other call;
+* a pick from the list is understood;
+* an action without facts is written in a second call;
+* no action line goes back to the usual decision;
+* a READY action with no reply is not left silent;
+* the prompt is under half the two calls';
+* the setting is off without the test mode;
+* the speed test times a one-call answer from after its action line.

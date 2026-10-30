@@ -76,6 +76,7 @@ def base_for(model: str, base: str) -> str:
     return base
 PROMPTS = ROOT / "benchmarks" / "bedrock_speed_prompts.json"
 FULL_PROMPTS = ROOT / "benchmarks" / "bedrock_full_reply_prompts.json"
+ONE_CALL_PROMPTS = ROOT / "benchmarks" / "bedrock_one_call_prompts.json"     # capture --full --one-call: the action and the reply in one call (section 64)
 OWNER_CALLS = [                       # the owner's own test calls, 30 Oct (their lines only)
     [("I am looking for a Porsche.", "search_cars"), ("do you have any other Porsche cars?", "search_cars")],
     [("I'm looking for a family, a friendly car", None), ("Yes.", "get_car"), ("How many owners has it had?", "get_car"),
@@ -140,16 +141,19 @@ def capture(out: Path) -> int:
     return 0
 
 
-def capture_full(out: Path) -> int:
-    """The test mode voice.model_only (the model decides and writes everything) with the voice settings, on the local model: each whole-reply prompt."""
+def capture_full(out: Path, one_call: bool = False) -> int:
+    """The test mode voice.model_only (the model decides and writes everything) with the voice settings, on the local model: each whole-reply prompt.
+    With one_call, the one-call turn (voice.one_call): its prompts, and the second calls it still makes. Prints the local times to the first piece said."""
     from compare_agent_models import CONVERSATIONS
 
+    from dealer_core.agent.engine import ONE_CALL_SYSTEM
     from dealer_core.app import build_app
     from dealer_core.cli.chat import start
     from dealer_core.config import load_config
     from dealer_core.voice.pipeline import apply_voice_profile
 
-    cfg = load_config(environ={**LOCAL, "VA__DIALOGUE__DECISION_BACKEND": "gpu_server", "VA__VOICE__MODEL_ONLY": "true"}, overlay=ROOT / "config" / "portal.yaml")
+    cfg = load_config(environ={**LOCAL, "VA__DIALOGUE__DECISION_BACKEND": "gpu_server", "VA__VOICE__MODEL_ONLY": "true", "VA__VOICE__ONE_CALL": str(one_call).lower()},
+                      overlay=ROOT / "config" / "portal.yaml")
     app = build_app(cfg, inventory="portal", portal_data=SITE_DATA, backend="gpu_server", engine="agent", quality="full")
     start(app, quiet=True)
     apply_voice_profile(app, cfg)
@@ -160,20 +164,31 @@ def capture_full(out: Path) -> int:
 
     def stream(system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
         if not prefill:
-            records.append({"kind": "full_reply", "system": system, "user": user, "max_tokens": max_tokens, "temperature": temperature, "customer": now["line"]})
+            records.append({"kind": "full_reply", "system": system, "user": user, "max_tokens": max_tokens, "temperature": temperature, "customer": now["line"],
+                            "one_call": system == ONE_CALL_SYSTEM})
         yield from real_stream(system, user, max_tokens, temperature, deadline_s, prefill=prefill)
 
     writer.lead_in_stream = stream
+    firsts, totals = [], []
     for convo in CONVERSATIONS + OWNER_CALLS:
         s = e.new_session()
         e.opening(s)
         for line, _ in convo:
             now["line"] = line
-            r = e.handle(s, line)
-            print(f"  [{r.debug.intent:15s}] {line} -> {r.reply[:70]}")
+            t0, first = time.perf_counter(), None
+            for r in e.handle_stream(s, line):
+                if first is None and isinstance(r, str) and r.strip():
+                    first = (time.perf_counter() - t0) * 1000
+            totals.append((time.perf_counter() - t0) * 1000)
+            if first is not None:
+                firsts.append(first)
+            print(f"  [{r.debug.intent:15s}] {first or 0:6.0f} ms  {line} -> {r.reply[:70]}")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(records, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"saved {len(records)} whole-reply prompts to {out.relative_to(ROOT)}")
+    ones = sum(r["one_call"] for r in records)
+    print(f"saved {len(records)} whole-reply prompts to {out}" + (f" ({ones} one-call, {len(records) - ones} second calls)" if one_call else ""))
+    print(f"this machine, local model, {len(totals)} turns: first piece said p50 {pct(firsts, 50)} / p90 {pct(firsts, 90)} ms, "
+          f"turn p50 {pct(totals, 50)} / p90 {pct(totals, 90)} ms; average prompt {sum(len(r['system']) + len(r['user']) for r in records) // max(1, len(records))} characters")
     return 0
 
 
@@ -309,14 +324,23 @@ def full_reply(b, rec: dict) -> dict:
     """A whole reply, streamed: time to its first speakable piece (writer.split_point, as the voice starts) and to its end; finished or cut off."""
     from dealer_core.dialogue.writer import split_point
 
-    t0, buf, first = time.perf_counter(), "", None
+    t0, buf, first, action = time.perf_counter(), "", None, None
     for piece in b.lead_in_stream(rec["system"], rec["user"], rec["max_tokens"], rec["temperature"], 10.0):
         buf += piece
+        if rec.get("one_call") and action is None:                  # a one-call answer: "ACTION: ..." first, the words said come after it
+            if "\n" not in buf.lstrip():
+                continue
+            action, buf = buf.lstrip().split("\n", 1)
         if first is None and split_point(buf, clauses=True):
             first = (time.perf_counter() - t0) * 1000
+    if rec.get("one_call") and action is None:
+        action, buf = buf.strip(), ""
     text = buf.strip()
-    return {"first_ms": None if first is None else round(first), "total_ms": round((time.perf_counter() - t0) * 1000), "words": len(text.split()),
-            "finished": bool(re.search(r"[.!?][\"')]*$", text)), "customer": rec["customer"], "reply": text[:400]}
+    out = {"first_ms": None if first is None else round(first), "total_ms": round((time.perf_counter() - t0) * 1000), "words": len(text.split()),
+           "finished": bool(re.search(r"[.!?][\"')]*$", text)), "customer": rec["customer"], "reply": text[:400]}
+    if rec.get("one_call"):
+        out["action"] = action[:80]
+    return out
 
 
 def pct(xs: list[float], p: float) -> float | None:
@@ -396,7 +420,16 @@ def summary(r: dict) -> dict:
             "follow_p50": pct(f, 50), "follow_p90": pct(f, 90), "follow_n": len(f), "errors": len(r["errors"]),
             "full_first_p50": pct(first, 50), "full_first_p90": pct(first, 90), "full_total_p50": pct(total, 50), "full_total_p90": pct(total, 90),
             "full_n": len(w), "full_finished": f"{sum(x['finished'] for x in w)}/{len(w)}" if w else "-",
-            "decide_under_target": None if not d else pct(d, 90) < TARGET_MS}
+            "decide_under_target": None if not d else pct(d, 90) < TARGET_MS, **one_call_summary(w)}
+
+
+def one_call_summary(w: list[dict]) -> dict:
+    """The one-call answers alone (section 64): how many had the reply in them, and their time to its first piece (the action line written first)."""
+    one = [x for x in w if "action" in x]
+    if not one:
+        return {}
+    first = [x["first_ms"] for x in one if x["first_ms"] is not None]
+    return {"one_n": len(one), "one_replied": len(first), "one_first_p50": pct(first, 50), "one_first_p90": pct(first, 90)}
 
 
 def table(rows: list[dict]) -> str:
@@ -448,13 +481,18 @@ def run(a) -> int:
                                  n_full=a.full_replies))
     rows = [summary(r) for r in results]
     print("\nmilliseconds, from this machine (network = a plain GET /models)\n" + table(rows))
+    for s in rows:
+        if s.get("one_n"):
+            print(f"  {s['model']} one call: {s['one_replied']}/{s['one_n']} answers had the reply in them; its first piece p50 {s['one_first_p50']} / "
+                  f"p90 {s['one_first_p90']} ms (two calls: the decision p50 above + the reply's first piece)")
     for r in results:
         for e in r["errors"][:3]:
             print(f"  {r['model']}: {e}")
         for x in r["follow_up"][:2]:
             print(f"  {r['model']} follow-up: \"{x['said_first']}\" -> \"{x['sentence']}\"")
         for x in r.get("full_reply", [])[:3]:
-            print(f"  {r['model']} reply to \"{x['customer']}\": \"{x['reply'][:160]}\"{'' if x['finished'] else ' (CUT OFF)'}")
+            print(f"  {r['model']} reply to \"{x['customer']}\": " + (f"[{x['action']}] " if x.get("action") else "")
+                  + f"\"{x['reply'][:160]}\"{'' if x['finished'] else ' (CUT OFF)'}")
     out = ROOT / "benchmarks" / "results" / f"bedrock_speed_{time.strftime('%Y-%m-%d_%H%M%S')}.json"     # one file a run: a later run never overwrites an earlier one
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"base": a.base, "summary": rows, "results": results}, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -468,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("capture", help="record the agent's prompts on the local model server (free)")
     c.add_argument("--out", type=Path, default=None, help=f"default: {PROMPTS.name}, or {FULL_PROMPTS.name} with --full")
     c.add_argument("--full", action="store_true", help="whole-reply prompts of the model_only test mode instead")
+    c.add_argument("--one-call", action="store_true", help=f"with --full: the one-call turn (voice.one_call), saved to {ONE_CALL_PROMPTS.name}")
     r = sub.add_parser("run", help="send them to Bedrock (costs money; --dry-run sends nothing)")
     r.add_argument("--models", nargs="+", default=MODELS)
     r.add_argument("--base", default=BASE, help="the Bedrock OpenAI-compatible endpoint (another region: change us-east-1)")
@@ -482,7 +521,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--service-tier", choices=["default", "priority", "flex"], help="Bedrock service tier (priority: faster, costs more)")
     a = p.parse_args(argv)
     if a.cmd == "capture":
-        return capture_full(a.out or FULL_PROMPTS) if a.full else capture(a.out or PROMPTS)
+        if a.full:
+            return capture_full(a.out or (ONE_CALL_PROMPTS if a.one_call else FULL_PROMPTS), one_call=a.one_call)
+        return capture(a.out or PROMPTS)
     return run(a)
 
 

@@ -14,6 +14,7 @@ One extra short model call per turn (the decision), so a turn costs a little mor
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import re
@@ -269,6 +270,31 @@ The customer's words come from speech recognition and can be misspelled. The sto
 """
 
 
+# The one-call turn (voice.one_call, with the test mode voice.model_only; owner, 30 Oct: "give Nemotron the likely facts up front so it picks the action and writes
+# the reply in a single call"). The code looks up, on a copy of the call, what the caller most likely needs: the car in focus, a car or make they named, a search their
+# words describe, a pick from the list just read out. The model is given those facts and the other actions in one short prompt, names its action on the first line and
+# writes the reply after it. An action with no facts prepared (a booking step, a comparison) stops the stream at the action line: it is looked up and written in a second
+# call, as before. Saves the decision's round trip (about 0.4-0.5 s to us-east-1, ARCH_REVIEW section 63) on the turns whose facts were prepared.
+ONE_CALL_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership in Dubai. Each turn, choose ONE action, then reply.
+
+Line 1: ACTION: <action>   (exactly as listed, with the car id where it has one)
+Line 2: for a READY action, your spoken reply: at most 30 words, plain spoken English for a phone call (no lists, no symbols, no markdown).
+Use only the facts given and the conversation; if something is not there, say you don't have that information. Prices are fixed.
+End with one short question unless the customer is leaving.
+For one of the OTHER ACTIONS, write line 1 only: the system acts and you reply after.
+The customer's words come from speech recognition and may be misspelled.
+
+Example:
+ACTION: get_car AG-101
+The 2019 Camry is white, with 60,000 km, at 58,000 dirhams. Would you like to book a test drive?"""
+
+ONE_CALL_OTHERS = ("check_slots <id> (free test-drive times) | prepare_booking <id> (wants a test drive, or gives a day, time, name or phone) | "
+                   "confirm_booking (yes to the booking read-back) | cancel_draft (no, or a change, during the read-back) | compare_cars | "
+                   "best_of (fastest, cheapest, best for ...) | colours | browse_makes | my_bookings | cancel_booking | reschedule_booking | "
+                   "showroom_info (hours, address, contact) | repeat | handoff (wants a person) | end_call (goodbye)")
+_ACTION_LINE = re.compile(r"\s*(?:\*\*)?(?:READY[ \t]*:?[ \t]*)?ACTION[ \t]*:?[ \t]*(?:\*\*)?[ \t]*(?:READY\b[ \t]*:?[ \t]*(?:ACTION[ \t]*:?[ \t]*)?)?([a-z_]+)(?:[ \t]+([A-Za-z0-9-]*\d[A-Za-z0-9-]*))?[^\n]*", re.IGNORECASE)
+
+
 def plural_make(name: str) -> str:
     return name if name.endswith("s") else name + "s"
 
@@ -324,6 +350,7 @@ class AgentEngine:
         # they would have stopped; a turn it leaves empty is silent unless silent_fallback. The tools still run: the facts come from the stock and the bookings.
         self.model_only = False
         self.silent_fallback = True
+        self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.prefetch_on = False                         # dialogue.prefetch (see prefetch); app.py sets it from config
         self.prefetched = 0
@@ -483,6 +510,12 @@ class AgentEngine:
             yield TurnResult(line, dbg, False)
             return
         decision = None if mo else self._fast_decide(s, text)
+        if mo and self.one_call:
+            decision = yield from self._one_call(s, text, dbg, t0)
+            if decision is None:
+                return                                                     # answered in the one call
+            if decision.get("again"):
+                decision = None                                            # no usable action from it: decided the usual way
         bridge = ""
         if decision is None and predecided is not None:
             try:
@@ -1289,6 +1322,152 @@ class AgentEngine:
             tool = m.group(1) if m else "none"
         car = re.search(r"\b[A-Z]{2}-\d{2,4}\b", raw)
         return {"tool": tool, "car_id": car.group(0) if car else (data.get("args", {}) or {}).get("car_id") if data else None}
+
+    def _one_call_candidates(self, s: Session, text: str) -> list[tuple[str, dict, Session, dict]]:
+        """The lookups made before the model is asked, each on a copy of the call: (the action as the model writes it, the tool's arguments, the call as it
+        would be after it, the tool's result). The car in focus, a car picked from the list or named alone, a search the words describe, and "none"."""
+        words = ex.tokens_of(text)
+        wanted: list[tuple[str, dict]] = []
+        picked = ex.selection(text, s.shown)
+        if picked:
+            wanted.append(("get_car", {"car_id": picked}))
+        found, ids = self._code_hint(text)
+        if len(ids) == 1:
+            wanted.append(("get_car", {"car_id": ids[0]}))
+        if s.car:
+            wanted.append(("get_car", {"car_id": s.car}))
+        if found.get("make") or ex.search_filters(text, self.svc.inventory.vocabulary()) or ex.wants_listing(text) or _CHEAPER.search(" ".join(words)):
+            wanted.append(("search_cars", self._args_for(s, "search_cars", None, text)))
+        wanted.append(("none", {}))
+        out, seen = [], set()
+        for tool, args in wanted:
+            key = f"{tool} {args['car_id']}" if tool == "get_car" else tool
+            if key in seen:
+                continue
+            seen.add(key)
+            c = copy.deepcopy(s)
+            try:
+                res = self._run(c, tool, args, text, TurnDebug(state_before=c.state.value))
+            except Exception:  # noqa: BLE001 - a lookup that fails is simply not offered; the model can still name it (second call)
+                res = None
+            if res is not None:
+                out.append((key, args, c, res))
+        return out[:4]
+
+    def _one_call_prompt(self, s: Session, text: str, cands: list) -> str:
+        """Short: the time, the booking if one is under way, the last four lines, the caller's words, then each prepared action with its facts (each fact once)."""
+        tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
+        now = self.svc.clock().astimezone(tz)
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
+        booking = ""
+        if s.draft_slot or s.draft_name or s.draft_phone or s.read_back or s.state in (State.SLOT, State.CONTACT):
+            booking = (f"BOOKING UNDER WAY: car {s.car or '-'}, when {T.when_full(s.draft_slot) if s.draft_slot else '-'}, name {s.draft_name or '-'}, "
+                       f"phone {s.draft_phone or '-'}{', read back: waiting for yes/no' if s.read_back else ''}\n")
+        blocks, given = [], {PRICE_RULE, "Cars in this call (true facts you may use):"}
+        for key, args, c, res in cands:
+            if key == "none":
+                blocks.append("READY: ACTION none (a greeting, thanks, small talk, a question you cannot answer, or an answer from the conversation above)")
+                continue
+            car = self.svc.get_car(args["car_id"]) if key.startswith("get_car") else None
+            d = self.svc.details(car.stock_id) if car is not None else None
+            facts = self._car_facts(car, d) if car is not None and d is not None else list(res.get("facts", []))
+            facts = [f for f in facts if f not in given]
+            given.update(facts)
+            blocks.append(f"READY: ACTION {key}, FACTS:\n" + "\n".join(facts) if facts else f"READY: ACTION {key}, FACTS: as given above.")
+        return (f"NOW: {now:%A %d %B, %H:%M} (Dubai). Open every day. {PRICE_RULE}\n{booking}CONVERSATION:\n{convo}\nCUSTOMER (now): {text}\n\n"
+                + "\n\n".join(blocks) + f"\n\nOTHER ACTIONS (line 1 only): {ONE_CALL_OTHERS}")
+
+    def _one_call(self, s: Session, text: str, dbg: TurnDebug, t0: float):
+        """The action and the reply from one model call. Yields the reply's pieces as they come; returns None when the turn was answered, or the decision
+        for the usual second call when the model named an action whose facts were not prepared (or gave no action)."""
+        cands = self._one_call_candidates(s, text)
+        user = self._one_call_prompt(s, text, cands)
+        w = self.reply_writer
+        note = lambda x: setattr(dbg, "note", (dbg.note + "; " if dbg.note else "") + x)
+        note(f"one call: prompt {len(ONE_CALL_SYSTEM) + len(user)} characters, prepared {', '.join(c[0] for c in cands)}")
+        history_text = " ".join(t for _, t in s.history)
+        buf, hit, spoken, would_stop, facts = "", None, [], [], ""
+        stream = w.backend.lead_in_stream(ONE_CALL_SYSTEM, user, w.max_tokens + 20, w.temperature, w.deadline_s)
+
+        def take(sentence: str) -> str | None:
+            sentence = clean_draft(sentence)
+            if sentence:
+                bad = verify_sentence(sentence, text, "", facts, history_text)
+                if bad:
+                    would_stop.append(f"{sentence!r}: {'; '.join(bad)}")
+            return sentence or None
+
+        def adopt(said_so_far: list) -> None:
+            """The prepared lookup becomes the call's own (its list, its car, its state), once a word of the reply is said."""
+            if not said_so_far:
+                for f in dataclasses.fields(s):
+                    setattr(s, f.name, getattr(hit[2], f.name))
+
+        def choose(m) -> dict | None:
+            """The action line read: the prepared lookup it names becomes the call's state, or the decision for a second call."""
+            nonlocal hit, facts
+            tool, car_id = m.group(1).lower(), m.group(2)
+            key = f"{tool} {car_id}" if tool == "get_car" and car_id else tool
+            hit = next((c for c in cands if c[0].lower() == key.lower()), None)
+            if hit is None:
+                note(f"one call: {key} had no facts prepared, so it is looked up and written in a second call")
+                return {"tool": tool, "car_id": car_id.upper() if car_id else None, "via": "one-call"}
+            facts = user                                                   # every fact the model was given is one it may use
+            dbg.intent, dbg.via, dbg.tools = tool, "agent:one-call", list(dbg.tools) + [key]
+            return None
+
+        try:
+            for piece in stream:
+                buf += piece
+                if hit is None:
+                    if "\n" not in buf.lstrip() and len(buf) < 120:
+                        continue
+                    m = _ACTION_LINE.match(buf)
+                    if not m:
+                        stream.close()
+                        note("one call: no ACTION line, so the action was decided again in a second call")
+                        return {"again": True}
+                    decision = choose(m)
+                    if decision is not None:
+                        stream.close()
+                        return decision
+                    buf = buf[m.end():].lstrip()
+                while cut := split_point(buf, clauses=not spoken):
+                    sentence, buf = buf[:cut[0]], buf[cut[1]:]
+                    if (ok := take(sentence)):
+                        adopt(spoken)
+                        spoken.append(ok)
+                        yield ok
+        except Exception as e:  # noqa: BLE001 - the model failed: what was said stands; with nothing said, the usual second call
+            note(f"one call: backend {type(e).__name__}" + ("" if hit else ", so the action was decided again in a second call"))
+            if hit is None:
+                return {"again": True}
+        if hit is None:
+            m = _ACTION_LINE.match(buf)
+            if not m:
+                note("one call: no ACTION line, so the action was decided again in a second call")
+                return {"again": True}
+            decision = choose(m)
+            if decision is not None:
+                return decision
+            buf = buf[m.end():]
+        if buf.strip() and re.search(r"[.!?][\"')]*\s*$", buf) and (ok := take(buf)):
+            adopt(spoken)
+            spoken.append(ok)
+            yield ok
+        if not spoken:                                                     # it named a ready action and wrote nothing after it: written in a second call
+            note(f"one call: {hit[0]} named with no reply after it, so the reply is written in a second call")
+            tool, _, car_id = hit[0].partition(" ")
+            return {"tool": tool, "car_id": car_id or None, "via": "one-call"}
+        if would_stop:
+            note("model_only: said anyway; the checks would have stopped: " + " | ".join(would_stop))
+        reply = " ".join(spoken)
+        s.remember("customer", text)
+        s.remember("agent", reply)
+        dbg.draft, dbg.about, dbg.state_after = reply, s.focus, s.state.value
+        dbg.total_ms = (time.perf_counter() - t0) * 1000
+        yield TurnResult(reply, dbg, s.ended)
+        return None
 
     def _args_for(self, s: Session, tool: str, car_id: str | None, text: str) -> dict:
         """The tool's arguments, read from the customer's own words by code (the same extractors the state machine trusts)."""
