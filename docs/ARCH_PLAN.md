@@ -53,8 +53,37 @@ The regular-expression intent routing in front of the model (`_fast_decide`, `_F
 
 **What stays as it is**: hearing (Smart Turn, the background and first-turn gates, speak-up), barge-in and "what the caller heard", the caller-first start and silence clock, the call store and carry-on, eve and its fallbacks, the booking store, the site messages.
 
-**Steps** (one branch and pull request each, no step starts before the one before it has its numbers)
+**The cars come from the database, not from `data.js`** (the owner, 30 Oct: "when we go live, the data should be in a database. What if we have thousands of cars?")
 
+Today (INFERRED from the code):
+* The 24 demo cars and the showroom details are written in the website's `site/data.js`.
+* At start-up a worker copies the cars into an inventory (in-memory SQLite, or PostgreSQL when `DATABASE_URL` is set: `repos/pg_store.py`). The full spec sheets and showroom details are read into memory only (`site/details.py`, `svc.site.cars`).
+* The website reads `data.js` directly.
+* Several fields are not records at all: data.js works them out by rule for every car. "Accident-free" and "GCC specs" are set on every car; the service history comes from the owner count; the warranty from age and kilometres; the inspection score is computed.
+
+Target:
+* **One PostgreSQL database is the only source.** Cars, with every spec as a column (seats, power, body, fuel, transmission, drivetrain, consumption, boot, owners, features, blurb, colour, photos), the status (available, reserved, sold), branches (address, hours, contacts), bookings and reservations (already there), and calls (already there).
+* **A fact we do not hold is NULL and is said as "not recorded".** That covers accident history, service history and warranty, until a real source fills them; nothing is derived by rule.
+* **`floor_price`** (a negotiation floor) is unused under the fixed-price decision.
+* **The website reads an API** (`/api/cars` with filters, `/api/cars/{id}`, `/api/showroom`) instead of `data.js`. `data.js` becomes the demo seed, imported by a script.
+* **The voice tools read the database on every search:**
+  * the spec sheet comes from the database, not from memory;
+  * seats and "sporty" become SQL filters (today up to 200 cars are fetched and filtered in Python);
+  * nothing loads the whole stock;
+  * the status is read live, and locked again when a car is booked or reserved.
+* **Names as callers say them** ("LC300", "the Land Cruiser"): indexes on make, model, price, body, status and branch, plus a fuzzy name match (PostgreSQL's trigram index; INFERRED suitable).
+* **Whisper's hint list of makes and models** is built from the database, limited to what fits: the makes in stock first, then the models already named in the call.
+* **Who keeps it current** is the owner's question to AGMC: where does the real stock live today (a dealer management system, a spreadsheet)? The importer depends on the answer (UNKNOWN).
+
+Done when:
+* the website and the voice server run with no read of `data.js`;
+* the demo cars imported into the database give the same replay outcomes as today;
+* a load test with 5,000 generated cars records search, count and spec-sheet times, median and p99. A target for p99 is under 20 ms, so the data never shows in the 1 s budget (GUESS; measure);
+* the speech hint list stays within Whisper's limit.
+
+**Steps** (one branch and pull request each, no step starts before the one before it has its numbers; step 0 and step 1 are independent and may run side by side)
+
+0. *The database as the only source of cars* (above). It goes first because every tool the model will call reads it, so the tools are built once, on the real data layer. It does not wait for Bedrock: a database search is milliseconds against a model's hundreds (INFERRED), so it does not change which model wins.
 1. *Bedrock baseline* (needs a working key; costs money, asked first). List the models on Mantle. For each candidate, from this laptop and with the real prompt and tools: time to first token and to the first clause, median, p90 and worst over at least 100 requests; tool-call accuracy on the replay set; cost per turn. Pick at most three models to carry on.
 2. *The scoring set* (no model calls needed to build it): the owner's recorded calls (`logs/audio_dump/*_in.txt`) plus written cases for each kind of question above: "Do you have a Tesla?", "Can you do 60,000?", "Is it accident-free?", "What's your warranty?", "Who won the match?", "Is a hybrid worth it?", a booking, a reschedule, an interruption.
 3. *The new path behind a switch* (`dialogue.mode: conversational`): one call per turn with tools, streamed sentence by sentence to the voice, the guards, the watchdog bridge, the fallback.
