@@ -89,7 +89,7 @@ def main() -> int:
                         smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs, default_mode="handsfree" if a.hands_free else "tap", half_duplex=a.mute_while_speaking, barge_in=cfg.voice.barge_in and not a.no_barge_in)
     import os
 
-    state_url = a.state_url or os.environ.get("STATE_URL") or os.environ.get("DATABASE_URL") or cfg.app.database_url
+    state_url = shared_state_url(a.state_url, os.environ, cfg.app.database_url)
     if state_url:
         from ..shared.state import CallStore, WorkerRegistry, open_store
 
@@ -114,6 +114,13 @@ def main() -> int:
     server = DrainingServer(uvicorn.Config(create_server(state, origins), host=a.host, port=a.port, log_level="warning"), state)
     server.run()
     return 0
+
+
+def shared_state_url(arg: str, environ, config_url: str) -> str:
+    """Where workers share call state: --state-url, STATE_URL, else the database when it is PostgreSQL. A SQLite stock database
+    (sqlite:///stock.db) is one machine's file, not a place for workers to share calls: "" (each worker keeps its own calls)."""
+    db = environ.get("DATABASE_URL") or config_url or ""
+    return arg or environ.get("STATE_URL") or (db if db.startswith(("postgresql://", "postgres://")) else "")
 
 
 if __name__ == "__main__":

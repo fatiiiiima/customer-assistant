@@ -71,6 +71,15 @@ def test_a_csv_with_messy_values_is_imported_and_a_bad_row_is_skipped_with_its_r
     assert (benz.make, benz.model, benz.body_type) == ("Mercedes", "C 300", BodyType.SEDAN)
 
 
+def test_with_a_trim_column_the_model_column_is_kept_whole(tmp_path):
+    """"Patrol" + "LE Platinum" is a Patrol (the caller says "Patrol"); without a trim column "Land Cruiser GXR" is cut to "Land Cruiser"."""
+    inv = repo()
+    import_file(inv, write(tmp_path, "s.csv", "Ref,Make,Model,Trim,Year,Price,KM,Body\nA,Nissan,Patrol,LE Platinum,2020,1,1,SUV\nB,Lexus,LX 600,Signature,2023,1,1,SUV\n"
+                                              "C,Toyota,Land Cruiser GXR,,2020,1,1,SUV\n"), BR)
+    assert [inv.get(x).model for x in "ABC"] == ["Patrol", "LX 600", "Land Cruiser"]
+    assert inv.details("A").full_model == "Patrol LE Platinum" and inv.details("C").full_model == "Land Cruiser GXR"
+
+
 def test_a_list_without_a_required_column_writes_nothing(tmp_path):
     inv = repo()
     rep = import_file(inv, write(tmp_path, "stock.csv", "Ref,Brand,Model,Year,Price\nA,Toyota,Camry,2020,70000\n"), BR)
@@ -274,3 +283,31 @@ def test_site_cars_js_gives_the_pages_window_cars_and_follows_the_stock(client):
     inv.mark_status("X-3", CarStatus.SOLD)                               # sold on the phone: the page's next load no longer shows it
     r2 = c.get("/api/site-cars.js", headers={"If-None-Match": r.headers["etag"]})
     assert r2.status_code == 200 and r2.text.count('"id"') == 1
+
+
+def test_a_sqlite_stock_database_is_not_used_to_share_calls_between_workers():
+    from dealer_core.server.__main__ import shared_state_url
+
+    assert shared_state_url("", {"DATABASE_URL": "sqlite:///data/stock.db"}, "") == ""
+    assert shared_state_url("", {"DATABASE_URL": "postgresql://u@h/db"}, "") == "postgresql://u@h/db"
+    assert shared_state_url("", {"STATE_URL": "redis://r", "DATABASE_URL": "sqlite:///x.db"}, "") == "redis://r"
+    assert shared_state_url("redis://a", {}, "postgresql://u@h/db") == "redis://a"
+
+
+def test_does_it_come_with_a_warranty_is_a_question_about_the_car_not_a_visit():
+    """30 Oct, a call to a worker on the stock database: "Does it come with a warranty?" got "Sure! What day would you like to come in?"."""
+    from .test_live_call_fixes import said
+    from .test_scale import agent
+
+    for asked, expect in (("does it come with a warranty", "warranty of 12 months or 20,000 kilometres"), ("does it come with a sunroof", "sunroof"),
+                          ("does it come with a reverse camera", "camera")):
+        e, b = agent(None)
+        e.svc.inventory.put_details(CarDetails("S1042", features=("Sunroof", "Reverse camera"), warranty="12 months / 20,000 km"))
+        s = e.new_session()
+        said(e, s, "tell me about the Land Cruiser")
+        r = said(e, s, asked)
+        assert r.debug.intent == "get_car" and expect in r.reply.lower(), (asked, r.reply)
+    e, b = agent(None)
+    s = e.new_session()
+    said(e, s, "tell me about the Land Cruiser")
+    assert said(e, s, "can I come and see it tomorrow").debug.intent == "prepare_booking"            # a visit is still a visit

@@ -188,7 +188,8 @@ def to_record(row: dict, headings: dict[str, str], branches: Branches) -> tuple[
         raise RowError(f"floor price {v.get('floor_price')!r} is above the price")
     make = str(v["make"]).strip()
     make = MAKE.get(make.lower(), make)
-    full = " ".join(x for x in (str(v["model"]).strip(), _text(v.get("trim")) or "") if x)
+    model, trim = str(v["model"]).strip(), _text(v.get("trim"))
+    full = f"{model} {trim}" if trim else model
     status_text = _text(v.get("status"))
     status = STATUS_WORDS.get(status_text.lower()) if status_text else CarStatus.AVAILABLE
     if status is None:
@@ -197,7 +198,7 @@ def to_record(row: dict, headings: dict[str, str], branches: Branches) -> tuple[
     fuel = (_text(v.get("fuel")) or "").lower()
     gearbox = _text(v.get("transmission"))
     service = _text(v.get("service"))
-    car = Car(stock_id=sid, vin=_text(v.get("vin")) or "", make=make, model=base_model(full), year=year, km=km, price=price, floor_price=floor,
+    car = Car(stock_id=sid, vin=_text(v.get("vin")) or "", make=make, model=model if trim else base_model(model), year=year, km=km, price=price, floor_price=floor,
               status=status, branch_id=branches.find(v.get("branch")), body_type=body, fuel=fuel, transmission=(gearbox or "").lower(),
               color=_plain_colour(colour, hex_code), regional_spec=_text(v.get("spec")),
               service_history=_yes_no(service), image_urls=_list(v.get("images")))
