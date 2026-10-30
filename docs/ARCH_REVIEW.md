@@ -1461,3 +1461,27 @@ Compatibility with Bedrock (UNKNOWN until run): the client sends three fields on
 Noticed during the capture, not followed up: in one of two local runs, "can I speak to someone" (after "the BMW M3") was answered as `get_car` by the code's rules instead of a handoff.
 
 Tests: `test_bedrock_speed.py` (5, against a fake server; nothing leaves the machine). `python -m pytest tests/unit`: 1,448 passed, 40 skipped.
+
+## 54. Bedrock speed test results (30 Oct, run by the owner from this M3 Pro, `us-east-1`)
+
+MEASURED with `scripts/bedrock_speed.py run`, raw figures in `benchmarks/results/bedrock_speed_2026-10-30.json` (ignored by git). Calls were made one at a time, 10 of each kind per model. Times are from this laptop and include the trip to `us-east-1`.
+
+| model | network (GET /models) p50 | decide p50 / p90 | right action | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `qwen.qwen3-next-80b-a3b-instruct` | 368 ms | 2,574 / 7,799 ms | 5/6 | 3,269 / 6,254 ms |
+| `mistral.ministral-3-8b-instruct` | 378 ms | 530 / 657 ms | 6/6 | no text (10 empty replies, no error) |
+| `anthropic.claude-haiku-4-5` | 561 ms | not run: "does not support the '/v1/chat/completions' API" on this endpoint | | |
+| `google.gemma-4-26b-a4b` | 346 ms | not run: "isn't supported on this route" | | |
+
+* **The network alone is over budget.** A plain `GET /models` takes 346 to 378 ms at p50, with one-off waits of 1.2 to 1.7 s. ARCH_PLAN gives the model 300 ms, and the trip to `us-east-1` uses more than that before the model starts. No model in this region can meet it from here.
+* **Ministral 3 8B** is the only one near usable:
+  * decisions in 530 ms at p50 and 657 ms at p90;
+  * all 6 labelled actions right;
+  * it is told to pick from a list, and both that and the reply prefill were accepted (no HTTP 400).
+  * But it wrote nothing for the follow-up question. The stream ended with no text and no error. INFERRED: it does not continue a reply that ends with the assistant's own message; it treats that reply as finished. Not confirmed; one cheap call in `plain` mode would settle it.
+* **Qwen3-Next 80B** is too slow for a live call: 2.6 s at p50, 7.8 s at p90, and very uneven (624 ms to 9.3 s). Its follow-up questions read well.
+* **Haiku and Gemma** need a different Bedrock API from the OpenAI-style one the agent's client speaks. Testing them means adding a second client (for Haiku, Bedrock's Converse or Messages API). UNKNOWN whether they would be faster; they pay the same network trip.
+* Only the first 10 of the 17 captured decisions were sent, so the last conversation (greeting, "something sporty", the M3, "speak to someone") was not covered.
+* What it means for the 1 s rule, INFERRED: in the captured conversations the model decided 2 turns out of 17; the code decided the rest. On those 2, a Bedrock decision of about 0.5 to 0.7 s plus speech recognition and the first sound of the voice would land around 1 s or over. The agent's "Let me check." bridge (`bridge_after_ms`) could cover that wait, at the cost of a filler on those turns. The local model server stays the default.
+
+Token use (non-streamed calls, reported by Bedrock): about 7,700 to 7,900 input and under 60 output tokens per model.
