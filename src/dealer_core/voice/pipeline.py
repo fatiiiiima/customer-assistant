@@ -208,7 +208,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     brain = DealerBrain(app.engine, speak_opening=speak_opening, on_turn=after_turn, on_heard=on_heard, on_say=on_say,
                         level_of=lambda: stt.last_level, quiet_below=vcfg.end_call_min_rms,
                         speak_up=(vcfg.speak_up_below, vcfg.speak_up_suspect_below),
-                        background_below=vcfg.background_below if mic_gate is None else 0.0)     # hands-free only: in tap mode the caller chose to speak
+                        background_below=vcfg.background_below if mic_gate is None else 0.0,     # hands-free only: in tap mode the caller chose to speak
+                        first_turn_below=vcfg.first_turn_below if mic_gate is None else 0.0)
     brain.vad_stop_secs = stop_now
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)

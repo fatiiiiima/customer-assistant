@@ -31,7 +31,7 @@ def _louder(a: float | None, b: float | None) -> float | None:
 
 class DealerBrain(FrameProcessor):
     def __init__(self, engine: DialogueEngine, *, speak_opening: bool = True, on_turn=None, on_heard=None, on_say=None, level_of=None, quiet_below: float = 0.0, speak_up: tuple[float, float] = (0.0, 0.0),
-                 background_below: float = 0.0, **kwargs) -> None:
+                 background_below: float = 0.0, first_turn_below: float = 0.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self.engine, self.session = engine, engine.new_session()
         self._speak_opening, self._on_turn = speak_opening, on_turn
@@ -42,6 +42,8 @@ class DealerBrain(FrameProcessor):
         self.spoken_up = 0                              # turns answered with "speak up" (for tests and the log)
         self._background_below = background_below      # hands-free: a turn quieter than this share of the caller's usual level is someone else in the room (0 = off)
         self._caller_levels: list[float] = []           # levels of the last turns acted on (the caller's own voice is the loudest of them)
+        self._first_turn_below = first_turn_below      # hands-free: before any turn is acted on, a turn quieter than this is the room (0 = off)
+        self._room_in_a_row = 0                         # turns ignored by that bar in a row: the third gets a "speak up", so a caller who is really that quiet is not ignored for ever
         self.background = 0                             # turns ignored as background voices (for tests and the log)
         self.turn_log: list[dict] = []                 # per turn: timings and flags only (no transcripts, no phone numbers)
         self._busy = asyncio.Lock()
@@ -162,10 +164,13 @@ class DealerBrain(FrameProcessor):
     def _is_background(self, level: float | None) -> bool:
         """A turn under `background_below` of the loudest of the last 8 turns acted on is someone else talking near the microphone. The loudest, not the
         median: in the owner's 30 Oct call the room was heard before the caller, and those turns must not set the bar. The owner's own turns in recorded
-        calls: 0.10 to 0.27, the quietest 0.37 of the loudest (section 43)."""
-        if not self._background_below or level is None or not self._caller_levels:
+        calls: 0.10 to 0.27, the quietest 0.37 of the loudest (section 43). Before any turn is acted on there is nothing to compare with, so a turn under
+        `first_turn_below` is the room (the owner's office call, 30 Oct: noise turns 0.024-0.040 before the caller spoke at 0.46; section 46)."""
+        if level is None:
             return False
-        return level < self._background_below * max(self._caller_levels)
+        if not self._caller_levels:
+            return bool(self._first_turn_below and level < self._first_turn_below)
+        return bool(self._background_below and level < self._background_below * max(self._caller_levels))
 
     def _keep_heard_cars(self, heard: str) -> None:
         shown = self.session.shown
@@ -190,8 +195,20 @@ class DealerBrain(FrameProcessor):
                     text, level = f"{carried} {text}".strip(), _louder(level, carried_level)
             if self._is_background(level):              # 30 Oct, the owner's hands-free call: voices across the room were answered, or asked to speak up
                 self.background += 1                    # not answered, not remembered
-                logger.debug(f"brain: a turn at level {level:.3f}, under {self._background_below:.0%} of the caller's usual level, ignored as background")
+                if self._caller_levels:
+                    logger.debug(f"brain: a turn at level {level:.3f}, under {self._background_below:.0%} of the caller's usual level, ignored as background")
+                    return
+                self._room_in_a_row += 1
+                logger.debug(f"brain: a turn at level {level:.3f} before the caller has been heard, under {self._first_turn_below}, ignored as the room")
+                if self._room_in_a_row < 3:
+                    return
+                self._room_in_a_row = 0                 # three in a row: perhaps a caller far from the microphone, so ask once (the words are still not used)
+                self.spoken_up += 1
+                if self._on_say:
+                    self._on_say(SPEAK_UP)
+                await self.push_frame(TTSSpeakFrame(SPEAK_UP, append_to_context=False))
                 return
+            self._room_in_a_row = 0
             if self._asked_to_speak_up < 2 and too_quiet_to_trust(text, level, *self._speak_up):
                 self._asked_to_speak_up += 1            # the words are not acted on and not remembered: they are probably not what was said
                 self.spoken_up += 1
