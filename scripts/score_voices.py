@@ -6,6 +6,7 @@ starts, how long it takes to make against how long it is, and the pauses inside 
 
 Kokoro: each sentence cut into pieces and made piece by piece, as voice/kokoro_tts.py does live (B, openings ready in advance), the pieces' audio played back to back.
 A server voice: the whole sentence in one request (soniqo's server does not stream Magpie), so its first sound is when the whole sentence is ready.
+A streaming server (`--stream`): the first sound is the first chunk of audio to arrive; first heard adds the quiet at the start of the audio (section 41).
 Pauses: silent stretches of 120 ms or more inside the sentence. The audio is written to logs/voice_samples/compare/ to listen to.
 """
 from __future__ import annotations
@@ -47,6 +48,16 @@ def pauses(x: np.ndarray, rate: int, min_ms: int = 120) -> list[int]:
                 out.append(run * 10)
             run = 0
     return out
+
+
+def lead_ms(path: Path, level: float = 0.02) -> float:
+    """The quiet at the start of a saved sentence, before its first sample at `level` or louder: first heard = first sound + this (29 Oct: Pocket's "eve"
+    sent its first audio in 35 ms, but the audio began with about 0.4 s of quiet)."""
+    with wave.open(str(path)) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        rate = w.getframerate()
+    loud = np.flatnonzero(np.abs(x) >= level)
+    return loud[0] / rate * 1000 if len(loud) else 0.0
 
 
 def save(path: Path, x: np.ndarray, rate: int) -> None:
@@ -106,6 +117,34 @@ def server_rows(name: str, url: str, voice: str, out: Path) -> list[dict]:
     return rows
 
 
+def stream_rows(name: str, url: str, model: str, voice: str, out: Path, rate: int = 24000) -> list[dict]:
+    """A streaming speech server (soniqo's for Pocket-TTS, scripts/chatterbox_server.py for Chatterbox): the first sound is the first chunk of audio."""
+    import httpx
+
+    from dealer_core.voice.tts import pronounce
+
+    client = httpx.Client(timeout=120)
+    body = lambda text: {"model": model, "input": text, "voice": voice, "stream": True, "response_format": "pcm"}
+    with client.stream("POST", f"{url}/audio/speech", json=body("Warming up.")) as r:
+        r.raise_for_status()
+        for _ in r.iter_bytes():
+            pass
+    rows = []
+    for i, text in enumerate(SENTENCES):
+        t0, first, data = time.perf_counter(), None, b""
+        with client.stream("POST", f"{url}/audio/speech", json=body(pronounce(text))) as r:
+            r.raise_for_status()
+            for part in r.iter_bytes():
+                if part and first is None:
+                    first = (time.perf_counter() - t0) * 1000
+                data += part
+        made = (time.perf_counter() - t0) * 1000
+        audio = np.frombuffer(data[: len(data) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768
+        save(out / f"{i:02d}_{name}.wav", audio, rate)
+        rows.append({"first": first or made, "made": made, "length": len(audio) / rate * 1000, "pauses": pauses(audio, rate)})
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", action="append", default=[], help="name=url of a speech server, e.g. magpie=http://127.0.0.1:8020/v1 (repeatable)")
@@ -113,6 +152,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=ROOT / "logs" / "voice_samples" / "compare")
     ap.add_argument("--trim", type=int, default=40, help="also Kokoro with the joins trimmed to about this many ms (0 = not)")
     ap.add_argument("--texts", type=Path, help="write the sentences as the voice is given them (numbers in words) to this JSON file, for another program, and stop")
+    ap.add_argument("--stream", action="append", default=[], help="name=url=model=voice of a streaming speech server, e.g. pocket=http://127.0.0.1:8020/v1=pocket=alba (repeatable)")
     ap.add_argument("--extra", action="append", default=[], help="name=rows.json from another program (scripts/score_chatterbox.py), shown in the same table")
     a = ap.parse_args()
     if a.texts:
@@ -124,6 +164,9 @@ def main() -> int:
     results = {"kokoro": kokoro_rows(a.out)}
     if a.trim:
         results["kokoro-trim"] = kokoro_rows(a.out, a.trim, "kokoro-trim")
+    for spec in a.stream:
+        name, url, model, voice = spec.split("=", 3)
+        results[name] = stream_rows(name, url.rstrip("/"), model, voice, a.out)
     for spec in a.extra:
         import json
 
@@ -133,12 +176,14 @@ def main() -> int:
         name, url = spec.split("=", 1)
         results[name] = server_rows(name, url.rstrip("/"), a.voice, a.out)
     print(f"{len(SENTENCES)} sentences; audio in {a.out.relative_to(ROOT)}\n")
-    print(f"{'voice':10s} {'first sound: median / worst':>28s} {'made in (x its length)':>24s} {'pauses >= 120 ms':>18s} {'longest pause':>14s}")
+    print(f"{'voice':10s} {'first sound: median / worst':>28s} {'first heard: median / worst':>28s} {'made in (x its length)':>24s} {'pauses >= 120 ms':>18s} {'longest pause':>14s}")
     for name, rows in results.items():
         firsts = [r["first"] for r in rows]
+        heard = [r["first"] + lead_ms(a.out / f"{i:02d}_{name}.wav") for i, r in enumerate(rows)]
         ratio = [r["made"] / r["length"] for r in rows if r["length"]]
         ps = [p for r in rows for p in r["pauses"]]
-        print(f"{name:10s} {statistics.median(firsts):13.0f} / {max(firsts):5.0f} ms {statistics.median(ratio):20.2f} x {len(ps):12d} in {len(rows)} {max(ps) if ps else 0:10d} ms")
+        print(f"{name:10s} {statistics.median(firsts):13.0f} / {max(firsts):5.0f} ms {statistics.median(heard):17.0f} / {max(heard):5.0f} ms "
+              f"{statistics.median(ratio):20.2f} x {len(ps):12d} in {len(rows)} {max(ps) if ps else 0:10d} ms")
     return 0
 
 

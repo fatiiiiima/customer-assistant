@@ -110,7 +110,8 @@ llm:
 
 # ---- Text-to-speech (swappable) -----------------------------------------
 tts:
-  backend: kokoro               # piper | kokoro. OWNER CHOICE (26 Oct 2026): Kokoro-82M (Apache-2.0), voice Sarah; Piper Joe is the fallback (--tts piper)
+  backend: pocket               # pocket | chatterbox | kokoro | piper. OWNER CHOICE (30 Oct 2026): Pocket-TTS (Kyutai, CC-BY-4.0), voice eve (scripts/pocket_server.py, port 8040);
+                                # alba from the speech toolkit's server (speech-server --port 8020) when it fails; Kokoro only when both do. Was Kokoro (26 Oct)
   kokoro_voice: sarah           # Kokoro voice (voice/kokoro_tts.py VOICES), US female, "sounds professional"
   voice: joe                    # Piper voice folder (see voice/tts.py). OWNER CHOICE (23 Oct 2026): Joe, US male, CC0 (shippable). Was amy_medium (licence unconfirmed)
   speaker: 0                    # speaker id inside the voice (amy has one; libritts_r has 904)

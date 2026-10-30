@@ -108,3 +108,35 @@ def test_phrases_made_ahead_of_time_ask_for_low_priority_and_live_sentences_do_n
     list(v._remote("Shall I book it?", background=True))
     list(v.stream("There's the Macan."))
     assert server.asked[0]["priority"] == "low" and "priority" not in server.asked[1]
+
+
+def test_eve_is_asked_for_by_name():
+    """Section 42: Pocket-TTS's servers take the voice by name (eve from scripts/pocket_server.py, alba from the speech toolkit's)."""
+    server = Server([pcm([1, 2])])
+    list(StreamingVoice("http://x/v1", Kokoro(), model="pocket", voice="eve", client=server).stream("Hello there."))
+    assert server.asked[0]["voice"] == "eve" and server.asked[0]["model"] == "pocket"
+
+
+def test_eve_down_and_alba_says_the_sentence_not_kokoro():
+    """Owner, 30 Oct: "make alba the fallback cause kokoro sucks"."""
+    k, alba_server = Kokoro(), Server([pcm([7, 8])])
+    alba = StreamingVoice("http://alba/v1", k, model="pocket", voice="alba", client=alba_server)
+    eve = StreamingVoice("http://eve/v1", alba, model="pocket", voice="eve", client=Server(fail=True))
+    out = np.concatenate(list(eve.stream("Which one would you like?")))
+    assert np.allclose(out * 32768, [7, 8]) and alba_server.asked[0]["voice"] == "alba" and k.said == [] and eve.fallbacks == 1
+
+
+def test_both_pocket_servers_down_and_kokoro_still_speaks():
+    k = Kokoro()
+    alba = StreamingVoice("http://alba/v1", k, model="pocket", voice="alba", client=Server(fail=True))
+    eve = StreamingVoice("http://eve/v1", alba, model="pocket", voice="eve", client=Server(fail=True))
+    assert len(list(eve.stream("Which one would you like?"))) == 1 and k.said == ["Which one would you like?"]
+    eve.warm_up()                                                              # a worker with neither server still starts
+
+
+def test_pocket_is_the_default_voice():
+    from dealer_core.config import load_config
+
+    t = load_config(environ={}).tts
+    assert t.backend == "pocket" and t.pocket_voice == "eve" and t.pocket_fallback_voice == "alba"
+    assert t.pocket_url != t.pocket_fallback_url and 0 < t.pocket_first_timeout_s <= 1.0

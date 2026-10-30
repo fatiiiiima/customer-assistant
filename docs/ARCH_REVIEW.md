@@ -930,3 +930,119 @@ MEASURED, M3 Pro, the same synthetic five-turn call through a test worker (hands
 | Chatterbox, code (no language model) | **0.46 to 0.47 s** | 1.14 s |
 
 Chatterbox alone starts its audio in about 0.46 s, steadily. At the prefix level the language model writes a follow-up on every turn on the same GPU at the same moment, and both slow down (the voice wait about doubles). Kokoro runs on the CPU and is not affected. So on this Mac: Chatterbox costs about 0.45 s a turn against Kokoro at the code level and about 1 s at the prefix level; on separate GPUs (the deployment) the two would not compete (UNKNOWN until measured). Not measured: several calls at once (one GPU, one sentence at a time). Tests: `test_remote_tts.py` (7). `python -m pytest tests/unit`: 1,324 passed, 40 skipped.
+
+## 40. Pocket-TTS against trimmed Kokoro and Chatterbox Turbo, measured on the Mac (29 Oct, the owner's request)
+
+Branch `voice/pocket` (on top of `voice/chatterbox`, PR 33). Pocket-TTS (Kyutai, 100M, CC-BY-4.0) came out best of the open voices in the tts-bench listening votes we could run on a Mac, and is made for streaming on a CPU. It runs through the speech toolkit's server the owner installed (`brew install speech`; `speech-server --port 8020`), which uses `aufklarer/Pocket-TTS-100M-CoreML-INT8` (313 MB, downloaded on first use) and streams it (`"stream": true, "response_format": "pcm"`, 24 kHz). That build has one voice, "alba", and takes up to 256 tokens a request.
+
+`scripts/score_voices.py --stream name=url=model=voice` (new) measures any streaming speech server the way the worker hears it: the first sound is the first chunk of audio to arrive. Chatterbox Turbo was measured through its own server (`scripts/chatterbox_server.py`, the worker's path since section 39).
+
+MEASURED, M3 Pro, the same 18 sentences as section 38:
+
+| | first sound, median / worst | made in (x its length) | pauses of 120 ms+ in 18 sentences | longest |
+|---|---|---|---|---|
+| Kokoro, joins trimmed | 0 / 365 ms | 0.18 x | 30 | 560 ms |
+| **Pocket-TTS (alba)** | **52 / 59 ms** | 0.20 x | **24** | 510 ms |
+| Chatterbox Turbo, its server | 448 / 457 ms | 0.54 x | 30 | 360 ms |
+
+With the GPU kept fully busy (`scripts/gpu_load.py`: 4096-square matrix products back to back in MLX, harder than the language model writing a reply), the same 18 sentences:
+
+| | first sound, median / worst | made in |
+|---|---|---|
+| Pocket-TTS | 66 / 72 ms | 0.27 x |
+| Chatterbox Turbo | 7,985 / 11,336 ms | 9.80 x |
+
+Whisper small.en heard the samples back (an intelligibility check, not a quality score; `as-read` scoring as section 36): 5.0% of words wrong for Pocket, 7.5% for trimmed Kokoro, 7.7% for Chatterbox. Most of the errors were "dirhams" and "Macan", for all three voices. The leading quiet before speech had a median of 66 ms for Pocket, 39 ms for Kokoro and 111 ms for Chatterbox.
+
+What this says (INFERRED from the tables):
+
+* Pocket starts in about 50 ms on every sentence, so it would need no opening-first trick (section 33) and no cache.
+* Its pauses are the fewest of the three.
+* It hardly slows when the GPU is busy, so it removes the contention that slowed Chatterbox in a call (section 39: about 1.04 s of voice wait at the prefix level).
+
+Not measured:
+
+* How it sounds against Chatterbox (samples of sentences 00, 05 and 09 for all three in `logs/voice_samples/for_boss/`, local).
+* A real recorded call with Pocket (not wired into the worker).
+* Several calls at once.
+* Whether the CoreML build runs on the Neural Engine or the CPU (UNKNOWN; the GPU test above says it is not held back by the GPU).
+* Other voices: this build has only "alba". Kyutai's own release can copy a voice, but it is not in this server.
+
+`python -m pytest tests/unit`: 1,324 passed, 40 skipped.
+
+## 41. Pocket-TTS with the voice "eve", through Kyutai's own package (29 Oct, the owner's request)
+
+Same branch as section 40. The speech toolkit's build has only "alba". Kyutai's own release has 27 built-in voices. The owner chose "eve" to try.
+
+What was installed (about 375 MB downloaded, as quoted to the owner beforehand):
+* A separate environment, `~/pocketenv` (Python 3.12, `pocket-tts` 4.0.1 and PyTorch 2.15, 778 MB on disk). The project's environment is untouched.
+* Kyutai's English model and the eve and alba voices, from `kyutai/pocket-tts-without-voice-cloning` (not gated; CC-BY-4.0). That is 219 MB of model plus 6 MB per voice.
+
+`scripts/pocket_server.py` (new) serves it with the same API as the Chatterbox server, on port 8040, with eve as the default voice. It runs on the CPU through PyTorch, not the CoreML build of section 40.
+
+First measured, eve sent its first audio in 35 ms. But Whisper's check showed each sentence began with about 0.4 s of quiet (median 416 ms), so the caller would have heard the first word about 0.45 s after asking. Two fixes:
+* The server now drops the quiet before the first sound, all but 30 ms (`from_first_sound`; `--keep-lead` turns this off).
+* `scripts/score_voices.py` now shows **first heard** for every voice: the first sound plus the quiet at the start of the audio.
+
+Tests: `test_voice_compare.py` (4).
+
+MEASURED, M3 Pro, the same 18 sentences:
+
+| | first sound, median / worst | **first heard**, median / worst | made in (x its length) | pauses of 120 ms+ | longest |
+|---|---|---|---|---|---|
+| Kokoro, joins trimmed | 0 / 342 ms | 40 / 375 ms | 0.17 x | 30 | 560 ms |
+| Pocket alba (speech toolkit, CoreML) | 51 / 57 ms | 116 / 137 ms | 0.20 x | 24 | 510 ms |
+| **Pocket eve (Kyutai's package, quiet dropped)** | 78 / 89 ms | **98 / 119 ms** | 0.14 x | 30 | 900 ms |
+| Chatterbox Turbo, streamed every 1.0 s | 450 / 463 ms | 553 / 617 ms | 0.55 x | 30 | 610 ms |
+
+With the GPU kept fully busy (`scripts/gpu_load.py`), eve's first sound had a median of 122 ms (worst 155 ms), made in 0.21 x. Whisper small.en heard eve's samples with 4.1% of words wrong (alba through the same package: 4.7%).
+
+Eve's long pauses all fall in the four longest sentences, the lists of prices (sentences 1, 4, 16 and 17). Two causes:
+* Its pauses at the commas in a list are longer.
+* The package cuts any text of more than 50 tokens into pieces.
+
+Made in one piece (`--max-tokens 200`), the longest pause in those sentences fell from 840 to 550 ms. Pauses overall went from 28 to 26. That is one run each, and the model samples at random, so it is INFERRED, not settled.
+
+Not measured:
+* How eve sounds against Chatterbox and alba (samples of sentences 00, 05, 09 and 17 in `logs/voice_samples/for_boss/`, local).
+* A real call (Pocket is not wired into the worker).
+* Several calls at once: the package is not thread-safe, so the server makes one sentence at a time, and a second call would mean a second model (about 0.5 GB of memory, INFERRED).
+
+`python -m pytest tests/unit`: 1,328 passed, 40 skipped.
+
+## 42. Pocket-TTS's eve as the worker's voice, alba the fallback (30 Oct, the owner: "wire in eve, make alba the fallback cause kokoro sucks")
+
+Same branch as sections 40 and 41.
+
+* **`tts.backend: pocket`**, now the default (config.py and config/default.yaml; `--tts pocket`). The voice is three `StreamingVoice`s in a chain:
+  * eve from `scripts/pocket_server.py` (port 8040, Kyutai's package);
+  * alba from the speech toolkit's server (port 8020, CoreML), when eve fails;
+  * Kokoro, only when both fail.
+
+  The two Pocket servers are separate programs on separate runtimes, so one crashing leaves the other. `tts.pocket_first_timeout_s` (1 s): no audio by then and the next voice says the sentence. Eve's worst first sound with the GPU busy was 155 ms (section 41).
+* **`StreamingVoice`** takes a `voice` and sends it by name. Its fallback can be another `StreamingVoice`. Each one warms its fallback at start, and the log names the voice that took over. Eve's versions of the phrases said all the time are made in the background as before. Kokoro's are no longer made, since it speaks only if both servers are down.
+* **How to run it:** docs/VOICE.md, "The voice".
+
+Tests: `test_remote_tts.py`, 4 new:
+* eve asked for by name;
+* eve down, so alba says the sentence and Kokoro does not;
+* both down, so Kokoro still speaks and the worker still starts;
+* pocket is the default.
+
+MEASURED, M3 Pro, the five-turn synthetic call of section 39 through a test worker (hands-free, recorded, `scripts/call_latency.py`):
+
+| voice, quality level | voice wait (said -> first audio), median / worst | total wait, median / worst | sentences said by a fallback |
+|---|---|---|---|
+| Kokoro, joins trimmed, prefix (section 39) | 0.00 s | 0.70 s | |
+| Chatterbox, prefix (section 39) | 1.04 / 1.42 s | 1.75 s | |
+| **eve, code** | **0.08 / 0.09 s** | 0.73 / 0.78 s | 0 |
+| **eve, prefix** (the language model on the GPU at the same time) | **0.09 / 0.11 s** | 0.79 / 0.79 s | 0 |
+| eve's server stopped: alba, code | 0.05 / 0.06 s | 0.70 / 0.74 s | 10 of 10 by alba, 0 by Kokoro |
+
+Eve costs about 0.1 s a turn against Kokoro's ready-made openings, and it is not slowed by the language model. Chatterbox cost about 1 s a turn at the prefix level.
+
+Not measured:
+* Several calls at once: each Pocket server makes one sentence at a time. Eve makes speech in about 0.14 of the time it takes to say, so one server should keep up with a few calls (INFERRED, not measured).
+* The deployment, which has no Mac. Pocket runs on a CPU there, but the speech toolkit's alba build is Mac-only, so the fallback there would be alba from a second `pocket_server.py` (`--voice alba`).
+
+`python -m pytest tests/unit`: 1,332 passed, 40 skipped.

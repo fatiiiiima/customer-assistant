@@ -30,6 +30,16 @@ demo_voice.cmd                          (microphone + speaker; add --headset if 
 Plug in AC and prefer a **headset**. With the laptop speaker the microphone hears the agent, so while the agent speaks (and 0.5 s after) the microphone is
 ignored: you cannot interrupt it (no barge-in yet).
 
+## The voice: Pocket-TTS's eve (30 Oct 2026), alba as the fallback
+
+Start the two voice servers before the worker (Mac). Each runs as its own program.
+```
+~/pocketenv/bin/python scripts/pocket_server.py        # eve, port 8040 (Kyutai's pocket-tts, its own environment)
+speech-server --port 8020                              # alba, the fallback (the speech toolkit: brew install speech)
+```
+The worker uses them by default (`tts.backend: pocket`). If eve's server does not answer within 1 s, alba says that sentence. If both are down, Kokoro does,
+so a call never goes silent. To go back: `--tts kokoro` (or `chatterbox`). docs/ARCH_REVIEW.md sections 40 to 42.
+
 ## Latency (end of the caller's speech -> first audio they hear)
 Measured with `scripts/voice_offline_bench.py`, 6 scripted turns, real-time, iGPU language model, caller = synthetic clean voice (so STT is optimistic):
 
