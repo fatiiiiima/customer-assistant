@@ -645,6 +645,7 @@ class AgentEngine:
             else:
                 key = tool
             ahead = specs.get(key)
+            dbg.reply_ahead = ahead is not None
             for sp in specs.values():
                 if sp is not ahead:
                     sp.cancel()

@@ -255,6 +255,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs,
                                      early_start_secs=vcfg.early_start_secs if vcfg.speculate else 0.0)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
+        brain.end_check = lambda: endpointer.last_check_secs                                           # for the page's latency table (server/latency.py)
         if vcfg.smart_peek if smart_peek is None else smart_peek:
             from zoneinfo import ZoneInfo
 

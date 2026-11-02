@@ -27,6 +27,7 @@ from ..dialogue.states import State
 from ..voice.micgate import MicGate
 from ..voice.pipeline import STT_RATE, VoiceParts, build_pipeline
 from ..voice.status import StatusLine, TurnClock
+from .latency import detail_message, timing_message
 from .protocol import PortalSerializer
 
 # Said before the answer while it is being prepared: a quick first sound, not the answer (voice/status.py TurnClock.on_answer).
@@ -277,6 +278,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     brain_ref: dict = {}
 
     def on_turn(result) -> None:
+        emit(detail_message(result, turn["n"]))
         if not turn.get("said", True):                           # model_only test mode: show that the model gave nothing usable, instead of a silent gap
             emit({"type": "line", "who": "agent", "turn": turn["n"], "text": "(the model gave no usable reply)"})
         s = brain_ref["brain"].session
@@ -298,7 +300,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
                   "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
 
     def timed(total, parts_) -> None:
-        emit({"type": "timing", "seconds": round(total, 2)})
+        check = getattr(brain_ref.get("brain"), "end_check", lambda: 0.0)()          # how long Smart Turn kept this turn open (the clock starts after it)
+        emit(timing_message(total, parts_, check, turn["n"]))
         if state.metrics is not None:
             state.metrics.reply_time(total)
 

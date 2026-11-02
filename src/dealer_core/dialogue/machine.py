@@ -60,6 +60,7 @@ class TurnDebug:
     about: str = ""                    # what the call is about after this turn (Session.focus)
     focus: str = ""                    # how the caller's words were interpreted (focus.decide), for the trace
     draft: str = ""                    # EXPERIMENT: the model-written full reply that replaced the template (draft mode)
+    reply_ahead: bool | None = None    # voice.parallel: was the reply for the decided lookup already being written when the decision came (None = the parallel turn was not used)
 
 
 @dataclass

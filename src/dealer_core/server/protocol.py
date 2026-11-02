@@ -9,7 +9,8 @@ server  -> browser  binary: signed 16-bit PCM mono at the rate in "ready" (the v
                             {"type": "line", "who": "you" | "agent", "turn": 3, "text": "..."}   live transcript (agent lines come sentence by sentence)
                             {"type": "cars", "ids": ["AG-101", ...]}                              cars to show as cards
                             {"type": "booking", "car_id", "name", "phone", "date": "YYYY-MM-DD", "time": "HH:MM"}   the page books it in its own store
-                            {"type": "timing", "seconds": 1.4}                                      end of caller's speech -> first sound
+                            {"type": "timing", "seconds": 1.4, "turn": 3, "wait", "check", "hear", "reply", "voice"}   end of caller's speech -> first sound, and its steps (server/latency.py)
+                            {"type": "turn_detail", "turn": 3, "decision", "ahead", "tool", "words"}                  how the agent's turn was decided (server/latency.py)
                             {"type": "mic", "on": false, "reason": "turn"}                      tap-to-talk: your turn is over, the microphone is closed (tap to reply)
                             {"type": "stop"}                                                        the caller spoke over the agent: stop playing what is queued
                             {"type": "busy"} | {"type": "error", "message": "..."}                  then the server closes the socket

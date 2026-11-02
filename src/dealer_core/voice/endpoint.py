@@ -17,6 +17,8 @@ that much sooner. The cost is the wasted work at every pause that was not the en
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from loguru import logger
 from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState
@@ -55,6 +57,8 @@ class SmartEndpointer(FrameProcessor):
         self._holding = False                     # a stop was held back: the turn is still open
         self.held = 0                             # how many stops Smart Turn held back (for the status line / tests)
         self.last_stop: VADUserStoppedSpeakingFrame | None = None
+        self._stop_seen = 0.0                     # when the detector's latest stop reached here (monotonic)
+        self.last_check_secs = 0.0                # how long the turn was kept open after that stop (the Smart Turn check, and the wait for the fallback silence when it said "still going"): the page's latency table
 
     def _reset_early(self) -> None:
         self._peak, self._quiet_n = 0.0, 0
@@ -101,6 +105,7 @@ class SmartEndpointer(FrameProcessor):
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
             self.last_stop = frame
+            self._stop_seen = time.monotonic()
             state, _ = await self._analyzer.analyze_end_of_turn()
             if state is not EndOfTurnState.COMPLETE and self.peek is not None and self.is_answer is not None and len(self._turn_audio) > 3200:
                 self.peeked += 1
@@ -127,6 +132,7 @@ class SmartEndpointer(FrameProcessor):
                 self._turn_speech = 0.0
                 self._turn_audio.clear()
                 self._holding = False
+                self.last_check_secs = time.monotonic() - self._stop_seen
                 await self.push_frame(frame, direction)
             else:
                 self._holding = True
@@ -155,6 +161,7 @@ class SmartEndpointer(FrameProcessor):
                 self._turn_speech = 0.0
                 self._turn_audio.clear()
                 stop = self.last_stop
+                self.last_check_secs = time.monotonic() - self._stop_seen
                 await self.push_frame(VADUserStoppedSpeakingFrame(stop_secs=stop.stop_secs if stop else 0.0), direction)
         else:
             await self.push_frame(frame, direction)
