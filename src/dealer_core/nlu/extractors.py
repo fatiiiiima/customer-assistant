@@ -57,6 +57,13 @@ def spoken_form(model: str) -> str:
     return " ".join(tokens_of(model))
 
 
+def _same_words(said: str, model: str) -> bool:
+    """A fuzzy match of several words must hold word by word, not only as a string: 2 Nov, "any model, any budget" matched "model y" (the pair "model any" is 88% of it)
+    and the agent answered with a Tesla. A word of two letters or fewer must be the same."""
+    a, b = said.split(), model.split()
+    return len(a) == len(b) and all(x == y or (len(y) > 2 and fuzz.ratio(x, y) >= 75) for x, y in zip(a, b))
+
+
 def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
     """{'make': ..., 'model': ...} (either may be absent) found in the tokens, with fuzzy matching on longer names."""
     out: dict = {}
@@ -103,7 +110,7 @@ def find_vehicle(tokens: list[str], vocab: dict[str, list[str]]) -> dict:
         for g in grams:
             if len(g) >= 6 and long_models:
                 r = process.extractOne(g, [m for m, _ in long_models if m[0] == g[0]], scorer=fuzz.ratio, score_cutoff=85)
-                if r:
+                if r and _same_words(g, r[0]):
                     hits.append((r[0], dict(long_models)[r[0]]))
                     break
     if hits:

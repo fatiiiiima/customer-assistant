@@ -397,6 +397,7 @@ class AgentEngine:
         self.silent_fallback = True
         self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
         self.parallel = False                            # with model_only: replies for the likely lookups are written while the decision is made (see _speculate)
+        self.rules_decide = False                        # with model_only: the code picks the lookup when its own rules are certain (no model call for the decision); the model still decides the rest and writes every reply
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.prefetch_on = False                         # dialogue.prefetch (see prefetch); app.py sets it from config
         self.prefetched = 0
@@ -566,8 +567,10 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        decision = None if mo else self._fast_decide(s, text)
-        if mo and self.one_call:
+        decision = self._fast_decide(s, text) if (not mo or self.rules_decide) else None
+        if mo and decision is not None:
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "rules_decide: the code picked the lookup, no model call for the decision"
+        if mo and self.one_call and decision is None:
             decision = yield from self._one_call(s, text, dbg, t0)
             if decision is None:
                 return                                                     # answered in the one call

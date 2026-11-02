@@ -335,3 +335,61 @@ def test_the_start_of_a_call_warms_the_connection_in_the_background_without_wait
     e.opening(s)
     assert time.perf_counter() - t < 0.2                                   # the greeting did not wait for the 0.4 s warm-up
     assert done.wait(2.0) and len(started) == 1                            # and the same backend, which also writes the replies, was warmed once, not twice
+
+
+# ------------------------------------------------------------------------------------------------ voice.rules_decide (ARCH_REVIEW section 89)
+def with_rules(decisions):
+    e, b = model_only(decisions)
+    e.rules_decide = True
+    return e, b
+
+
+def test_rules_decide_the_code_picks_the_lookup_it_is_certain_of_and_the_model_still_writes_the_reply():
+    e, b = with_rules(["get_car"])
+    r = said(e, e.new_session(), "tell me about the Land Cruiser")
+    assert not b.prompts                                                 # no model call for the decision
+    assert r.debug.via == "agent:rules" and r.debug.intent == "get_car" and "rules_decide" in r.debug.note
+    assert r.reply == SAYS and len(b.writes) == 1                        # the reply is the model's, written once
+
+
+def test_rules_decide_a_turn_the_rules_cannot_route_is_decided_by_the_model_as_before():
+    from .test_scale import NEEDS_THE_MODEL
+
+    e, b = with_rules(["search_cars"])
+    r = said(e, e.new_session(), NEEDS_THE_MODEL)
+    assert len(b.prompts) == 1 and r.debug.via == "agent" and "rules_decide" not in r.debug.note
+    assert r.reply == SAYS
+
+
+def test_rules_decide_is_off_by_default_so_the_model_decides_the_turn_the_rules_would_take():
+    e, b = model_only(["get_car"])
+    assert e.rules_decide is False
+    r = said(e, e.new_session(), "tell me about the Land Cruiser")
+    assert len(b.prompts) == 1 and r.debug.via == "agent"
+
+
+def test_rules_decide_keeps_the_rest_of_the_test_mode_the_checks_only_note_and_nothing_is_completed_by_code():
+    e, b = with_rules([])
+    r = said(e, e.new_session(), "tell me about the Land Cruiser")
+    assert r.reply == SAYS and "would have stopped" in r.debug.note and "STANDARD WORDING" not in b.writes[-1]
+
+
+def test_rules_decide_no_replies_are_written_ahead_when_the_code_has_decided():
+    e, b = with_rules([])
+    e.parallel = True
+    r = said(e, e.new_session(), "tell me about the Land Cruiser")
+    assert not b.prompts and len(b.writes) == 1 and r.debug.reply_ahead is None      # one reply call, none wasted on lookups that were not taken
+
+
+def test_rules_decide_is_switched_on_by_the_setting_only_in_the_test_mode():
+    from dealer_core.app import build_app
+    from dealer_core.config import load_config
+    from dealer_core.voice.pipeline import apply_voice_profile
+
+    assert load_config(environ={}).voice.rules_decide is False
+    for model_only_on, rules_on, want in (("true", "true", True), ("false", "true", False), ("true", "false", False)):
+        cfg = load_config(environ={"VA__VOICE__MODEL_ONLY": model_only_on, "VA__VOICE__RULES_DECIDE": rules_on})
+        b = Scripted()
+        app = build_app(cfg, classifier=b, reply_mode="conversational", lead_backend=b, engine="agent")
+        apply_voice_profile(app, cfg)
+        assert app.engine.rules_decide is want, (model_only_on, rules_on)

@@ -31,7 +31,7 @@ def test_a_step_the_turn_did_not_have_is_none_and_a_negative_check_is_zero():
 
 def test_the_turn_detail_has_the_decision_the_parallel_hit_and_the_size_of_the_reply():
     d = TurnDebug(intent="get_car", nlu_ms=512.4, reply_ahead=True)
-    assert detail_message(TurnResult(reply="It is the white 2021 Camry.", debug=d), 4) == {"type": "turn_detail", "turn": 4, "decision": 0.512, "ahead": True, "tool": "get_car", "words": 6}
+    assert detail_message(TurnResult(reply="It is the white 2021 Camry.", debug=d), 4) == {"type": "turn_detail", "turn": 4, "decision": 0.512, "ahead": True, "tool": "get_car", "by_code": False, "words": 6}
     off = detail_message(TurnResult(reply="Hello", debug=TurnDebug()), 1)
     assert off["ahead"] is None and off["decision"] is None and off["tool"] is None
 
