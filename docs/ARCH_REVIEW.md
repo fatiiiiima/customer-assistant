@@ -1985,3 +1985,49 @@ For comparison, Nemotron Nano 3 in the earlier runs (sections 56, 63, 66): decis
 * **GLM 4.7 Flash:** the quickest replies, but it took "tell me about the Land Cruiser" and "the second one" for searches, and it answered "that's all, thanks, bye" with "I'll make sure the Land Cruiser is ready for you at the showroom": a promise nobody made.
 
 What it means (INFERRED): no model on the list is faster than Nemotron by more than the run-to-run swing, which is itself 100 to 150 ms (Nemotron's first piece was 819 ms in one run and 660 ms in another). The models are not the limit. Section 63's arithmetic still holds: the fixed parts are the wait for the end of speech (about 0.2 s), recognition (about 0.27 s), the voice start (under 0.16 s) and the trip (0.25 to 0.39 s). That leaves about 0.2 s for the model if a turn is to reach 1 s, and only one call fits. The ways forward are fewer round trips (the parallel turn), a closer region, or taking recognition out (speech in, section 68's note on audio-input models). Nemotron Nano 3 stays the model for the Nemotron-only tests. Qwen3-Coder is the only one worth a second look, and only as a spare.
+
+## 70. PersonaPlex 7B (8-bit) on this laptop: too slow to talk live, and not accurate enough (2 Nov, the owner: "let's try persona-plex and qwen3-omni on our laptop before dismissing it or doing a trial for a GPU")
+
+MEASURED on this M3 Pro (36 GB), with the `speech` tool that was already installed (`speech respond`, v0.0.29, Swift and MLX; no Xcode needed). Weights `aufklarer/PersonaPlex-7B-MLX-8bit`, 9.75 GB, downloaded with the owner's go-ahead (about 13 minutes with the first run; they now sit in `~/Library/Caches/qwen3-speech`, 9.1 GB on disk). Raw figures (ignored by git): `benchmarks/results/personaplex_mac_2026-11-02.json`.
+
+**Setup.** Nine one-sentence caller lines from the speed tests, made self-contained ("Show me something cheaper than the Porsche."). They were spoken by a small local text-to-speech model (Pocket TTS), checked with the project's own Whisper (all nine came back word for word), and turned into 24 kHz mono WAV files. These are clean, synthetic callers, the easy case. The persona prompt (324 tokens) says: Wazir, AGMC; one or two short sentences; prices fixed; say when a fact is missing; never invent; and lists five cars with their facts and the free test-drive times. Voice `NATF1`; 120 generation steps (9.6 s of audio) a line.
+
+**Speed.**
+
+| | result |
+|---|---|
+| time a step takes | 205 to 216 ms, in all nine runs (8-bit) |
+| a live call needs | 80 ms or less a step (12.5 steps a second) |
+| real-time factor | 2.59 to 2.73: about 2.7 times too slow |
+| `--compile` option | 225 ms a step: no help |
+| one-off start-up (system prompt and voice) | about 3.1 s the first time, 1.4 s after |
+
+So it cannot hold a live conversation on this Mac. The reply would fall further behind while the caller talks. The tool's blog figure of 68 ms a step and the model card's 112 ms (8-bit) and 158 ms (4-bit) are both faster than what this Mac does (UNKNOWN which Mac they used). I did not try the 4-bit version (5.82 GB); its card says it degrades quality significantly.
+
+**When it starts speaking, in audio time** (from the reply's first sound):
+* On 3 lines (1, 4, 6) it waited for the caller and began 0.28 to 0.34 s after the caller stopped.
+* On the other 6 it began within about 0.2 to 0.4 s of the start of the call, over the caller, often opening with "AGMC." (its own name line) before the answer.
+
+So a delay of about 0.3 s after the caller finishes is what the model itself would add (INFERRED), if something fast enough ran it. That needs a machine about three times quicker per step than this one (UNKNOWN which).
+
+**What it said, against the facts in its prompt:**
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "...Macan. It's black, has 91000 kilometres and $149,000 dirhams. Yes, it has 340 horsepower" | facts right; "$" and "dirhams" together |
+| 2 other Porsches | "AGMC. We have the 2016 Porsche Macan, black... $149,000" | facts right; said "$"; did not say it is the only one |
+| 3 something cheaper | "The 2018 Toyota Land Cruiser is slightly cheaper, at 149000 dihrams. The Porsche is more expensive, 289000." | **wrong**: the Land Cruiser is 189,000 and the Porsche 149,000; it never offered the Civic or Corolla |
+| 4 Land Cruiser | "white, has 920000 kilometres... passed 146 of 150 checks" | **wrong**: 92,000 km |
+| 5 this weekend | "...free test drives tomorrow. There are 2 slots, 9 AM and 2 PM. It' the only Porsche. We love it here." | slots right; then unrelated lines |
+| 6 owners | "I do not have that information." then "We have a 2018 Toyota Land Cruiser..." | **right** on the unknown fact, then rambled |
+| 7 fastest | "The fastest car we have is the 2018 Toyota Land Cruiser." | **wrong**: the BMW M3, 510 horsepower |
+| 8 speak to someone | "...this is Wazir. How can I help? Sure, no problem. I'm here..." | no hand-off (it has no tools) |
+| 9 goodbye | "How can I help you today? The number's 7532014. No, it's 5..." | **invented a phone number**; not a goodbye |
+
+Of the nine, 4 gave the right facts, 4 got a figure or the car wrong (or invented a number), and 1 could not hand off. It also ran on past its answer on several, said "$" for dirhams on four, and slurred some words ("It'", "don havet") in the 8-bit version.
+
+What it means (INFERRED):
+* **For the owner's rules it fails:** prices wrong or invented in 3 of 9 lines, with every fact placed in its prompt. A speech-to-speech model says whatever it says before any check can look, so this could not be shipped as is.
+* **The speed is a Mac limit, not necessarily a model limit:** on a GPU the reply delay could be about 0.3 s. The accuracy is a model limit and a rented GPU would not change it. Adding a tool call would help only if its argument accuracy were good, which the other open model (VoiceChat) reported at 42%.
+* **Licence:** this Mac build is tagged CC-BY-NC-4.0 (non-commercial) while NVIDIA's own card says commercial use is allowed (section above). Either way, not usable commercially without settling it.
+* Not tried here: Qwen3-Omni. The Mac conversions are text-out only (no speech back), 17.2 GB, and need a manual patch for loading, so it cannot show speech-to-speech speed on a laptop. VoiceChat 11B (8.58 GB, `speech voice-chat`) also runs on this tool, with tool calls through MCP. Its model reads about the same weights a step as PersonaPlex, so I expect a similar step time here (INFERRED).
