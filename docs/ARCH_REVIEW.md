@@ -1866,3 +1866,56 @@ MEASURED with the section 65 command, from this M3 Pro to `us-east-1`, priority 
 * to "Yes." it greeted the caller again.
 
 What it means (INFERRED): one call buys about 0.6 s and loses the decision's accuracy (12/12 against 7 to 9 of 17). A turn that does the wrong thing quickly is worse for the caller than a correct one 0.6 s later. A way to keep both: run the decision call as now and, at the same moment, start a reply call for each prepared lookup. Speak the reply whose action the decision names, and drop the others. The time is then about the slower of the two calls, not their sum. The cost is about 3 to 4 times the tokens a turn, still well under a US cent a turn at Nemotron's rates. Not built.
+
+## 67. The parallel turn: the decision and the replies for the likely lookups at the same time (2 Nov, the owner: "build the parallel turn")
+
+Section 66 found that the one-call turn is about 0.6 s faster but picks the action worse than a call that only decides. This turn keeps the decision call as it is and hides the reply's wait behind it.
+
+A setting, `voice.parallel` (`VA__VOICE__PARALLEL=true`), used only with the test mode `voice.model_only`. It is off by default. The pipeline turns it off without `model_only`, and `voice.one_call` takes the turn if both are set.
+
+How a turn runs (`AgentEngine._speculate` and `_Spec` in `agent/engine.py`):
+1. **The code looks up the likely facts on copies of the call**, as in section 64: the car in focus, a pick from the list, a car named alone, a search, and `none`. Two more, for this turn only:
+   * `prepare_booking`, when the words are about booking (`_BOOKING_CUE`, or a day or time in them);
+   * `end_call`, when they are a goodbye (`_BYE`).
+
+   The hand-off and the confirmation are never run ahead. They act outside the call (an escalation, a saved booking). A test checks that a hand-off is not among them.
+2. **A reply is written for each**, on its own thread, with exactly the input the writer would be given after the decision (`_speaking_input`). Each stream fills a queue. The decision call is made at the same moment, as before.
+3. **When the decision arrives**, the reply for the action it names is used, if the writer's input for the real call equals the one written ahead. The rest are stopped. They stop at their next sentence, and a reply never spoken is never kept.
+4. **Otherwise** (no reply ahead for that action, or the input changed), the reply is written after the decision, as before.
+
+Speaking goes through the same loop as ever: the same checks, notes and memory of the turn. Only the source of the sentences differs. Each turn's note says: `parallel: decision at N ms; replies written ahead for ...; X was used` (or `none for X`), and `parallel: first words at N ms`.
+
+Cost: a reply call for each prepared lookup, up to 5 more calls a turn than two calls (3 to 4 usually). Nemotron's rates are low, so the run below is estimated (INFERRED) at under 6 US cents for 48 turns in each of two modes.
+
+**Local check** (Qwen3-4B on MLX, this M3 Pro; `scripts/turn_speed.py`, the same 24 turns, MEASURED):
+
+| | first words p50 / p90 | turn p50 / p90 | right action | reply ready for the decision |
+|---|---|---|---|---|
+| two calls | 1,282 / 1,862 ms | 1,925 / 2,980 ms | 15/17 | |
+| parallel | 2,569 / 4,293 ms | 3,129 / 4,519 ms | 15/17 | 11 of 24 turns |
+| one call | 1,470 / 1,935 ms | 2,119 / 3,304 ms | 11/17 | |
+
+* **The parallel turn does not change what is decided.** The right action is 15/17 in both, because the decision call is the same one.
+* **The reply was ready on 11 of 24 turns (46%).** The other 13 were hand-offs, free times, comparisons, "fastest", lists of makes and the like. Their replies are written after the decision, as before, so on those turns it costs more calls and gains nothing.
+* **Locally it is slower, not faster.** The local server answers one request at a time, so the reply streams make the decision wait. With the decision's usual 1.2 s deadline, right action fell to 4/17 in the same check, because the decision timed out and the turn went on with no action (a note says so). With the deadline lifted it is 15/17. So the local server cannot show the gain, and the check says nothing about Bedrock's speed (UNKNOWN until measured).
+
+A thing to watch on Bedrock: the same deadline (`voice.decide_deadline_ms`, 1,200 ms) applies there. In section 66 two of 17 decisions took 2.0 and 2.2 s and would have run past it, with or without this setting.
+
+Expected on Bedrock (INFERRED, not measured): on a turn where the reply was ready, the first words come at about the larger of the decision (p50 about 0.5–0.6 s) and the reply's first piece (p50 about 0.7 s), against about 1.2–1.3 s for the two in a row. That saves about 0.5 s on 46% of turns, about 0.25 s on average over the 24 test turns. A wider set of lookups raises the share but also the cost.
+
+Tests (`tests/unit/test_model_only.py`, `tests/unit/test_turn_speed.py`) check that:
+* the reply written ahead is the one spoken, and the chosen lookup is not written a second time;
+* a decision with no reply ahead has its reply written after it;
+* the other replies are never spoken, and only one reply is said a turn;
+* with a 0.3 s decision and a 0.3 s reply it takes about 0.3 s, against 0.6 s;
+* booking and goodbye words get replies ahead, and a hand-off never does;
+* the setting is off without the test mode, and does nothing when one call has the turn;
+* the speed script refuses a cloud run without the key and the switch, counts its calls, and scores each turn.
+
+**To measure on Bedrock** (your terminal; the key is read from the environment and never printed). Start with one pass of each mode, which is about 192 calls and at most about 190,000 input tokens (INFERRED, from the dry run):
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```
+
+It prints first words, whole turn and right action for each mode, and saves every turn's note to `benchmarks/results/turn_speed_<time>.json` (ignored by git). Each turn is sent after the agent's own earlier replies, so these are Nemotron's own conversations, not the local model's.

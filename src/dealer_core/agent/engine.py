@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
+import queue
 import re
 import threading
 import time
@@ -299,6 +300,46 @@ ONE_CALL_OTHERS = ("check_slots <id> (free test-drive times) | prepare_booking <
 _ACTION_LINE = re.compile(r"\s*(?:\*\*)?(?:READY[ \t]*:?[ \t]*)?ACTION[ \t]*:?[ \t]*(?:\*\*)?[ \t]*(?:READY\b[ \t]*:?[ \t]*(?:ACTION[ \t]*:?[ \t]*)?)?([a-z_]+)(?:[ \t]+([A-Za-z0-9-]*\d[A-Za-z0-9-]*))?[^\n]*", re.IGNORECASE)
 
 
+class _Spec:
+    """A reply being written ahead of the decision (voice.parallel, section 67): the writer's stream for one prepared lookup, run on its own thread into a queue.
+    The turn that follows takes it if the decision names that lookup and the writer's input is the same as the one it would send itself; the rest are stopped."""
+
+    def __init__(self, key: str, w: WriterInput, writer: ReplyWriter) -> None:
+        self.key, self.w, self.writer = key, w, writer
+        self.q: queue.Queue = queue.Queue()
+        self.stop = threading.Event()
+        self.info: dict = {}
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            for sentence in self.writer.stream(self.w):
+                if self.stop.is_set():
+                    break
+                self.q.put(sentence)
+        except Exception as e:  # noqa: BLE001 - a reply that failed ahead is simply empty; the turn then writes its own
+            self.info = {"stopped": f"ahead: {type(e).__name__}"}
+        else:
+            self.info = dict(self.writer.last_stream)              # the writer keeps this per thread: read it on this one
+        finally:
+            self.q.put(None)
+
+    def sentences(self):
+        """What the writer said, as it comes (and what it had already said when this is called); self.info is set once it ends."""
+        while True:
+            try:
+                item = self.q.get(timeout=30.0)
+            except queue.Empty:
+                return
+            if item is None:
+                return
+            yield item
+
+    def cancel(self) -> None:
+        self.stop.set()
+
+
 def plural_make(name: str) -> str:
     return name if name.endswith("s") else name + "s"
 
@@ -355,6 +396,7 @@ class AgentEngine:
         self.model_only = False
         self.silent_fallback = True
         self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
+        self.parallel = False                            # with model_only: replies for the likely lookups are written while the decision is made (see _speculate)
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.prefetch_on = False                         # dialogue.prefetch (see prefetch); app.py sets it from config
         self.prefetched = 0
@@ -520,6 +562,7 @@ class AgentEngine:
                 return                                                     # answered in the one call
             if decision.get("again"):
                 decision = None                                            # no usable action from it: decided the usual way
+        specs: dict[str, _Spec] = self._speculate(s, text) if mo and self.parallel and not self.one_call and decision is None else {}
         bridge = ""
         if decision is None and predecided is not None:
             try:
@@ -583,6 +626,15 @@ class AgentEngine:
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
+        ahead: _Spec | None = None
+        if specs:
+            key = f"get_car {args.get('car_id')}" if tool == "get_car" and isinstance(args, dict) else tool
+            ahead = specs.get(key)
+            for sp in specs.values():
+                if sp is not ahead:
+                    sp.cancel()
+            dbg.note = (dbg.note + "; " if dbg.note else "") + (f"parallel: decision at {dbg.nlu_ms:.0f} ms; replies written ahead for {', '.join(specs)}; "
+                                                                 + (f"{key} was used" if ahead else f"none for {key}, so its reply is written now"))
         result = self._run(s, tool, args if isinstance(args, dict) else {}, tool_text, dbg)
         if decision.get("also") and s.car:
             result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
@@ -648,8 +700,11 @@ class AgentEngine:
                 if attempt:
                     why = self.reply_writer.last_stream.get("stopped", "")
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
+                early = ahead if attempt == 0 and ahead is not None and ahead.w == w else None     # the same input the writer would be given: its reply is the one written ahead
+                if ahead is not None and attempt == 0 and early is None:
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + "parallel: the prompt had changed since it was written ahead, so it is written again"
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
-                    for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
+                    for sentence in (early.sentences() if early is not None else self.reply_writer.stream(w, temperature=0.2 if attempt else None)):
                         if speaks:
                             self.fidelity["sentences"] += 1
                             leak = guards.leaks(sentence, allowed, self._car_words())
@@ -664,9 +719,11 @@ class AgentEngine:
                                 continue
                         if len(spoken) == (1 if lead else 0) and self.governor is not None:
                             self.governor.record_full((time.perf_counter() - t_write) * 1000)
+                        if early is not None and not spoken:
+                            dbg.note = (dbg.note + "; " if dbg.note else "") + f"parallel: first words at {(time.perf_counter() - t0) * 1000:.0f} ms"
                         spoken.append(sentence)
                         yield sentence
-                info = self.reply_writer.last_stream
+                info = early.info if early is not None else self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
                 if info.get("would_stop"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: said anyway; the checks would have stopped: " + " | ".join(info["would_stop"])
@@ -1327,9 +1384,27 @@ class AgentEngine:
         car = re.search(r"\b[A-Z]{2}-\d{2,4}\b", raw)
         return {"tool": tool, "car_id": car.group(0) if car else (data.get("args", {}) or {}).get("car_id") if data else None}
 
-    def _one_call_candidates(self, s: Session, text: str) -> list[tuple[str, dict, Session, dict]]:
+    def _speculate(self, s: Session, text: str) -> dict[str, _Spec]:
+        """voice.parallel (with model_only; owner, 2 Nov): while the decision is made, the reply is already being written for each lookup the code can prepare (the car in
+        focus, a pick, a named car, a search, none): the writer's own input, built on a copy of the call. Costs a reply call for each, about 3 to 4 a turn."""
+        if self.reply_writer is None:
+            return {}
+        specs: dict[str, _Spec] = {}
+        for key, _args, c, res in self._one_call_candidates(s, text, more=True):
+            try:
+                core, awaiting, facts, stable = self._speaking_input(c, text, res)
+                w = WriterInput(caller=text, core=core, risk=res["risk"], history=list(c.history), facts=facts, awaiting=awaiting, stable=stable, history_base=c.forgotten)
+            except Exception:  # noqa: BLE001 - a lookup whose input cannot be built is simply not written ahead
+                w = None
+            if w is not None:
+                specs[key] = _Spec(key, w, self.reply_writer)
+        return specs
+
+    def _one_call_candidates(self, s: Session, text: str, more: bool = False) -> list[tuple[str, dict, Session, dict]]:
         """The lookups made before the model is asked, each on a copy of the call: (the action as the model writes it, the tool's arguments, the call as it
-        would be after it, the tool's result). The car in focus, a car picked from the list or named alone, a search the words describe, and "none"."""
+        would be after it, the tool's result). The car in focus, a car picked from the list or named alone, a search the words describe, and "none".
+        `more` (the parallel turn) adds the two that only change the call's own state: a booking step when the words are about booking, and the goodbye.
+        Not the hand-off or the confirmation: those act outside the call (an escalation, a saved booking) and are never run ahead."""
         words = ex.tokens_of(text)
         wanted: list[tuple[str, dict]] = []
         picked = ex.selection(text, s.shown)
@@ -1342,6 +1417,12 @@ class AgentEngine:
             wanted.append(("get_car", {"car_id": s.car}))
         if found.get("make") or ex.search_filters(text, self.svc.inventory.vocabulary()) or ex.wants_listing(text) or _CHEAPER.search(" ".join(words)):
             wanted.append(("search_cars", self._args_for(s, "search_cars", None, text)))
+        if more:
+            joined = " ".join(words)
+            if _BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found:
+                wanted.append(("prepare_booking", self._args_for(s, "prepare_booking", None, text)))
+            if _BYE.search(joined):
+                wanted.append(("end_call", {}))
         wanted.append(("none", {}))
         out, seen = [], set()
         for tool, args in wanted:
@@ -1356,7 +1437,7 @@ class AgentEngine:
                 res = None
             if res is not None:
                 out.append((key, args, c, res))
-        return out[:4]
+        return out[:6 if more else 4]
 
     def _one_call_prompt(self, s: Session, text: str, cands: list) -> str:
         """Short: the time, the booking if one is under way, the last four lines, the caller's words, then each prepared action with its facts (each fact once)."""

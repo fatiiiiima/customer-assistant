@@ -1,5 +1,8 @@
 """The test mode voice.model_only (owner, 30 Oct: "i want to see how nemotron works alone, without the code"): the model decides every turn and writes every
 reply; the code runs the tools and only notes what its checks would have stopped. With a scripted 'model' on the demo stock."""
+import threading
+import time
+
 from .test_live_call_fixes import said
 from .test_scale import Scripted, agent
 
@@ -170,3 +173,116 @@ def test_one_call_instructions_hold_no_car_or_figure_the_model_could_repeat():
     from dealer_core.agent.engine import ONE_CALL_SYSTEM
 
     assert not re.search(r"\d{4}|\d,\d{3}|dirham", ONE_CALL_SYSTEM) and "Camry" not in ONE_CALL_SYSTEM and "end_call" in ONE_CALL_SYSTEM and "prepare_booking" in ONE_CALL_SYSTEM
+
+
+# ------------------------------------------------------------------------------------------------ the parallel turn (voice.parallel, ARCH_REVIEW section 67)
+class Parallel(Scripted):
+    """Decides from a list (after `decide_s`); writes a reply that names the facts it was given (after `write_s`), one sentence per piece."""
+
+    def __init__(self, decisions, decide_s=0.0, write_s=0.0):
+        super().__init__(decisions)
+        self.decide_s, self.write_s, self.writes, self.lock = decide_s, write_s, [], threading.Lock()
+
+    def lead_in(self, system, user, max_tokens=36, temperature=None, deadline_s=None):
+        if "TOOL:" in user:
+            self.prompts.append(user)
+            time.sleep(self.decide_s)
+            return self.decisions.pop(0) if self.decisions else "search_cars"
+        return "ok"
+
+    def lead_in_stream(self, system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
+        with self.lock:
+            self.writes.append(user)
+        time.sleep(self.write_s)
+        yield "Here is what I have. "
+        yield "Want to hear more?"
+
+
+def parallel(decisions, **kw):
+    b = Parallel(decisions, **kw)
+    e, _ = agent(None, backend=b)
+    e.model_only = e.reply_writer.model_only = e.parallel = True
+    e.silent_fallback = False
+    return e, b
+
+
+def test_parallel_the_reply_written_ahead_for_the_decided_lookup_is_the_one_spoken_with_no_second_writing_call():
+    e, b = parallel(["search_cars"])
+    s = e.new_session()
+    r = said(e, s, "do you have any Toyotas")
+    n_ahead = len(b.writes)
+    assert n_ahead >= 2 and len(b.prompts) == 1                           # a reply for each prepared lookup, and the one decision
+    assert r.reply == "Here is what I have. Want to hear more?" and r.debug.intent == "search_cars"
+    assert "replies written ahead for" in r.debug.note and "search_cars was used" in r.debug.note and "first words at" in r.debug.note
+    assert len({w for w in b.writes}) == n_ahead                           # each lookup's reply asked for once: the chosen one was not written a second time
+    assert s.shown and s.history[-1] == ("agent", r.reply)                  # the call carries on from the real lookup, not from a copy
+
+
+def test_parallel_a_decision_with_no_reply_written_ahead_gets_its_reply_written_after_it():
+    e, b = parallel(["check_slots"])
+    r = said(e, e.new_session(), "when can I come in")
+    assert "none for check_slots" in r.debug.note and r.reply == "Here is what I have. Want to hear more?"
+    assert len(b.writes) >= 2                                              # the ones written ahead, plus this one
+
+
+def test_parallel_the_other_replies_are_stopped_and_never_spoken():
+    e, _ = parallel(["search_cars", "get_car"])
+    s = e.new_session()
+    said(e, s, "do you have any Toyotas")
+    r = said(e, s, "tell me about the first one")
+    spoken = [t for who, t in s.history if who == "agent"]
+    assert spoken == ["Here is what I have. Want to hear more?"] * 2        # exactly one reply a turn, whatever was written ahead
+    assert r.debug.intent == "get_car"
+
+
+def test_parallel_it_is_faster_than_asking_twice_by_about_a_whole_call():
+    """The decision takes 0.3 s and a reply 0.3 s: one after the other 0.6 s, together about 0.3 s."""
+    e, _ = parallel(["search_cars"], decide_s=0.3, write_s=0.3)
+    t = time.perf_counter()
+    said(e, e.new_session(), "do you have any Toyotas")
+    together = time.perf_counter() - t
+    m = Parallel(["search_cars"], decide_s=0.3, write_s=0.3)
+    e2, _ = agent(None, backend=m)
+    e2.model_only = e2.reply_writer.model_only = True
+    e2.silent_fallback = False
+    t = time.perf_counter()
+    said(e2, e2.new_session(), "do you have any Toyotas")
+    apart = time.perf_counter() - t
+    assert apart >= 0.58 and together < apart - 0.2, (together, apart)
+
+
+def test_parallel_is_off_without_the_test_mode_and_gives_way_to_one_call():
+    from dealer_core.app import build_app
+    from dealer_core.config import load_config
+    from dealer_core.voice.pipeline import apply_voice_profile
+
+    for mo, par, want in (("false", "true", False), ("true", "true", True), ("true", "false", False)):
+        cfg = load_config(environ={"VA__VOICE__MODEL_ONLY": mo, "VA__VOICE__PARALLEL": par})
+        b = Scripted()
+        app = build_app(cfg, classifier=b, reply_mode="conversational", lead_backend=b, engine="agent")
+        apply_voice_profile(app, cfg)
+        assert app.engine.parallel is want
+
+
+def test_parallel_does_nothing_when_one_call_has_the_turn():
+    b = Parallel([])
+    e, _ = agent(None, backend=b)
+    e.model_only = e.reply_writer.model_only = e.parallel = e.one_call = True
+    e.silent_fallback = False
+    r = said(e, e.new_session(), "do you have any Toyotas")
+    assert "replies written ahead" not in r.debug.note
+
+
+def test_parallel_booking_and_goodbye_words_get_their_replies_written_ahead_but_a_handoff_never_is():
+    e, _ = parallel(["search_cars", "prepare_booking", "end_call"])
+    s = e.new_session()
+    said(e, s, "do you have any Toyotas")
+    r = said(e, s, "I'd like to test drive it tomorrow")
+    assert r.debug.intent == "prepare_booking" and "prepare_booking was used" in r.debug.note and not s.ended
+    r = said(e, s, "that's all, thanks, bye")
+    assert r.debug.intent == "end_call" and "end_call was used" in r.debug.note and s.ended
+    e2, _ = parallel(["handoff"])
+    s2 = e2.new_session()
+    r = said(e2, s2, "can I speak to someone")
+    assert "none for handoff" in r.debug.note and s2.handoff is not None            # the escalation ran once, after the decision, not ahead of it
+    assert "handoff" not in e2._speculate(e2.new_session(), "can I speak to someone")

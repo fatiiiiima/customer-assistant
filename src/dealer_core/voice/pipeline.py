@@ -149,6 +149,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
         w.max_tokens = max(w.max_tokens, MODEL_ONLY_TOKENS)   # and, in this mode, not finished by code (30 Oct, Nemotron: "I have a 2016 black Macan at 149,000 dirhams," and nothing)
     if hasattr(app.engine, "one_call"):
         app.engine.one_call = cfg.voice.model_only and cfg.voice.one_call
+        app.engine.parallel = cfg.voice.model_only and cfg.voice.parallel
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
         app.engine.decide_deadline_s = cfg.voice.decide_deadline_ms / 1000
