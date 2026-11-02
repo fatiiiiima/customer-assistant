@@ -32,6 +32,7 @@ class Speculation:
         self._at_version = 0
         self._gen = 0
         self.valid = False                        # the held turn ended with no new speech: the results describe exactly this turn
+        self.on_event = None                      # diagnostics only (the call recorder): (kind, text) for each early recognition and what became of it
         self.started = self.used = self.dropped = 0
 
     def start(self, pcm16: bytes) -> None:
@@ -48,6 +49,8 @@ class Speculation:
             text = ""
             try:
                 text = self.transcribe(pcm16)
+                if self.on_event:
+                    self.on_event("early_stt", f"{len(pcm16) / 32000:.2f} s of the turn so far, got {text!r}")
                 words.set_result(text)                        # the recognizer can have the words now, while the decision is still being made
             except Exception as e:
                 words.set_exception(e)
@@ -64,6 +67,8 @@ class Speculation:
         """The caller spoke again: what was started describes a turn that is not over."""
         if self._text is not None:
             self.dropped += 1
+            if self.on_event:
+                self.on_event("early_dropped", "the caller spoke again: the early recognition is thrown away")
         self._gen += 1
         self._text, self._decision, self.valid = None, None, False
 

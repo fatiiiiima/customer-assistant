@@ -48,7 +48,7 @@ def turn_trace(result) -> str:
     """One line for the call recorder per turn the agent answered: how it was decided and how long each part took (the notes the worker keeps in its own log, saved beside the audio)."""
     d = result.debug
     return json.dumps({"intent": d.intent, "via": d.via, "state": d.state_after, "decision_ms": round(d.nlu_ms), "first_piece_ms": round(d.lead_ms), "turn_ms": round(d.total_ms),
-                       "words": len(result.reply.split()), "ended": result.ended, "note": d.note[:700]}, ensure_ascii=False)
+                       "words": len(result.reply.split()), "ended": result.ended, "tools": [t[:200] for t in d.tools], "note": d.note[:700]}, ensure_ascii=False)
 
 
 def attach_stock_hotwords(stt_engine, inventory) -> None:
@@ -229,6 +229,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     hear = EchoGuard(parts.stt_engine, lambda: brain.session.last_agent(),            # (brain is made just below; the guard only asks for the line when a turn is heard)
                      lambda: stt_prompt(brain.session.state, "", parts.hotword_groups, app.inventory.vocabulary()))
     stt = OpenVinoWhisperSTTService(engine=hear, min_rms=vcfg.min_rms)
+    stt.on_trace = trace
     stop_now = lambda: current_stop[0]                           # the silence the detector waits right now: the turn clock subtracts it to find the real end of speech
     if in_tap is not None:
         stt.on_text = lambda text: in_tap.note("stt", text)
@@ -271,6 +272,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                                (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
                                lambda: len(brain.session.history))
             endpointer.speculation = stt.speculation = brain.speculation = spec
+            spec.on_event = trace
         stages.append(endpointer)
     stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
     if in_tap is not None:                                    # the recorder notes when the turn was decided over, so scripts/call_latency.py can tell the detector's wait from Whisper's

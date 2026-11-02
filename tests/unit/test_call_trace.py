@@ -101,3 +101,50 @@ def test_a_turn_line_carries_how_it_was_decided_and_the_times():
     assert line["intent"] == "ask_price" and line["via"] == "llm:bedrock_nemotron" and line["state"] == "answering"
     assert (line["decision_ms"], line["first_piece_ms"], line["turn_ms"]) == (412, 1181, 1630) and line["words"] == 10 and line["ended"] is False
     assert len(line["note"]) == 700                                                  # the engine's note is kept, cut to a line
+
+
+def test_a_turn_line_lists_the_tools_that_ran_with_their_arguments():
+    d = TurnDebug(intent="search_cars", tools=["search_cars({'make': 'toyota'}) -> 10 match(es)"])
+    assert json.loads(turn_trace(TurnResult(reply="Ten.", debug=d)))["tools"] == ["search_cars({'make': 'toyota'}) -> 10 match(es)"]
+
+
+def test_the_early_recognition_and_its_dropping_are_noted():
+    import asyncio
+
+    from dealer_core.voice.speculate import Speculation
+
+    events = []
+
+    async def go():
+        spec = Speculation(lambda pcm: "um")
+        spec.on_event = lambda k, t: events.append((k, t))
+        spec.start(bytes(2 * 16000))
+        assert await spec._text == "um"
+        spec.resumed()
+
+    asyncio.run(go())
+    assert events == [("early_stt", "1.00 s of the turn so far, got 'um'"), ("early_dropped", "the caller spoke again: the early recognition is thrown away")]
+
+
+def test_the_recogniser_notes_which_audio_it_used_and_whether_it_was_too_quiet():
+    import asyncio
+
+    from dealer_core.voice.services import OpenVinoWhisperSTTService
+
+    class Engine:
+        name = "fake"
+
+        def transcribe(self, pcm, prompt=None):
+            return "go ahead", 12.0
+
+    notes = []
+
+    async def go(audio):
+        stt = OpenVinoWhisperSTTService(engine=Engine())
+        stt.on_trace = lambda k, t: notes.append((k, t))
+        return [f.text async for f in stt.run_stt(audio)]
+
+    loud = (np.sin(np.arange(16000) / 5) * 8000).astype(np.int16).tobytes()
+    assert asyncio.run(go(loud)) == ["go ahead"] and asyncio.run(go(bytes(32000))) == []
+    assert notes[0][0] == "stt_path" and "recognised after the turn ended: 1.00 s" in notes[0][1] and "'go ahead'" in notes[0][1]
+    assert notes[1][0] == "stt_skipped" and "too quiet" in notes[1][1]

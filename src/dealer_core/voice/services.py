@@ -161,6 +161,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         self.prompt_for = None                   # set by the pipeline: () -> the recognizer hint for what the agent just asked
         self.speculation = None                  # voice.speculate.Speculation: words already recognised during Smart Turn's hold
         self.on_text = None                      # diagnostics only (voice/audiotap.py): told the words of each segment
+        self.on_trace = None                     # diagnostics only: (kind, text) which audio each segment was recognised from, and how
         super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
@@ -178,6 +179,8 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         self.last_level = rms
         if rms < self.min_rms:
             logger.debug(f"STT skipped: segment too quiet to be speech (level {rms:.4f})")
+            if self.on_trace:
+                self.on_trace("stt_skipped", f"too quiet to be speech: {len(audio) / 2 / SAMPLE_RATE:.2f} s of audio, level {rms:.4f} (below {self.min_rms})")
             return
         await self.start_processing_metrics()
         early = await self.speculation.transcript() if self.speculation is not None else None
@@ -186,6 +189,9 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         else:
             text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
+        if self.on_trace:
+            self.on_trace("stt_path", f"{'taken from the early recognition' if early is not None else 'recognised after the turn ended'}: {len(audio) / 2 / SAMPLE_RATE:.2f} s of audio, "
+                                      f"level {rms:.3f}, {self.last_ms:.0f} ms, got {text!r}")
         if text and is_degenerate(text, len(audio) / 2 / SAMPLE_RATE):
             logger.debug(f"STT returned a loop ({len(text)} characters): the caller is asked to repeat")
             text = UNCLEAR
