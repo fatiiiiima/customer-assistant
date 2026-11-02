@@ -2153,3 +2153,50 @@ The cost estimate in `scripts/turn_speed.py` for the parallel turn is now at mos
 ```
 AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
 ```
+
+## 74. The parallel turn on Bedrock, measured: about 0.4 s faster at p50, no gain at p90, and a connection cost found (2 Nov, run by the owner)
+
+MEASURED with the section 73 command (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1`), from this M3 Pro to `us-east-1`, Nemotron Nano 3 on the priority tier. The same 24 turns in each mode, each sent after the agent's own earlier replies; no errors, no silent turns. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_121826.json`.
+
+| | baseline (two calls) | parallel |
+|---|---|---|
+| first words, p50 / p90 | 1,393 / 1,614 ms | **994** / 1,691 ms |
+| whole turn, p50 / p90 | 1,446 / 1,751 ms | 1,009 / 1,817 ms |
+| right action | 14/17 | 14/17 |
+| reply ready when the decision arrived | | 13 of 24 turns (54%) |
+| replies written ahead per turn | | 2.4 on average, 4 at most (57 in all) |
+
+**Per turn, parallel against baseline (first words):** faster by more than 100 ms on 16 turns, within 100 ms on 3, slower by more than 100 ms on 5. The median change is -360 ms and the mean -266 ms.
+
+| | first words, p50 |
+|---|---|
+| parallel, reply ready (13 turns) | 915 ms (baseline on the same turns: 1,367 ms) |
+| parallel, reply not ready (11 turns) | 1,281 ms (baseline on the same turns: 1,425 ms) |
+
+On the turns where the reply was ready, first words came the moment the decision came (within a few ms), so the wait was the decision alone.
+
+**What held it back: the decision was slow.**
+
+| replies being written alongside | turns | decision, p50 (range) |
+|---|---|---|
+| 0 to 1 | 3 | 404 ms (360 to 437) |
+| 2 | 13 | 878 ms (360 to 1,658) |
+| 3 or more | 8 | 894 ms (332 to 1,033) |
+
+Sent alone in earlier runs, the decision took about 500 to 600 ms (sections 56, 66). Here it took about twice that whenever 2 or more replies were in flight (INFERRED: the turns differ too, so this is a correlation). That is why the p90 did not improve (1,691 against 1,614 ms) and 5 turns got slower.
+
+The very first turn ("I'm looking for a Toyota") had its decision at 1,658 ms, past the 1.2 s limit, so the engine went on with "no decision" and the reply ready for `none`. In a live call that is the wrong action.
+
+**A likely cause, MEASURED in part: a new connection is expensive from here.** An unauthenticated request to the Bedrock endpoint, repeated three times from this Mac, showed:
+* TCP connect 0.20 to 0.38 s;
+* TLS finished at 0.60 to 0.81 s;
+* first answer at 0.79 to 1.03 s.
+
+So a request on a new connection loses about 0.6 to 0.8 s before it is even sent, against about 0.35 s on a warm one. The endpoint offers HTTP/2. In the parallel turn, every reply I stop mid-sentence has to close its connection, so the next turn's extra requests open new ones (INFERRED; not yet proved). That would also explain the slow first turn.
+
+**A second finding that affects both modes in real calls.** Our model client (httpx) closes an idle connection after 5 seconds, its default; nothing in `openai_compat.py` changes that. In this test the turns followed each other at once, so it did not show. In a live call there is usually more than 5 s between the end of one reply and the caller's next question, so the next turn's first request pays a new connection (about 0.6 to 0.8 s, INFERRED from the measurement above). This may be part of the 2 s the owner sees on calls.
+
+**Proposed, not yet built** (the owner decides):
+1. Keep connections alive longer (about 50 s), and warm one at the start of the call. No new packages.
+2. HTTP/2 for the Bedrock backend, so the decision and the replies share one connection and stopping a reply does not close it. This installs `h2` 4.4.1, `hpack` 4.2.0 and `hyperframe` 6.1.0 (about 0.1 MB in all, my estimate; the dry run resolved them).
+3. Then run the same command again and compare: the decision time with replies in flight is the thing to watch (it should fall toward 500 ms), and the p90.
