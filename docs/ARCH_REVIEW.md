@@ -2420,3 +2420,46 @@ On the same 60 turns for every recogniser: Qwen3-ASR 8.7%, Nemotron with a lead 
 * **Not worth more time:** Moonshine small (22 to 25% words wrong, 34% on the headset audio) and Kyutai 4-bit (13.9% on the 60 turns, its lag cannot be measured with the tool).
 
 **Limits.** 12 real turns only, and every difference between them is one or two words; 240 synthetic turns from three Kokoro voices; short clips; one pass on one machine, one caller at a time. Whisper and the sherpa and Moonshine models ran on the CPU; Qwen3-ASR and Kyutai ran on the Mac's GPU through MLX. In the live worker the voice and other work share those cores. None of this was tried inside a live call.
+
+## 80. Qwen3-ASR into the worker: three ways to give it the car names, and the plan (2 Nov, the owner: "wire Qwen3-ASR into the worker first: plan how to get the car-names context to it ... and what to test")
+
+A plan, with the checks that choose the route. No change to the worker yet. Section 79 has the numbers this rests on: Qwen3-ASR 0.6B recognises a turn about 185 ms sooner than Whisper base (70 against 256 ms after the end of speech) and gets 8.6% of the words wrong overall against 15.7%, but on the 12 real recorded turns it needs a car-names context (14.1% without, 9.0% with, against Whisper's 10.3%).
+
+**What the worker sends today.** `RemoteWhisper` (`voice/stt.py`) posts to `{stt_url}/audio/transcriptions` with the fields `model`, `language` ("en"), `temperature`, `response_format` and `prompt`. The `prompt` is the hint `stt_prompt()` builds for the turn: digits when a phone number was asked for; "yes/no" words at the read-back; day and time words (with what the agent just said) when a time was asked for; otherwise up to 45 car names from the stock, colours, "the second one", "test drive", and the agent's last 200 characters. Turning on a remote recogniser is two settings (`voice.stt_url`, `voice.stt_remote_model`) and a timeout (`voice.stt_timeout_s`, 3 s; a slower answer counts as "not heard"). So any server that reads `prompt` is a drop-in.
+
+**Route A: the context through the installed `speech-server`.** Not possible as installed.
+* **MEASURED (2 Nov):** the `prompt` and the `context` form fields both left "Bosch." for "Porsche." unchanged.
+* **Upstream source:** the transcription handler (`Sources/AudioServer/OpenAITranscriptions.swift`) reads `file`, `language`, `response_format` and `model` and ignores `prompt` and `temperature`. The library's `transcribe --context` exists (merged 11 Apr) and the request to add hot-word biasing (issue 219) was open on 2 Nov.
+* **What a fix would take:** a few lines in the Swift server to pass `prompt` to the model as its context, and a rebuild. This Mac has only the Command Line Tools (no Xcode, no Metal toolchain), so the owner would have to install Xcode or wait for the project.
+* **Side finding:** an unknown model name falls back to Parakeet-TDT and downloads it. That is what happened with `whisper-1`.
+
+**Route B: a small server of our own around the MLX Qwen3-ASR (recommended).**
+* `mlx-audio` 0.6.3 (Python, MLX) runs Qwen3-ASR. Its `Qwen3ASRModel.generate()` takes `language`, `system_prompt` and `hotwords`; `hotwords` is merged into `system_prompt`, which is placed in the model's system message, the place Qwen3-ASR takes its context. A `context=` keyword would be silently dropped.
+* The repo already has the pattern: `scripts/canary_server.py` (166 lines, the standard-library HTTP server in a separate MLX environment, the OpenAI transcription API, for `voice.stt_url`), and `tests/unit/test_stt_server.py`. The new script is `scripts/qwen3_asr_server.py` reading the `prompt` field into `system_prompt`.
+* **Footprint:** a private environment of 38 packages (the largest: `mlx-metal` 45 MB, `scipy` 21 MB, `transformers` 10 MB), about 100 MB in all; and the community MLX weights, `mlx-community/Qwen3-ASR-0.6B-4bit` 713 MB (or 8-bit, 1,011 MB). The weights in the `speech` tool's cache are a different format and are not reused. About 0.8 GB to download for a first spike, and nothing added to the project's own dependencies.
+* **UNKNOWN until built:** the speed in Python (the Swift server's warm call was 69 to 95 ms) and whether the context fixes the car words the way the command-line `--context` did (9.0% on the 12 recorded turns).
+
+**Route C: correct the car words afterwards.** Tried offline on the 252 Qwen3-ASR transcripts from section 79 (`scripts/asr_shootout/correct_after.py`): replace a stretch of the transcript by a hot-word from `config/hotwords.txt` when it looks very like it.
+
+| | recorded 12: words wrong / exact | all 252: words wrong / exact | corrected right / made worse |
+|---|---|---|---|
+| no correction | 14.1% / 4 | 8.6% / 200 | |
+| hot-words, similarity 90 or more | 12.8% / 5 | 9.1% / 195 | 1 / 6 |
+| hot-words, similarity 80 or more | 12.8% / 5 | 9.4% / 192 | 4 / 12 |
+| hot-words, 75 or more | 12.8% / 5 | 10.9% / 186 | 4 / 27 |
+| 80 or more, plus the agent's last-line words at 55 | **10.3% / 7** | 9.2% / 194 | 6 / 12 |
+
+It fixes "Plan Cruiser" (to Land Cruiser) with the global list, and "Bosch" and "the machine" (to Porsche and Macan) only by leaning on the words the agent had just said, the same information the Whisper hint carries. "The market" for "the Macan" stays wrong. And it breaks things: "go ahead" became "go Ahmed", and the caller's "Fatma" became "Fatima". The errors that matter are real words (machine, market, Bosch), which a spelling match cannot tell from correct speech. Not a main route. The agent's existing "did you mean the X or the Y" check on cars just shown (`engine._sounds_like_shown`) stays as it is.
+
+**Recommended plan.**
+1. **Build the server (route B)** in a private environment: `scripts/qwen3_asr_server.py` on the canary pattern, with unit tests against a fake model (the `prompt` becomes the system prompt; a wrong or missing language is forced to English; the answer shape the worker reads; an empty or silent clip gives an empty text; a bad request gives an error, not a crash).
+2. **Choose the context format on the recordings, in seconds.** Through the server, score on the 252 turns: no context; the static car names; the live `stt_prompt()` hint as it is; a shorter purpose-made string; the same words through `hotwords` instead of `system_prompt`; and the state-dependent hints (digits for a phone number, day and time words). Pick by words wrong "as read" and the car words in particular.
+3. **Check the hard cases:** phone numbers (the digit style: "050 793 2546" against words), names (Fatma, Omar Hassan, Sara), one-word and two-word answers ("Porsche.", "yes go ahead"), prices said in words.
+4. **Check what it does with no speech:** silence, room noise, a Bluetooth headset's digital silence, the agent's own voice leaking back. Whisper loops on some of these ("No!!!!") and the worker has guards for that (`is_degenerate`, `clean_transcript`, `tests/unit/test_stt_guard.py`); Qwen3-ASR has not been shown to behave. Use the quiet and noisy stretches in `logs/audio_dump`.
+5. **Check speed the way the worker will use it:** warm calls for 1 to 5 s clips through the Python server; the first call after the start (it was 1.45 s on the Swift server, so the server warms itself at start); 2, 4 and 8 calls at once; with the voice (eve) running next to it.
+6. **Failure:** with `voice.stt_url` set the worker has no Whisper to fall back on. Kill the server mid-call and see what the caller hears. If it is "not heard" over and over, decide whether the worker keeps Whisper as a fallback.
+7. **A live call** with `VA__VOICE__STT_URL` and `VA__VOICE__STT_REMOTE_MODEL`, comparing the notes of the same questions with and without it.
+
+**Decision for the owner.** Go ahead with step 1 and 2, which needs the 0.8 GB download (about 100 MB of packages and 713 MB of weights), or choose another route. Expected gain when it works (INFERRED): about 0.18 s less per turn from the recogniser alone, and fewer words wrong on headset audio (21.0% to 7.6% in section 79).
+
+**Not covered here.** The production recogniser is a shared GPU server (`voice.stt_url`), not this laptop; Qwen3-ASR's speed and cost on that server, and whether it can be served there with the same `prompt` field, are UNKNOWN. A streaming recogniser (Nemotron, section 79) is a separate piece of work.
