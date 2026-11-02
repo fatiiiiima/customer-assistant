@@ -2031,3 +2031,42 @@ What it means (INFERRED):
 * **The speed is a Mac limit, not necessarily a model limit:** on a GPU the reply delay could be about 0.3 s. The accuracy is a model limit and a rented GPU would not change it. Adding a tool call would help only if its argument accuracy were good, which the other open model (VoiceChat) reported at 42%.
 * **Licence:** this Mac build is tagged CC-BY-NC-4.0 (non-commercial) while NVIDIA's own card says commercial use is allowed (section above). Either way, not usable commercially without settling it.
 * Not tried here: Qwen3-Omni. The Mac conversions are text-out only (no speech back), 17.2 GB, and need a manual patch for loading, so it cannot show speech-to-speech speed on a laptop. VoiceChat 11B (8.58 GB, `speech voice-chat`) also runs on this tool, with tool calls through MCP. Its model reads about the same weights a step as PersonaPlex, so I expect a similar step time here (INFERRED).
+
+## 71. NVIDIA VoiceChat 11B (int5) on this laptop: answers better than PersonaPlex, still 1.75 times too slow (2 Nov, the owner: "download VoiceChat 11B int5 and run the same nine lines with the same stock facts")
+
+MEASURED on this M3 Pro (36 GB) with `speech voice-chat` (the installed `speech` tool, v0.0.29), weights `aufklarer/VoiceChat-11B-Perception-MLX-int5` (8.58 GB; 8.0 GB on disk in `~/.cache/huggingface/hub`, about 14 minutes with the first run), licence tag openmdw-1.1. The same nine synthetic caller clips and the same stock-facts system prompt as section 70, given with `--system-prompt`, each run from a WAV file with the tool's own timeline. Raw figures (ignored by git): `benchmarks/results/voicechat_mac_2026-11-02.json`.
+
+**Speed.**
+
+| | VoiceChat 11B int5 | PersonaPlex 7B 8-bit (section 70) |
+|---|---|---|
+| time to produce 80 ms of audio, p50 over a line | 146.5 to 149.3 ms (p95 152.8 to 170.6 ms) | 205 to 216 ms |
+| real-time factor | 1.72 to 1.77 | 2.59 to 2.73 |
+| the tool's own verdict | "real time NO" in all nine | (a live call needs 80 ms or less) |
+| start of the reply after the caller stops (audio time, from the first word of its text) | 0.32 to 0.48 s on all nine lines (0.32 on five of them) | 0.28 to 0.34 s on 3 lines; it talked over the caller on the other 6 |
+| talks over the caller | never | 6 of 9 lines |
+
+So on this Mac it cannot keep up with a live call: it needs about 1.75 s of work for each second of audio, so the delay would grow while the caller talks and the reply would come about 2 s late (INFERRED; I did not run a live microphone test). On a machine that does an 80 ms frame in under 80 ms, the reply would start about 0.3 to 0.5 s after the caller stops (INFERRED from the timeline above). That is the only measured path to a first sound under 1 s that I have seen.
+
+**What it said, against the facts in its prompt.** The speech recogniser built into the model sometimes mis-heard a word ("lamb cruiser", "McCon"); the model still answered about the right car.
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "We have a black twenty sixteen Porsche Macan in stock. Would you like to schedule a test drive for tomorrow at nine AM or two PM?" | right |
+| 2 other Porsches | "No, we only have one Porsche in stock, a black twenty sixteen Porsche Macan." | right (the best answer of either model) |
+| 3 something cheaper | "The cheapest car is the Honda Civic, which is five thousand four hundred and fifty dirhams." | **wrong price**: 54,500, said as 5,450 |
+| 4 Land Cruiser | "white, has eighty thousand kilometers on it, and is equipped with four-wheel drive and eight seats" | **wrong**: 92,000 km; the rest right |
+| 5 this weekend | "The white Toyota Land Cruiser is in stock and ready for test drives. Would you like to schedule a test drive for tomorrow at nine AM or two PM?" | right (slots), though it did not say the weekend is not on offer |
+| 6 owners | "The Macan has had twenty three owners." | **invented**: the prompt has no owner count; it should say it does not have it |
+| 7 fastest | "The fastest car we have is the twenty twenty one BMW M three, with five hundred and ten horsepower." | right |
+| 8 speak to someone | "I am sorry, but I cannot provide a phone number. I am a virtual assistant... We have a variety of used cars in stock..." | **missed** the request; no hand-off (no tools given here) |
+| 9 goodbye | "You are welcome. Have a great day! What car are you interested in?" | right, but it asked a new question after a goodbye |
+
+Five of nine were right, three had a wrong or invented figure (a price a tenth of the true one, 80,000 for 92,000 km, and 23 owners out of nowhere), and one missed the request. PersonaPlex had four, four and one. VoiceChat's replies were short and finished, where PersonaPlex's often ran on.
+
+What it means (INFERRED):
+* **The speed gap is a Mac limit; the accuracy gap is the model.** Even with the stock facts in its prompt, it gave a wrong price, a wrong distance and an invented owner count in 3 of 9 lines, and a speech-to-speech model speaks before any check can see the words. That breaks the owner's rules (fixed and true prices; an unknown fact is said to be unknown).
+* **Where it would fit, if anywhere:** as a front end whose text stream is read by a monitor that cuts the audio on a bad figure, or with its tool calls doing every lookup. The model card's own tool scores are weak (42% argument accuracy, 33% pass@1), and tool calls were not tried here.
+* **To measure its real speed we need a faster machine:** a GPU (the model card lists A100, H100, H200, B100, B200 and RTX 6000) or a faster Mac. Whether a rented 80 GB GPU gets under 80 ms a frame is UNKNOWN.
+* **Licence:** openmdw-1.1 allows commercial use as written, but press reports NVIDIA labels this checkpoint research-only (section above). Not settled.
+* Qwen3-Omni was not tried: its Mac conversions are text-out only.
