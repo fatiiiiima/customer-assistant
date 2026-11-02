@@ -2289,3 +2289,35 @@ AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/tur
 I expect the first follow-up request of each call-turn to be about 0.4 s quicker with the new settings (INFERRED from the 622 and 206 ms measured above). That is the live-call saving, for both modes.
 
 **Where this leaves the parallel turn (INFERRED).** It is worth about 0.3 s at p50 for three times the model calls, and it makes the slow turns a little slower. Raising the hit rate is the lever. More lookups ready ahead raise the contention and the cost; better prediction of what the model will choose is the alternative.
+
+## 77. The connection fix with the caller's pause, measured: about 0.3 s quicker on every follow-up question (2 Nov, run by the owner)
+
+MEASURED with the two commands at the end of section 76 (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7`, once with the new connection settings and once with the old ones), the same 24 turns, one call after another, with 7 s of silence before every question after the first of a call. Nemotron Nano 3, priority tier, the baseline (two calls) in both. The old settings were HTTP/1.1 with httpx's 5 s keep-alive, set from the command line (`--set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false` and `..._KEEPALIVE_S=5`). Raw files (ignored by git): new `turn_speed_2026-11-02_124640.json`, old `turn_speed_2026-11-02_124947.json`.
+
+| | old (HTTP/1.1, 5 s) | new (HTTP/2, 50 s) |
+|---|---|---|
+| first words, p50 / p90 | 1,586 / 1,896 ms | **1,248 / 1,749 ms** |
+| whole turn, p50 / p90 | 1,691 / 2,040 ms | 1,377 / 1,753 ms |
+| right action | 14/17 | 14/17 |
+
+**Split by place in the call.**
+
+| | old | new | same line, old minus new |
+|---|---|---|---|
+| follow-up questions after the pause (19), p50 / mean | 1,586 / 1,598 ms | 1,248 / 1,315 ms | median **+317 ms**; new faster by over 100 ms on 15 of 19, slower on 1 |
+| first question of a call (5), p50 / mean | 1,607 / 1,702 ms | 1,709 / 1,512 ms | median +260 ms (only 5 turns, so no reading) |
+| for comparison: new settings, no pause (section 76), follow-ups p50 | | 1,411 ms | |
+
+* **This matches the prediction.** Section 75 measured, with no key, a first request after a 6.5 s pause of a median 622 ms (old) against 206 ms (new), a difference of about 0.4 s. On real model calls the follow-up questions came out 0.32 to 0.34 s quicker (p50 and mean).
+* **A caller who pauses pays about 0.3 s for each question under the old settings.** The old numbers with a pause (1,586 ms) are about 175 ms above the same turns sent back to back with the new settings (1,411 ms), so a part of the old penalty was visible even before the pause was added.
+* **The new settings with the pause were not slower than without it** (1,248 against 1,411 ms), which is within the spread of one pass of 19 turns (about 150 ms in this series). I read that as no cost, not as a gain from pausing.
+* **The first question of a call** has only 5 turns here and the readings point both ways (p50 worse, mean better). The connection is warmed when the call opens, so I expect no difference; this test cannot show it.
+* **Stays as built:** nothing more to change in the connection. It applies to the Bedrock backend only.
+
+**Where the live call stands (INFERRED).** The status quo before this work was the old settings with two calls: 1,586 ms of first words at p50 with a pause. With the connection fix it is 1,248 ms (measured). The parallel turn then saves about a further 0.3 s at p50 for three times the model calls (section 76), which would put first words near 0.9 to 1.0 s on a call that pauses. That combination, the new settings with a pause, has not been run. Recognition (about 0.27 s), the wait for the end of speech (about 0.2 s) and the voice start (under 0.16 s) come on top of these, so the owner's 1 s rule is still out of reach on this path.
+
+To measure the combination (the owner's run, both modes with the new settings and a 7 s pause, about 7 minutes and under 5 US cents by the dry run):
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --pause 7
+```
