@@ -2531,3 +2531,30 @@ The gain is small (8.0% to about 7.4%) and it needs the worker to keep Whisper l
 **To use it in the worker (next, not done).** `RemoteWhisper` sends only `prompt`; for this server it should send the stock names as `hotwords` and no `prompt`. That is a small, tested change behind a setting (`voice.stt_hotwords_field`), so a GPU Whisper server is not sent a field it does not know. Then: the no-speech checks, the "RAV4" join, a decision on a Whisper fallback for clips under a second, and a live call.
 
 Running it by hand: `benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.py --port 8011`.
+
+## 82. The worker can send the stock's names as hot-words (2 Nov, the owner: "change RemoteWhisper to send the stock names as hotwords behind a setting, with tests, then give me the commands for a live call with the Qwen3-ASR server")
+
+**Changed.**
+* **Setting `voice.stt_hotwords_field`** (off by default; `VA__VOICE__STT_HOTWORDS_FIELD=true`). It applies only with `voice.stt_url`. A Whisper server is not sent a field it does not know, and nothing changes for any existing setup.
+* **`RemoteWhisper`** (`voice/stt.py`): with the setting on, each turn's request carries `hotwords` (the stock's names, comma separated, at most 45) and **no `prompt`**. The names come from `hotword_source()`, which the pipeline sets (`attach_stock_hotwords` in `voice/pipeline.py`) to read the inventory's vocabulary at every turn, so a car added to the stock is heard without a restart. If the source cannot be read, the configured hot-word list is sent instead and the turn goes on; with no names at all no field is sent.
+* **`stock_names()`** (`voice/prompts.py`): the make and model names as the recogniser should hear them ("Toyota", "Land Cruiser", "RAV4"), shared with the Whisper hint, which used to build them inline (a test pins the hint to its earlier text).
+* **`EchoGuard`** (`voice/services.py`): a recogniser that was never given the hint (`ignores_prompt`) is not asked a second time with another hint. The guard's two retries ("the digits hint was written down", "the agent's own question was written down") only make sense when a hint was sent; here they would repeat the same request and double the turn's time. The agent's own question coming back is still answered as "not understood" (`UNCLEAR`), without the second try.
+
+**Tests** (`tests/unit/test_stt_hotwords.py`, 12; `pytest tests/unit`: 1,519 passed, 40 skipped; lint counts unchanged on every file touched): the names' form and limit; the Whisper hint unchanged; by default the prompt is sent and no `hotwords`; with the setting the names go as `hotwords` and the hint is never sent, even when one is given; the names are read again each turn; no names means no field, and a failing source falls back to the configured list without an error; at most 45 names; the start-up check works with hot-words and a dead server still fails it loudly; the setting is off by default and the environment turns it on; the pipeline gives only a hot-words recogniser the stock, reading the inventory each time; the guard does not retry for a recogniser that ignores the hint, and still refuses an echo of the agent's question, and is unchanged for a Whisper server.
+
+**Checked end to end** (the real Qwen3-ASR server, the worker's `RemoteWhisper` and `EchoGuard`, the real portal inventory; 2 Nov): 40 names are sent from the portal stock ("Audi, A4, Q7, Bmw, 320I, 530I, ..."); on the 12 recorded turns **5.1% words wrong and 9 of 12 exact**, the same as the A/B in section 81; on the 240 synthetic turns 8.3% words wrong, 196 exact; no errors, no guard retries; a median of 124 ms per turn with the HTTP round trip included (the server alone: about 97 ms).
+
+**What is not done.**
+* **"half two" and "the RAV4"** (section 81) are unchanged; the exact-letters join and a Whisper fallback for clips under a second are not built.
+* **No Whisper fallback.** With `voice.stt_url` set the worker holds no Whisper. If the Qwen3-ASR server is down at start the worker refuses to start (`warm_up` fails loudly); if it dies mid-call the caller hears "not heard" turns until it is back.
+* **The names are the stock's, title-cased** ("Bmw" for BMW); the recogniser is not case-sensitive in a way the agent notices (it reads the words in lower case), but it is not checked how the hot-word list's spelling affects the written form.
+* **Not tried:** silence, noise and the agent's own voice leaking back into the recogniser; several callers; a live call. Over to the owner.
+
+**Running it** (two terminals; the recogniser first, because the worker checks it at start-up):
+
+```
+benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.py --port 8011
+```
+```
+VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```

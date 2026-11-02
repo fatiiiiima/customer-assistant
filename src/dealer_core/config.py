@@ -277,6 +277,8 @@ class VoiceCfg(_Strict):
     stt_url: str = ""                            # recognition on a shared GPU server instead of in the worker (OpenAI-compatible /v1/audio/transcriptions:
                                                  # vLLM with a Whisper model, speaches / faster-whisper-server). Empty = local OpenVINO Whisper
     stt_remote_model: str = "openai/whisper-large-v3-turbo"   # the name that server knows the model by
+    stt_hotwords_field: bool = False              # with stt_url: send the stock's make and model names as a `hotwords` field (the model's own hot-word list) and NO `prompt`. For Qwen3-ASR
+                                                  # (scripts/qwen3_asr_server.py), which does better with hot-words than with the hint's sentences (ARCH_REVIEW section 81); a Whisper server wants the hint
     stt_timeout_s: float = 3.0                   # a remote transcription slower than this counts as "not heard" (the caller is asked again)
 
 

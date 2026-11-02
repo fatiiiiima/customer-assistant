@@ -133,6 +133,12 @@ class EchoGuard:
 
     def transcribe(self, pcm16: bytes, prompt: str | None = None) -> tuple[str, float]:
         text, ms = self._engine.transcribe(pcm16, prompt)
+        if getattr(self._engine, "ignores_prompt", False):       # a recogniser given hot-words, not the hint (voice.stt_hotwords_field): the hint was never written down, and a second
+            line = self._agent_line() if self._agent_line else ""   # listen would be the same request. An echo of the agent's question is still not an answer.
+            if text and line and echoes_agent(text, line):
+                self.retries += 1
+                return UNCLEAR, ms
+            return text, ms
         if prompt and prompt.startswith(CONTACT) and is_short_digit_run(text):       # the digits hint was written down: listen again with no hint at all
             self.retries += 1
             again, ms2 = self._engine.transcribe(pcm16, "")

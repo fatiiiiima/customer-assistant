@@ -38,6 +38,13 @@ def hotword_groups(path: Path) -> dict[str, list[str]]:
     return groups
 
 
+def stock_names(vocab: dict[str, list[str]] | None, limit: int | None = None) -> list[str]:
+    """The makes and models in stock as the recogniser should hear them: "Toyota", "Land Cruiser", "RAV4" (a model with a digit in it in capitals). No repeats."""
+    names = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
+    names = list(dict.fromkeys(names))
+    return names[:limit] if limit else names
+
+
 def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], vocab: dict[str, list[str]] | None = None) -> str:
     q = last_question(last_agent).lower()
     if state is State.CONTACT:                    # digits when a number is asked for; no hint for a name (a list of names made Whisper write a list of names)
@@ -47,7 +54,7 @@ def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], voca
     said = _recent(last_agent)
     if state is State.SLOT or _ASKS_WHEN.search(q):
         return DAY_TIME + said                    # "...tomorrow I can do 9 AM or 2 PM": a bare "two PM" is then heard as that
-    stock = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
+    stock = stock_names(vocab)
     seen: set[str] = set()
     cars = [x for x in stock + groups.get("makes", [])[:25] + groups.get("models", [])[:25] if not (x.lower() in seen or seen.add(x.lower()))][:60]   # what we actually sell comes first            # no place names: Whisper then hears "Abu Dhabi" in "hello"
     return ", ".join(cars[:45] + ["white, black, grey, silver, red, blue", "the second one", "test drive", "tomorrow", "today"]) + said
