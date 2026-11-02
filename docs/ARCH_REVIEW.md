@@ -2627,3 +2627,29 @@ The same rule explains the noise turns: Qwen3-ASR with a word list writes the li
 **Correction to section 84.** "One sentence lost: cause not found" is answered above. The noise "um" were the word list written back, turned into "um" by the same length rule.
 
 **Not done.** Parakeet on the NVIDIA server the worker would use in production (this was the MLX build on the Mac); hot-word or context biasing for Parakeet (NeMo has some; not tried); a combination (Parakeet for the sentence, Whisper for one or two words and car names); dropping a transcript that is the word list written back (now still "um"); the weights (2.47 GB in `~/.cache/huggingface`) are kept until the owner says to delete them.
+
+## 86. Parakeet wired into the worker, with the fixes (2 Nov, the owner: "wire in parakeet with the fixes")
+
+**Built.**
+* **`scripts/parakeet_asr_server.py`** (port 8012): Parakeet-TDT 0.6B v2 behind the same OpenAI transcription API as the Qwen3 server (it reuses that script's upload parsing, WAV conversion, health, error answers and no-transcripts-in-the-log), in the same private MLX environment. `prompt`, `hotwords` and `language` are accepted and ignored. Nothing in the worker changed to use it: `voice.stt_url` points at it. `VA__VOICE__STT_HOTWORDS_FIELD=true` is how the worker is told the recogniser takes no hint (it sends no `prompt` and EchoGuard does not listen a second time); the stock names it also sends are ignored by this server.
+* **The fixes that go with it.** (1) The length rule of section 85 (a sentence over 65 characters is no longer "um"). (2) **A transcript that is the hot-word list written back is no speech** (`is_word_list_echo` in `voice/stt.py`: four or more pieces, 80% or more of them names from the list that was sent). It is dropped, so it is not a turn and not "um"; this protects the Qwen3 server, where it happened; Parakeet does not do it. A caller naming two cars, or a sentence with a name in it, is not an echo.
+
+**Tests** (`tests/unit/test_parakeet_asr_server.py`, 4; 2 added to `test_stt_hotwords.py`; `python -m pytest`: 1,665 passed, 68 skipped; lint clean on the touched files): the adapter hands the model only the audio and ignores the hint, the list and the language; the worker's own client gets the text and the server names itself `parakeet`; with the setting on the guard never asks a second time; a list written back is dropped and a caller naming cars is not caught.
+
+**Checked end to end** (the real Parakeet server, the worker's `RemoteWhisper` and `EchoGuard`, the real configuration): the 12 recorded turns **11.5% words wrong, 5 exact, 48 ms median with the HTTP round trip**; the 240 synthetic turns **8.1% wrong, 199 exact**; no errors, no guard retries; the long sentence of the live call, "No, I'm asking if this Yaris has been owned by other people before.", comes through whole (59 ms). The same numbers as the offline run of section 85.
+
+**What was not done, and why.**
+* **No change to which names the Qwen3 server is sent.** The A/B of section 84 showed no gain from any list on the real 95-name stock (10.3% = no list), so a scheme for choosing names would be built on nothing. With Parakeet no names are used.
+* **No noise filter was built.** Parakeet writes words for room noise ("Yeah.", "That's really good.") as the others do. In the live call the level the worker measures (`voice.min_rms`, the loudest 0.3 s) was **0.005 to 0.032 for the eight noise stretches and 0.051 to 0.283 for the speech**. The default is 0.005. `VA__VOICE__MIN_RMS=0.04` would have removed every noise stretch of this call and kept all of the speech. It is a setting for this microphone and this speaker's volume, not a default: the note beside the setting records quiet callers (10% volume) lost at 0.012. It is in the live-call command as an option to try.
+* **Parakeet on the production GPU server, and name biasing for it,** are not done. The model, fine as it is on the Mac, has no word list here. Whisper with the hint remains the best at car names; Parakeet and Qwen3 the best overall (section 85).
+* **The fixes of section 84 that belong to `model_only` stay off:** the fact checks that would have stopped "one owner", and the fragment check that would have dropped "um".
+
+**Running it** (three terminals; the recogniser first because the worker checks it at start-up):
+
+```
+benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/parakeet_asr_server.py
+```
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8012/v1 VA__VOICE__STT_REMOTE_MODEL=parakeet VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+Add `VA__VOICE__MIN_RMS=0.04` to the second to try the noise gate.

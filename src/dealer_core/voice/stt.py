@@ -35,6 +35,14 @@ def is_degenerate(text: str, audio_seconds: float | None) -> bool:
     return audio_seconds is not None and len(text) > 25 * max(audio_seconds, 1.0) + 40
 
 
+def is_word_list_echo(text: str, names: list[str]) -> bool:
+    """The recogniser wrote the hot-word list it was given instead of what was said (Qwen3-ASR does this for a clip with no speech in it, 2 Nov): four or more
+    pieces, nearly all of them names from the list. A caller naming two cars ("Camry, Yaris") is not one."""
+    known = {n.lower() for n in names}
+    pieces = [p.strip().lower() for p in re.split(r"[,.;]", text) if p.strip()]
+    return len(pieces) >= 4 and sum(p in known for p in pieces) / len(pieces) >= 0.8
+
+
 def hotword_terms(path: Path) -> list[str]:
     """The car makes/models and place names used as a Whisper initial prompt (one per line, # comments allowed)."""
     if not path.exists():
@@ -133,6 +141,7 @@ class RemoteWhisper:
         self.name = f"remote-whisper:{model}@{self.base}"
         self.client = client or httpx.Client(timeout=timeout_s, limits=httpx.Limits(max_connections=max_parallel, max_keepalive_connections=max_parallel))
         self.errors = 0
+        self.word_list_echoes = 0                                  # clips whose "words" were the hot-word list written back (dropped as no speech)
 
     def warm_up(self) -> None:
         """Fails start-up loudly if the server is not there (a worker that cannot hear must not take calls)."""
@@ -140,19 +149,25 @@ class RemoteWhisper:
 
     def _post(self, wav: bytes, prompt: str | None, raise_errors: bool = False) -> str:
         data = {"model": self.model, "language": self.language, "response_format": "json", "temperature": "0"}
+        sent: list[str] = []
         if self.hotwords_field:
             try:
                 names = (self.hotword_source() if self.hotword_source else None) or self.fixed_hotwords
             except Exception:  # noqa: BLE001 - the stock could not be read: the configured list, never a failed turn
                 names = self.fixed_hotwords
             if names:
-                data["hotwords"] = ", ".join(names[:HOTWORDS_SENT])
+                sent = names[:HOTWORDS_SENT]
+                data["hotwords"] = ", ".join(sent)
         elif prompt or self.default_prompt:
             data["prompt"] = prompt or self.default_prompt
         try:
             r = self.client.post(f"{self.base}/audio/transcriptions", data=data, files={"file": ("turn.wav", wav, "audio/wav")}, timeout=self.timeout_s)
             r.raise_for_status()
-            return str(r.json().get("text", "")).strip()
+            text = str(r.json().get("text", "")).strip()
+            if sent and is_word_list_echo(text, sent):                      # no speech in the clip: it is not a turn
+                self.word_list_echoes += 1
+                return ""
+            return text
         except Exception:
             self.errors += 1
             if raise_errors:

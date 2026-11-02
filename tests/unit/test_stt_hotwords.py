@@ -162,3 +162,22 @@ def test_the_agents_own_question_coming_back_is_still_not_an_answer_with_no_seco
     assert guard.transcribe(PCM, "x")[0] == UNCLEAR and len(eng.prompts) == 1 and guard.retries == 1
     eng2 = Engine(["tomorrow at nine"], ignores_prompt=True)
     assert EchoGuard(eng2, lambda: AGENT, lambda: "plain").transcribe(PCM, "x")[0] == "tomorrow at nine"
+
+
+# ------------------------------------------------------------------------------------------------ the list written back
+def test_a_transcript_that_is_the_hot_word_list_written_back_is_no_speech():
+    """2 Nov live call: Qwen3-ASR wrote the list it was given for clips with no speech; it reached the agent as "um" and was answered."""
+    names = ["Toyota", "Land Cruiser", "Macan", "Camry", "Yaris", "RAV4"]
+    _, client = server("Toyota, Land Cruiser, Macan, Camry, Yaris, RAV4")
+    r = remote(client, hotwords_field=True)
+    r.hotword_source = lambda: names
+    assert r.transcribe(PCM, None)[0] == "" and r.word_list_echoes == 1 and r.errors == 0
+
+
+def test_a_caller_naming_two_cars_or_a_sentence_with_a_name_is_not_an_echo():
+    from dealer_core.voice.stt import is_word_list_echo
+
+    names = ["Toyota", "Land Cruiser", "Macan", "Camry", "Yaris", "RAV4"]
+    assert not is_word_list_echo("Camry, Yaris.", names) and not is_word_list_echo("Yes, talk about the Macan.", names)
+    assert not is_word_list_echo("Camry, Yaris, or the Macan, whichever is cheaper", names)
+    assert is_word_list_echo("toyota, land cruiser, macan, camry.", names) and not is_word_list_echo("", names)
