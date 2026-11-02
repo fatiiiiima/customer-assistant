@@ -628,7 +628,11 @@ class AgentEngine:
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
         ahead: _Spec | None = None
         if specs:
-            key = f"get_car {args.get('car_id')}" if tool == "get_car" and isinstance(args, dict) else tool
+            if tool == "get_car" and isinstance(args, dict):
+                car_in_play = self._car_arg(s, args)                          # no id given: the car in focus, as the tool reads it (2 Nov local run: "is it reliable" missed its reply)
+                key = f"get_car {car_in_play.stock_id if car_in_play else None}"
+            else:
+                key = tool
             ahead = specs.get(key)
             for sp in specs.values():
                 if sp is not ahead:
@@ -1421,12 +1425,15 @@ class AgentEngine:
             joined = " ".join(words)
             if _BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found:
                 wanted.append(("prepare_booking", self._args_for(s, "prepare_booking", None, text)))
+                wanted.append(("check_slots", self._args_for(s, "check_slots", None, text)))
+            if s.shown and not s.car:
+                wanted.append(("get_car", {"car_id": None}))                       # a question about "it" with cars shown and none in focus: "Which car do you mean?"
             if _BYE.search(joined):
                 wanted.append(("end_call", {}))
         wanted.append(("none", {}))
         out, seen = [], set()
         for tool, args in wanted:
-            key = f"{tool} {args['car_id']}" if tool == "get_car" else tool
+            key = f"{tool} {args['car_id']}" if tool == "get_car" else tool        # (a get_car with no id is keyed "get_car None", as the decided one is)
             if key in seen:
                 continue
             seen.add(key)
@@ -1437,7 +1444,7 @@ class AgentEngine:
                 res = None
             if res is not None:
                 out.append((key, args, c, res))
-        return out[:6 if more else 4]
+        return out[:8 if more else 4]
 
     def _one_call_prompt(self, s: Session, text: str, cands: list) -> str:
         """Short: the time, the booking if one is under way, the last four lines, the caller's words, then each prepared action with its facts (each fact once)."""

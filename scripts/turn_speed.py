@@ -25,7 +25,7 @@ import bedrock_speed as bs
 MODES = {"baseline": {}, "parallel": {"VA__VOICE__PARALLEL": "true"}, "one_call": {"VA__VOICE__ONE_CALL": "true"}}
 KEY_ENV = "AWS_BEARER_TOKEN_BEDROCK"
 TOKENS_DECIDE, TOKENS_REPLY = 600, 1100              # input tokens of one decision / one reply prompt (about 2,400 / 4,400 characters, section 62), an estimate
-CALLS = {"baseline": (1, 1), "parallel": (1, 5), "one_call": (0, 1)}      # (decisions, replies) a turn, at most: a parallel turn writes a reply for up to 5 lookups
+CALLS = {"baseline": (1, 1), "parallel": (1, 6), "one_call": (0, 1)}      # (decisions, replies) a turn, at most: a parallel turn writes a reply for each lookup it can prepare (2.4 on average, 4 at most in the 24 local turns)
 
 
 def pct(xs: list[float], p: int) -> int | None:

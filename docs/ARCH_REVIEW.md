@@ -2119,3 +2119,37 @@ Two were right, three had the right facts but missed or twisted the question, an
 | licence | NVIDIA Open Model License; this build tagged non-commercial | OpenMDW 1.1; press says research only | Apache-2.0 |
 
 What it means (INFERRED): on this laptop none of the three speech models gives us a better turn than the cascade we have. MiniCPM-o's clean licence is its strength, and its Qwen3 base did not make it more truthful here: it invented an owner count and a price gap, and ignored two questions. Prompt wording, a larger quantisation (Q8 is 8.7 GB) and a faster machine could change the picture, and none was tried. Tool calling is not documented for it.
+
+## 73. The parallel turn: a matching fix and two more lookups ready ahead (2 Nov, the owner: "let's focus on the parallel run")
+
+Housekeeping first: the PersonaPlex, VoiceChat and MiniCPM-o files and the scratch build were deleted at the owner's request (about 25 GB; the small text-to-speech models and the `speech` tool were kept).
+
+**What the misses were.** Section 67's local run had the decided reply ready on 11 of 24 turns. The saved notes of the other 13 show no mismatch between a reply written ahead and the prompt the turn would have sent (every note says "prompt changed: False"). They were gaps in what is prepared:
+* **`get_car` with no id, 4 turns.** The model said `get_car` without an id ("is it reliable", "how many owners has it had", "what is the mileage"). The tool reads that as the car in focus, but the lookup key did not, so a reply that was ready ahead was not used. This was a bug of mine.
+* **No car in focus, cars shown:** the reply to "it" is the question "Which car do you mean?", which nothing prepared.
+* **Booking words:** `check_slots` was decided (the free times) and not prepared.
+* **The rest:** `compare_cars` (3), `search_cars` with no filter (3), `cancel_draft` (1) and `handoff` (1).
+
+**Changed (`agent/engine.py`).**
+* The decided `get_car` is keyed by the car the tool will use (the id, or the car in focus), the same as the prepared ones.
+* Two lookups added for the parallel turn only: `get_car` with no car, when cars were shown and none is in focus; and `check_slots`, on the same booking words as `prepare_booking`.
+* Not added: `compare_cars` and an always-on `search_cars` would give three more hits but put one more reply call on nearly every turn. The hand-off and the confirmation are still never run ahead.
+* The cap on lookups prepared ahead went from 6 to 8. In the 24 local turns it was at most 4.
+
+**Local check** (Qwen3-4B on MLX, the same 24 turns as section 67, `scripts/turn_speed.py --modes parallel`, MEASURED, one run each; the local model picks slightly different actions on each run):
+
+| | before | after |
+|---|---|---|
+| turns with the decided reply ready ahead | 11 of 24 (46%) | 14 of 24 (58%) |
+| replies written ahead per turn | 1.9 on average, at most 3 (46 in all) | 2.4 on average, at most 4 (58 in all) |
+| right action (the decision is unchanged) | 15/17 | 15/17 |
+
+So three more turns get their reply for half a reply more per turn on average: 26% more reply calls for 27% more hits (INFERRED from two single runs). Locally the speed is still worse than two calls (first words 2.8 s against 1.3 s) because the local server answers one request at a time; only Bedrock can show whether the saving is real.
+
+Tests (`tests/unit/test_model_only.py`, 3 added; one older test now uses `compare_cars` as its "nothing ready ahead" case, since `check_slots` is prepared on booking words): a `get_car` with no id is the car in focus and its reply is used; a question about "it" with cars shown and none in focus has the "which car" reply ready; booking words get the free-times reply ready, and a hand-off still never does. `pytest tests/unit`: 1,491 passed, 40 skipped.
+
+The cost estimate in `scripts/turn_speed.py` for the parallel turn is now at most 1 decision and 6 replies a turn. For the owner's run (one pass of the baseline and the parallel turn, 24 turns each) that is at most 216 calls and about 214,000 input tokens: about 2 US cents of input and under 2 more of output at Nemotron's priority rates (INFERRED; the tokens per call are estimates).
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```

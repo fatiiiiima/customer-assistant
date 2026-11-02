@@ -17,7 +17,7 @@ def test_a_cloud_run_is_refused_without_the_key_and_the_switch_and_a_dry_run_cou
     assert ts.main(["--backend", "bedrock_nemotron", "--modes", "baseline", "parallel", "--dry-run"]) == 0
     out = capsys.readouterr().out
     turns = sum(len(c) for c in ts.conversations())
-    assert f"2 mode(s) x {turns} turns" in out and f"at most {turns * 2 + turns * 6} model calls" in out and "nothing sent" in out      # 2 for the baseline, up to 6 for the parallel
+    assert f"2 mode(s) x {turns} turns" in out and f"at most {turns * 2 + turns * 7} model calls" in out and "nothing sent" in out      # 2 for the baseline, up to 7 for the parallel
 
 
 def test_each_turn_is_timed_to_its_first_words_and_scored_against_the_expected_action(monkeypatch, tmp_path):

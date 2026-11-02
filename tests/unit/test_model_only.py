@@ -219,9 +219,9 @@ def test_parallel_the_reply_written_ahead_for_the_decided_lookup_is_the_one_spok
 
 
 def test_parallel_a_decision_with_no_reply_written_ahead_gets_its_reply_written_after_it():
-    e, b = parallel(["check_slots"])
-    r = said(e, e.new_session(), "when can I come in")
-    assert "none for check_slots" in r.debug.note and r.reply == "Here is what I have. Want to hear more?"
+    e, b = parallel(["compare_cars"])
+    r = said(e, e.new_session(), "which one is better")
+    assert "none for compare_cars" in r.debug.note and r.reply == "Here is what I have. Want to hear more?"
     assert len(b.writes) >= 2                                              # the ones written ahead, plus this one
 
 
@@ -286,3 +286,31 @@ def test_parallel_booking_and_goodbye_words_get_their_replies_written_ahead_but_
     r = said(e2, s2, "can I speak to someone")
     assert "none for handoff" in r.debug.note and s2.handoff is not None            # the escalation ran once, after the decision, not ahead of it
     assert "handoff" not in e2._speculate(e2.new_session(), "can I speak to someone")
+
+
+def test_parallel_a_get_car_with_no_id_is_the_car_in_focus_and_its_reply_ready_ahead_is_used():
+    """2 Nov local run: "is it reliable" was decided as get_car with no id; the tool reads that as the car in focus, but the key did not, so the ready reply was missed."""
+    e, _ = parallel(["get_car", "get_car"])
+    s = e.new_session()
+    said(e, s, "tell me about the Camry")
+    assert s.car
+    r = said(e, s, "is it reliable")
+    assert f"get_car {s.car} was used" in r.debug.note
+
+
+def test_parallel_a_question_about_it_with_cars_shown_and_none_in_focus_has_the_which_car_reply_ready():
+    e, _ = parallel(["search_cars", "get_car"])
+    s = e.new_session()
+    said(e, s, "do you have any Toyotas")
+    assert s.shown and not s.car
+    r = said(e, s, "how many owners has it had")
+    assert "get_car None was used" in r.debug.note and "Which car" not in r.reply                  # (the scripted model's own words are spoken, not the code's)
+
+
+def test_parallel_booking_words_also_get_the_free_times_reply_ready_ahead():
+    e, _ = parallel(["get_car", "check_slots"])
+    s = e.new_session()
+    said(e, s, "tell me about the Camry")
+    r = said(e, s, "can I see it tomorrow")
+    assert "check_slots was used" in r.debug.note
+    assert set(e._speculate(e.new_session(), "can I speak to someone")) <= {"none"}              # and still no hand-off ahead, which acts outside the call
