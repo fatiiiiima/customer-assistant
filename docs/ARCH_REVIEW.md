@@ -1841,3 +1841,28 @@ The speed test now records the expected action with each captured prompt and rep
 ```
 uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 42 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
 ```
+
+## 66. The one-call turn after the section 65 changes, on Nemotron: still the wrong action too often (2 Nov, run by the owner)
+
+MEASURED with the section 65 command, from this M3 Pro to `us-east-1`, priority tier, no reasoning. There were no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-11-02_091430.json`.
+
+| | p50 | p90 | right action |
+|---|---|---|---|
+| the decision alone (17 calls) | 597 ms | 1,961 ms (two calls took 2.0 and 2.2 s; the rest under 0.9 s) | 12/12 judged |
+| one call: its first piece said (21 of 24 had a reply) | 689 ms | 1,501 ms | 9/17 by name (8/17 before) |
+| a reply's first piece in a second call (14 calls) | 688 ms | | |
+
+**Speed:** two calls take the decision plus the reply: about 1.29 s, adding the p50s (INFERRED). One call takes about 0.69 s, which saves about 0.6 s.
+
+**Actions:** still not good enough. Of the 9 right by name, two had a car id that does not exist (`prepare_booking 1`, `get_car 001`); the second gave no reply. So 7/17 were fully right. Of the 8 wrong:
+* **5 had the right action unprepared:** "the second one", "I want something sporty", "Yes.", "What is the mileage?" and "can I see it this weekend". Two causes:
+  * The code's lookups do not catch everything: "sporty" is no search filter, and a pick needs a list.
+  * The captured prompts carry the local model's earlier turns (section 62). After its own wrong turns there was no list or car in focus for these lines. Part of this is the test, not the design (INFERRED).
+* **3 had it prepared and took another:** "something cheaper", "I am looking for a Porsche." and "do you have any other Porsche cars?" all named a car instead of the search. There is only one Porsche, so the first Porsche one is arguable.
+
+**Replies, read by hand:**
+* car questions still got whole fact sheets, well over the 30 words asked for;
+* to "Do you have any reviews on this car?" it repeated the earlier questions and answers;
+* to "Yes." it greeted the caller again.
+
+What it means (INFERRED): one call buys about 0.6 s and loses the decision's accuracy (12/12 against 7 to 9 of 17). A turn that does the wrong thing quickly is worse for the caller than a correct one 0.6 s later. A way to keep both: run the decision call as now and, at the same moment, start a reply call for each prepared lookup. Speak the reply whose action the decision names, and drop the others. The time is then about the slower of the two calls, not their sum. The cost is about 3 to 4 times the tokens a turn, still well under a US cent a turn at Nemotron's rates. Not built.
