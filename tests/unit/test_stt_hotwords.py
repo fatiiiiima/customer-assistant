@@ -94,12 +94,49 @@ def test_no_names_means_no_field_not_an_empty_one_and_a_failing_source_falls_bac
     assert r2.transcribe(PCM, None)[0] == "Porsche." and forms[-1]["hotwords"] == "Toyota, Nissan" and r2.errors == 0
 
 
-def test_no_more_than_45_names_are_sent():
+def test_no_more_than_the_set_number_of_names_are_sent_and_the_default_covers_a_95_name_stock():
     forms, client = server()
     r = remote(client, hotwords_field=True)
     r.hotword_source = lambda: [f"Car{i}" for i in range(200)]
     r.transcribe(PCM, None)
-    assert len(forms[-1]["hotwords"].split(", ")) == HOTWORDS_SENT == 45
+    assert len(forms[-1]["hotwords"].split(", ")) == HOTWORDS_SENT == 100           # (95 names in the real stock) 2 Nov: at 45, Toyota and its models were cut from a 95-name stock
+    small = remote(client, hotwords_field=True, hotwords_max=40)
+    small.hotword_source = lambda: [f"Car{i}" for i in range(200)]
+    small.transcribe(PCM, None)
+    assert len(forms[-1]["hotwords"].split(", ")) == 40
+
+
+def test_the_makes_in_play_and_their_models_come_first_whatever_the_cut():
+    from dealer_core.voice.prompts import hotword_names
+
+    vocab = {"audi": ["a4", "q7"], "bmw": ["m3"], "toyota": ["camry", "yaris", "rav4"], "volvo": ["xc90"]}
+    assert hotword_names(vocab)[:4] == ["Audi", "A4", "Q7", "Bmw"]                                        # nothing in play: the stock's own order
+    assert hotword_names(vocab, ["toyota"])[:4] == ["Toyota", "Camry", "Yaris", "RAV4"]
+    assert hotword_names(vocab, ["toyota", "volvo", "nothing"], 6) == ["Toyota", "Camry", "Yaris", "RAV4", "Volvo", "XC90"]       # a cut keeps what the call is about
+    assert sorted(hotword_names(vocab, ["toyota"])) == sorted(hotword_names(vocab))                       # the same names, only first or later
+    assert hotword_names(None, ["toyota"]) == []
+
+
+def test_the_makes_in_play_are_the_search_the_cars_shown_and_the_car_in_focus():
+    from types import SimpleNamespace as N
+
+    from dealer_core.voice.pipeline import makes_in_play
+
+    service = N(get_car=lambda stock_id: N(make="Tesla") if stock_id == "AG-164" else None)
+    s = N(filters={"make": "toyota"}, shown=[N(make="Toyota"), N(make="Kia")], car="AG-164")
+    assert makes_in_play(s, service) == ["toyota", "kia", "tesla"]
+    assert makes_in_play(N(filters={}, shown=[], car=None), service) == []
+
+
+def test_the_pipeline_asks_for_the_names_with_the_makes_in_play_first():
+    class Inventory:
+        def vocabulary(self):
+            return {"audi": ["a4"], "toyota": ["camry"]}
+
+    _, client = server()
+    hot = remote(client, hotwords_field=True)
+    attach_stock_hotwords(hot, Inventory(), lambda: ["toyota"])
+    assert hot.hotword_source() == ["Toyota", "Camry", "Audi", "A4"]
 
 
 def test_the_start_up_check_works_with_hotwords_and_a_dead_server_still_fails_it_loudly():
@@ -113,7 +150,7 @@ def test_the_start_up_check_works_with_hotwords_and_a_dead_server_still_fails_it
 
 # ------------------------------------------------------------------------------------------------ wiring
 def test_the_setting_is_off_by_default_and_the_environment_turns_it_on():
-    assert load_config(environ={}).voice.stt_hotwords_field is False
+    assert load_config(environ={}).voice.stt_hotwords_field is False and load_config(environ={}).voice.stt_hotwords_max == 100
     assert load_config(environ={"VA__VOICE__STT_HOTWORDS_FIELD": "true"}).voice.stt_hotwords_field is True
 
 
@@ -130,7 +167,7 @@ def test_the_pipeline_gives_only_a_hotwords_recogniser_the_stock_and_reads_it_fr
     attach_stock_hotwords(plain, Inventory())
     attach_stock_hotwords(hot, Inventory())
     assert plain.hotword_source is None
-    assert hot.hotword_source()[:3] == ["Toyota", "Land Cruiser", "RAV4"] and Inventory.calls == 1
+    assert hot.hotword_source()[:3] == ["Toyota", "Land Cruiser", "RAV4"] and Inventory.calls == 1                   # nothing in play: the stock's own order
     hot.hotword_source()
     assert Inventory.calls == 2
 

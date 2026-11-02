@@ -2730,3 +2730,37 @@ What was cut, and why it is safe:
 ```
 VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
 ```
+
+## 91. "Yaris" heard as "yachtist": the name list was cut before Toyota's models; and three bogus rows in the table (2 Nov, the owner, after the 17:19 to 17:23 calls: "the answers were a bit better, but it couldnt understand me saying yaris over and over")
+
+**What the table showed.** With the code deciding (6 of 8 rows "code", decision 0.00 to 0.01 s) and `voice.first_clause_words=3`, "reply words" came down to 0.58 to 0.74 s (it was 0.62 to 1.52 s in the 17:02 call), the median total 1.37 s. Three rows were not real (below).
+
+**Why "Yaris" was not understood: my cut, from section 82, still in place.** The recogniser was sent the first 45 of the stock's 95 names, in alphabetical order of make; Toyota and its models were never in it. The 17:19 call heard "I'm looking for a yachtist.", "Yeah, I'm looking for the yacht is." and "A yacht is. I'm looking for a yacht is." (said: "...a Yaris"). Section 84 saw the cut and the A/B there (252 turns, almost none with a Toyota model) showed no gain from a longer list, so I did not change it; that was the wrong test for this speaker.
+
+**Measured on the three "Yaris" clips of that call** (Qwen3-ASR, same server, same audio):
+
+| name list sent | clip 1 | clip 2 | clip 3 | time per turn |
+|---|---|---|---|---|
+| the live 45 (no Toyota models) | "yachtess" | "Yaris" | "A yacht is. I'm looking for a yacht is." | 154 ms |
+| none | "yadis" | "Yaris" | "A yachts. I'm looking for a yachts." | |
+| **all 95 names** | "Yaris" | "Yaris" | **"A yaris. I'm looking for a yaris."** | **202 ms** |
+| Toyota and its models first, then the rest to 45 | "Yaris" | "Yaris" | "A Yaris. I'm looking for a Yaris." | |
+
+(Whisper base with the hint read all three "Yaris" and "Toyota" as "Yoda"; Parakeet "Yadis", then "Yaris" twice.) Sending all 95 costs 48 ms a turn.
+
+**Changed.**
+* **`voice.stt_hotwords_max`** (default 100, was a fixed 45): all of a 95-name stock is sent. `RemoteWhisper(hotwords_max=...)`.
+* **The makes in play go first** (`hotword_names` in `voice/prompts.py`, `makes_in_play` in `voice/pipeline.py`): the make being searched for, the makes of the cars shown, and the car in focus, with their models, then the rest of the stock in its order. With a stock bigger than the cut, what the call is about is still sent. Read afresh at each turn.
+* **Not changed:** the Whisper hint (`stt_prompt`) has the same cut at 45 names and has not been touched (the live path here is Qwen3).
+
+**The three bogus rows.**
+* **7.44 s ("How many people can this car seat?") and the earlier 7.44 s ("Did it have a previous owner?")**: room noise made the detector stop, nothing was recognised, and the next sound, the "I'll end the call here" prompt, was reported as the reply's first sound (the 7.4 s is that prompt's time from the noise's stop; the real reply's audio had gone out 0.15 s after its words). The server no longer sends a timing for a stop with no recognised words (`timing_message` returns None).
+* **10.05 s of "voice" for "What color is it?"**: the reply's audio was sent at 624.95 s, 0.13 s after its sentence, yet the clock saw no first sound until the "Hello? Are you still there?" prompt 10 s later. **Cause not found.** The recorder now notes `clock` lines (the clock's own view: each stop, recognised words, sentence and bot start or stop, with whether it was waiting for a stop), so the next occurrence can be read.
+
+**Tests** (7 added in `test_stt_hotwords.py` and `test_latency_messages.py`; `python -m pytest`: 1,694 passed, 68 skipped; lint findings on the touched files unchanged): the cap is 100 and settable; the makes in play and their models come first and a cut keeps them; the makes in play are the search, the cars shown and the car in focus; the pipeline asks for them in that order; a sound after a stop with no words is not a reply time; the clock tells the recorder what it saw once per frame.
+
+**Running it** (section 90's command; the new names setting needs nothing added, it is on by default):
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```

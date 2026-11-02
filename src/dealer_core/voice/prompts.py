@@ -45,6 +45,16 @@ def stock_names(vocab: dict[str, list[str]] | None, limit: int | None = None) ->
     return names[:limit] if limit else names
 
 
+def hotword_names(vocab: dict[str, list[str]] | None, in_play=(), limit: int | None = None) -> list[str]:
+    """The names given to a recogniser as its hot-word list: the makes in play in the call (searched for, shown, in focus) with their models first, then the rest of the stock in its
+    order, cut at `limit`. With the old cut at the first 45 names of an alphabetical list, Toyota and its models were never sent for a 95-name stock (2 Nov: "Yaris" heard as "yachtist")."""
+    vocab = vocab or {}
+    first = [mk for mk in dict.fromkeys(str(m).lower() for m in in_play) if mk in vocab]
+    names = stock_names({mk: vocab[mk] for mk in first}) + stock_names(vocab)
+    names = list(dict.fromkeys(names))
+    return names[:limit] if limit else names
+
+
 def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], vocab: dict[str, list[str]] | None = None) -> str:
     q = last_question(last_agent).lower()
     if state is State.CONTACT:                    # digits when a number is asked for; no hint for a name (a list of names made Whisper write a list of names)

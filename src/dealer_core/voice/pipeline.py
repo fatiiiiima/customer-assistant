@@ -26,8 +26,8 @@ from .brain import SILENT_GOODBYE, WELCOME_BACK, DealerBrain
 from .mic_health import MicHealth
 from .gate import HalfDuplexGate
 from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
-from .prompts import hotword_groups, stock_names, stt_prompt
-from .stt import HOTWORDS_SENT, RemoteWhisper, WhisperOpenVino, hotword_terms
+from .prompts import hotword_groups, hotword_names, stt_prompt
+from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
 from ..agent.wording import NARROW_QUESTIONS
 from ..agent.engine import BRIDGES, CUT_OFF, STILL_THERE
@@ -51,10 +51,21 @@ def turn_trace(result) -> str:
                        "words": len(result.reply.split()), "ended": result.ended, "tools": [t[:200] for t in d.tools], "note": d.note[:700]}, ensure_ascii=False)
 
 
-def attach_stock_hotwords(stt_engine, inventory) -> None:
-    """A recogniser set to take hot-words (voice.stt_hotwords_field) is given the stock's make and model names, read from the inventory at each turn so a car added to the stock is heard."""
+def makes_in_play(session, service) -> list[str]:
+    """The makes the call is about: the one searched for, those of the cars shown, and the car in focus (lower case, no repeats)."""
+    makes = [str((session.filters or {}).get("make") or "")]
+    makes += [str(c.make) for c in session.shown or []]
+    car = service.get_car(session.car) if session.car else None
+    if car is not None:
+        makes.append(str(car.make))
+    return list(dict.fromkeys(m.lower() for m in makes if m))
+
+
+def attach_stock_hotwords(stt_engine, inventory, in_play=None) -> None:
+    """A recogniser set to take hot-words (voice.stt_hotwords_field) is given the stock's make and model names, read from the inventory at each turn so a car added to the stock is heard.
+    `in_play` (optional): () -> the makes the call is about; they and their models go first, so a stock bigger than the cut still has them."""
     if getattr(stt_engine, "hotwords_field", False):
-        stt_engine.hotword_source = lambda: stock_names(inventory.vocabulary(), HOTWORDS_SENT)
+        stt_engine.hotword_source = lambda: hotword_names(inventory.vocabulary(), in_play() if in_play else (), stt_engine.hotwords_max)
 
 
 def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = None) -> VoiceParts:
@@ -62,7 +73,8 @@ def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = 
     models = ROOT / cfg.app.model_dir
     hotwords = hotword_terms(ROOT / cfg.stt.hotwords_file)
     if cfg.voice.stt_url:                               # a shared, batched recognizer on a GPU server (production): no Whisper in the worker
-        stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords, hotwords_field=cfg.voice.stt_hotwords_field)
+        stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords, hotwords_field=cfg.voice.stt_hotwords_field,
+                            hotwords_max=cfg.voice.stt_hotwords_max)
     else:
         stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies,
                               precision=cfg.voice.stt_precision, threads=cfg.voice.stt_threads)
@@ -227,7 +239,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     trace = (lambda kind, text: in_tap.note(kind, text)) if in_tap is not None else None       # the call recorder, when it is on (VA_DUMP_AUDIO_DIR): after_turn and the barge-in stages write to it
     from .services import EchoGuard
 
-    attach_stock_hotwords(parts.stt_engine, app.inventory)
+    attach_stock_hotwords(parts.stt_engine, app.inventory, lambda: makes_in_play(brain.session, app.service))        # (brain is made just below; the names are read each turn)
     hear = EchoGuard(parts.stt_engine, lambda: brain.session.last_agent(),            # (brain is made just below; the guard only asks for the line when a turn is heard)
                      lambda: stt_prompt(brain.session.state, "", parts.hotword_groups, app.inventory.vocabulary()))
     stt = OpenVinoWhisperSTTService(engine=hear, min_rms=vcfg.min_rms)
@@ -243,6 +255,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                         greet_after=greet_after, still_there_after=still_there_after, hang_up_after=hang_up_after, welcome_back=welcome_back,
                         on_before_greeting=on_before_greeting, on_silent_end=on_silent_end)
     brain.vad_stop_secs = stop_now
+    brain.trace = trace
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)
         brain.session.state = seed_state if seed_state is not None else brain.session.state

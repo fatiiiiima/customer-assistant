@@ -25,8 +25,13 @@ def test_the_timing_message_carries_every_step_and_a_total_that_includes_the_che
 
 
 def test_a_step_the_turn_did_not_have_is_none_and_a_negative_check_is_zero():
-    m = timing_message(0.4, {"waiting for you to finish": 0.2}, -0.01, 1)
-    assert m["hear"] is None and m["reply"] is None and m["voice"] is None and m["check"] == 0.0 and m["seconds"] == 0.4
+    m = timing_message(0.4, {"waiting for you to finish": 0.2, "speech recognition": 0.1}, -0.01, 1)
+    assert m["reply"] is None and m["voice"] is None and m["check"] == 0.0 and m["seconds"] == 0.4
+
+
+def test_a_sound_after_a_stop_that_recognised_nothing_is_not_a_reply_time():
+    """2 Nov, three calls: room noise made the detector stop, nothing was recognised, and the next sound (the quiet prompt) was reported as a 7 to 10 s reply."""
+    assert timing_message(7.44, {"waiting for you to finish": 0.2}, 0.07, 3) is None
 
 
 def test_the_turn_detail_has_the_decision_the_parallel_hit_and_the_size_of_the_reply():
@@ -97,3 +102,19 @@ def test_the_endpointer_keeps_how_long_it_held_the_turn_open():
             await held.process_frame(audio(), FrameDirection.DOWNSTREAM)
     asyncio.run(go())
     assert out.count("VADUserStoppedSpeakingFrame") == 1 and held.last_check_secs >= 0.14
+
+
+def test_the_clock_tells_the_recorder_what_it_saw_once_per_frame():
+    from pipecat.frames.frames import BotStartedSpeakingFrame, TranscriptionFrame
+
+    seen = []
+    clock = TurnClock(0.2, lambda total, parts: None, clock=lambda: 1.0)
+    clock.trace = lambda kind, text: seen.append((kind, text))
+    stop = VADUserStoppedSpeakingFrame(stop_secs=0.2)
+    for stage in ("vad", "stt", "brain"):                                  # one frame passes three probes
+        clock.see(stop, stage)
+    clock.see(TranscriptionFrame("Camry", "u", "t"), "stt")
+    bot = BotStartedSpeakingFrame()
+    for stage in ("brain", "stt", "vad"):
+        clock.see(bot, stage)
+    assert seen == [("clock", "VADUserStoppedSpeaking"), ("clock", "Transcription"), ("clock", "BotStartedSpeaking (waiting for a stop: yes)")]

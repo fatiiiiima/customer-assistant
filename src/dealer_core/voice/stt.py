@@ -115,7 +115,7 @@ def wav_bytes(pcm16: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
-HOTWORDS_SENT = 45                              # the most names sent as the model's hot-word list (the stock's, 45 as in the hint)
+HOTWORDS_SENT = 100                             # the most names sent as the model's hot-word list (voice.stt_hotwords_max). Was 45: with a 95-name stock Toyota and its models were cut off (section 91). Each 50 names cost about 50 ms
 
 
 class RemoteWhisper:
@@ -127,7 +127,7 @@ class RemoteWhisper:
     Same interface as WhisperOpenVino. A server error or timeout is "nothing heard": the caller is asked to say it again, the call goes on."""
 
     def __init__(self, url: str, model: str, timeout_s: float = 3.0, hotwords: list[str] | None = None, language: str = "en",
-                 max_parallel: int = 64, client=None, hotwords_field: bool = False) -> None:
+                 max_parallel: int = 64, client=None, hotwords_field: bool = False, hotwords_max: int = HOTWORDS_SENT) -> None:
         import httpx
 
         self.base = url.rstrip("/")
@@ -136,7 +136,8 @@ class RemoteWhisper:
         # hotwords_field (voice.stt_hotwords_field): for a server that takes the car names as the model's hot-word list (scripts/qwen3_asr_server.py). The turn's `hotwords` field carries
         # hotword_source() (the stock's names, read afresh each turn by the pipeline; else the configured list) and the hint is NOT sent: that model does worse with the hint's sentences.
         self.hotwords_field, self.hotword_source = hotwords_field, None
-        self.fixed_hotwords = [h for h in (hotwords or [])[:HOTWORDS_SENT]]
+        self.hotwords_max = max(1, hotwords_max)
+        self.fixed_hotwords = [h for h in (hotwords or [])[:self.hotwords_max]]
         self.ignores_prompt = hotwords_field                       # so a retry "with another hint" would be the same request (see services.EchoGuard)
         self.name = f"remote-whisper:{model}@{self.base}"
         self.client = client or httpx.Client(timeout=timeout_s, limits=httpx.Limits(max_connections=max_parallel, max_keepalive_connections=max_parallel))
@@ -156,7 +157,7 @@ class RemoteWhisper:
             except Exception:  # noqa: BLE001 - the stock could not be read: the configured list, never a failed turn
                 names = self.fixed_hotwords
             if names:
-                sent = names[:HOTWORDS_SENT]
+                sent = names[:self.hotwords_max]
                 data["hotwords"] = ", ".join(sent)
         elif prompt or self.default_prompt:
             data["prompt"] = prompt or self.default_prompt

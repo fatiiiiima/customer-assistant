@@ -301,7 +301,9 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
 
     def timed(total, parts_) -> None:
         check = getattr(brain_ref.get("brain"), "end_check", lambda: 0.0)()          # how long Smart Turn kept this turn open (the clock starts after it)
-        emit(timing_message(total, parts_, check, turn["n"]))
+        msg = timing_message(total, parts_, check, turn["n"])
+        if msg is not None:
+            emit(msg)
         if state.metrics is not None:
             state.metrics.reply_time(total)
 
@@ -352,6 +354,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
                                      speak_opening=not resumable, greet_after=greet_after, still_there_after=getattr(vcfg, "still_there_secs", 0.0),
                                      hang_up_after=getattr(vcfg, "hang_up_secs", 0.0), welcome_back=returning, on_before_greeting=before_greeting, on_silent_end=silent_end)
     brain_ref["brain"] = brain
+    clock.trace = getattr(brain, "trace", None)                  # the call recorder (VA_DUMP_AUDIO_DIR): when the clock saw each stop, words and sound
     def prepare() -> bool:                                    # database reads, in a thread: the event loop keeps every other call's audio moving
         resumed_ = bool(resumable and state.calls.load(call_id, brain.session, app.service))
         if not resumed_:

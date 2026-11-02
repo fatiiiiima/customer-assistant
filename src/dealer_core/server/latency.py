@@ -17,8 +17,11 @@ def _s(value) -> float | None:
     return None if value is None else round(float(value), 3)
 
 
-def timing_message(total: float, parts: dict, check: float, turn: int) -> dict:
-    """`parts` is the turn clock's (voice/status.py): "waiting for you to finish", "speech recognition", "reply", "voice"."""
+def timing_message(total: float, parts: dict, check: float, turn: int) -> dict | None:
+    """`parts` is the turn clock's (voice/status.py): "waiting for you to finish", "speech recognition", "reply", "voice". None when no words were recognised since the detector's stop:
+    the sound that followed (a "Hello? Are you still there?" after a stretch of room noise, 2 Nov: a 7.4 s "reply") answers nobody."""
+    if parts.get("speech recognition") is None:
+        return None
     check = max(0.0, check or 0.0)
     return {"type": "timing", "seconds": round(total + check, 2), "turn": turn, "wait": _s(parts.get("waiting for you to finish")), "check": _s(check),
             "hear": _s(parts.get("speech recognition")), "reply": _s(parts.get("reply")), "voice": _s(parts.get("voice"))}
