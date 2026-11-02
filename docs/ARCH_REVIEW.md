@@ -2597,4 +2597,4 @@ The recorder of section 83 was on: 129 notes, 185 s of audio, 23 turns. Read wit
 
 **Not changed, and why.** The name list, the noise turns and the made-up facts are behaviour the owner may want to decide: `model_only` is a test of the model alone, and filtering "um" or checking facts is code beside it. Options are in the reply to the owner.
 
-**Parakeet.** It was not on the recogniser shoot-out (section 79) and nothing was run on it. It appears once earlier as an idea for streaming recognition (section 5), and once by mistake: the local `speech-server` mapped `whisper-1` to Parakeet-TDT and downloaded 611 MB, which was deleted (section 70s). It takes no word list, so it would not fix car names by itself; it has not been measured on the 252 turns.
+**Parakeet.** It was not on the recogniser shoot-out (section 79) and nothing was run on it. It appears once in the early notes as an idea for streaming recognition, and once by mistake: the local `speech-server` mapped `whisper-1` to Parakeet-TDT and downloaded 611 MB, which was deleted (section 79). It takes no word list, so it would not fix car names by itself; it has not been measured on the 252 turns.
