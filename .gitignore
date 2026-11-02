@@ -17,3 +17,6 @@ data/pg_*/
 
 # the local stock database (python -m dealer_core.inventory import ...)
 data/*.db
+
+# recogniser shoot-out work folder: turn audio, models and results (docs/ARCH_REVIEW.md section 79)
+benchmarks/results/asr_shootout/

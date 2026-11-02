@@ -2371,3 +2371,52 @@ The TCP connect time is one trip. Mumbai is 4.5 times closer than N. Virginia: a
 What it would be worth (INFERRED, subtracting the difference in trip time from the measured turns): about 170 ms from each call in the critical path. That is roughly 0.17 s on a parallel hit, and about 0.34 s for the baseline's two calls in a row; first words near 1.0 s at p50 in parallel. The owner decided on 30 Oct (section 55) that the region stays `us-east-1`, because the company's key has its models there. This is the measurement behind reopening that question for this one model, and it is the owner's and the boss's call.
 
 **Then the whole turn from the end of the caller's speech (INFERRED, adding the figures from earlier sections):** about 0.2 s wait for the end of speech, 0.27 s recognition, 1.18 s first words and under 0.16 s for the voice to start: about 1.8 s today in parallel. With Mumbai and the parallel turn about 1.6 s. The owner's 1 s rule needs the fixed parts to shrink too (streaming recognition, a faster end-of-turn decision), not only the model call.
+
+## 79. Recognisers against Whisper base on the owner's turns: a faster, more accurate offline model, and a streaming one that ties Whisper (2 Nov, the owner: "download Moonshine streaming small and Nemotron streaming 160 ms and ... use the installed speech tool for Kyutai and Qwen3-ASR ... score them against the current Whisper base on my recorded turns and report accuracy and the time from end of speech to final text")
+
+MEASURED on this M3 Pro. Scripts: `scripts/asr_shootout/` (`prepare.py`, `run_*.py`, `run_all.sh`, `score.py`). The audio and results are in `benchmarks/results/asr_shootout/` (ignored by git).
+
+**The turns** (the same as the earlier scorer, section 36, `scripts/score_recognisers.py`): 252 in all, 384 seconds of audio, 1.5 s on average, 3.9 s at most.
+* **12 recorded:** the owner's two calls that have reference lines (real voices, real microphones).
+* **120 synthetic, clean** and **120 synthetic, headset mic:** 40 phrasings of the sweep, said by three Kokoro voices, the second set as a Bluetooth headset microphone sends it (telephone band, with digital silence between words).
+* **Words wrong** are counted as the agent's code reads them (numbers, spellings and "colour" against "color" do not count), the measure of `--as-read` in the earlier scorer.
+* **Time after the end of speech:** from the moment the last sample of the clip is in to the final text. Whisper and Qwen3-ASR decode the whole clip at that point. The streaming ones (Nemotron, Moonshine) were fed at real speed in 160 ms chunks, so their work during speech competed for the CPU as it would live; then the tail was closed and the wait measured.
+
+**Downloads.**
+* Nemotron streaming 160 ms int8, 632 MB on disk;
+* Moonshine streaming small through its own package, 140 MB (its quantised build, not the 561 MB research weights), in a private environment (`moonshine-voice`, MIT, 18.6 MB);
+* Qwen3-ASR 0.6B, 680 MB;
+* Kyutai STT 1B 4-bit, 1.1 GB (the largest, the one I judged borderline for "small");
+* about 2.5 GB in all. They sit in the `speech` tool's cache and the scratch folder.
+* **One unapproved download, by mistake:** I asked the local `speech-server` for a model named `whisper-1`, which it maps to Parakeet-TDT, and it fetched 611 MB. I stopped the server and deleted that folder.
+
+**Results** (words wrong / turns heard exactly / time after the end of speech, median and p90):
+
+| recogniser | recorded (12) | synthetic clean (120) | synthetic headset (120) | all 252 | after the end of speech |
+|---|---|---|---|---|---|
+| **Whisper base** (today, OpenVINO, CPU, with the live hint) | 10.3% / 8 | 11.3% / 99 | 21.0% / 87 | **15.7% / 194** | 256 / 274 ms (288 / 402 on the recorded) |
+| **Qwen3-ASR 0.6B** (offline, English hint, no context) | 14.1% / 4 | 8.7% / 96 | 7.6% / 100 | **8.6% / 200** | 70 / 86 ms |
+| **Nemotron streaming 160 ms**, 0.5 s of quiet before the speech | 10.3% / 5 | 12.1% / 81 | 13.0% / 77 | **12.4% / 163** | 80 / 104 ms |
+| Nemotron streaming 160 ms, speech from the first sample | 15.4% / 3 | 21.0% / 55 | 23.1% / 46 | 21.6% / 104 | 80 / 104 ms |
+| Moonshine streaming small, 0.5 s lead | 26.9% / 4 | 9.1% / 93 | 34.0% / 56 | 22.0% / 153 | 42 / 83 ms |
+| Kyutai STT 1B 4-bit (60 turns: all recorded, every fifth synthetic) | 15.4% / 5 | 13.8% / 20 of 24 | 12.6% / 17 of 24 | 13.9% / 42 of 60 | not measurable here |
+
+On the same 60 turns for every recogniser: Qwen3-ASR 8.7%, Nemotron with a lead 8.3%, Whisper 9.5%, Kyutai 13.9%, Moonshine 25.0%.
+
+**Things that changed a score, so they are listed.**
+* **Without the English hint** Qwen3-ASR heard "Any budget, any model" in Russian. With `--language en` it did not (8.8% became 8.6% overall).
+* **Without quiet before the speech** both streaming models drop the first word ("Looking for a Toyota", "Budget any model"; "Porsche." came back empty from Nemotron). A live stream is open before the caller speaks, so I added 0.5 s of quiet and report that as the fair figure. It took Nemotron from 21.6% to 12.4%; Moonshine barely changed.
+* **Car words (the weak spot) on the 12 recorded turns:** Qwen3-ASR without context heard "Bosch." for "Porsche.", "the machine/market" for "the Macan" and "Plan Cruiser". With a car-names context string (`speech transcribe --context`), it got them all right: **9.0% words wrong and 8 of 12 exact, level with Whisper's 10.3% and 8 of 12**. Whisper has the same vocabulary as its hint, so that is the fair comparison. Nemotron heard "Porsch", "Macin" and "And cruiser" without any hint.
+
+**Lag by clip length** (median ms after the end of speech): Whisper 249 / 263 / 273 for clips up to 1.5 s / 1.5 to 2.5 s / over 2.5 s; Qwen3-ASR 66 / 78 / 106; Nemotron 77 / 81 / 84 (flat, as a streaming model should be); Moonshine 25 / 66 / 34. The clips here are short; a longer turn would widen the gap in favour of streaming (INFERRED).
+
+**What it would take to use them.**
+* **Qwen3-ASR through `speech-server`** (installed, `/v1/audio/transcriptions`, the same API the worker's `RemoteWhisper` speaks; alias `qwen3`): a warm round trip of 69 to 95 ms for a short clip (10 calls). **But the `prompt` and `context` form fields did not change the answer** ("Bosch." both ways), so over that server the car words are not helped. The command line takes `--context`; the server, as installed, does not pass it (UNKNOWN whether a newer one does).
+* **Nemotron streaming through sherpa-onnx** (1.13.8 is already installed here): it works in Python as is. Nothing in the worker feeds a recogniser while the caller speaks yet, and no hot-word boost was tried.
+
+**What it means (INFERRED).**
+* **A faster offline recogniser is the cheap win.** Qwen3-ASR cuts the recognition after the end of speech from about 256 ms to about 70 ms (about 0.19 s a turn) and halves the words wrong overall (15.7% to 8.6%; on the headset-band audio 21.0% to 7.6%). It needs its car-name problem solved first: on real voices without a context it is worse than today's Whisper.
+* **A streaming recogniser is the larger prize, but not built.** Nemotron ties Whisper on words wrong (10.3% on the recorded turns, 12.4% overall against 15.7%) and gives its final text about 80 ms after the end, from partial words it already has during the speech. That is what lets the model's decision start before the caller stops (up to 0.2 to 0.3 s more, GUESS). It hears fewer turns exactly (5 of 12 against 8) and has no vocabulary hint.
+* **Not worth more time:** Moonshine small (22 to 25% words wrong, 34% on the headset audio) and Kyutai 4-bit (13.9% on the 60 turns, its lag cannot be measured with the tool).
+
+**Limits.** 12 real turns only, and every difference between them is one or two words; 240 synthetic turns from three Kokoro voices; short clips; one pass on one machine, one caller at a time. Whisper and the sherpa and Moonshine models ran on the CPU; Qwen3-ASR and Kyutai ran on the Mac's GPU through MLX. In the live worker the voice and other work share those cores. None of this was tried inside a live call.
