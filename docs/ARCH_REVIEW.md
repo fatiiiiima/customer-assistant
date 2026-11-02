@@ -2236,3 +2236,56 @@ Section 74 found that a new connection to Bedrock costs 0.6 to 0.8 s from here, 
 ```
 AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
 ```
+
+## 76. The connection fix on Bedrock, measured: a smaller decision tail, no big gain in the back-to-back test (2 Nov, run by the owner)
+
+MEASURED with the section 75 command (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1`), the same 24 turns, Nemotron Nano 3 on the priority tier, with HTTP/2 and the 50 s keep-alive on. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_123747.json`. The run before it (section 74) is `..._121826.json`.
+
+| | before the fix | after the fix |
+|---|---|---|
+| **baseline (two calls)** first words, p50 / p90 | 1,393 / 1,614 ms | 1,411 / 1,673 ms |
+| baseline whole turn, p50 / p90 | 1,446 / 1,751 ms | 1,476 / 2,156 ms |
+| **parallel** first words, p50 / p90 | 994 / 1,691 ms | 1,125 / 1,773 ms |
+| parallel whole turn, p50 / p90 | 1,009 / 1,817 ms | 1,287 / 1,924 ms |
+| right action (both modes) | 14/17 | 15/17 |
+| reply ready when the decision arrived | 13 of 24 | 12 of 24 |
+| replies written ahead per turn | 2.4 (4 at most) | 2.4 (4 at most) |
+
+**The fix did not make the parallel turn faster in this test.** The back-to-back turns are the case it was not meant to help (see below), and the run-to-run spread on a single pass is large: the baseline itself moved 20 to 40 ms and the parallel turn's p50 moved 130 ms. One thing did improve: **the decision.**
+
+| | before | after |
+|---|---|---|
+| decision time, parallel turns, p50 / p90 / worst | 860 / 1,030 / 1,658 ms | 762 / 918 / 1,300 ms |
+| turns that timed out on the decision ("no decision") | 1 (the first turn, 1,658 ms) | 0 (the first turn: 808 ms) |
+| decision, 0 to 1 replies in flight (3 turns) | 404 ms | 495 ms |
+| decision, 2 replies in flight (13 turns) | 878 ms | 753 ms |
+| decision, 3 or more in flight (8 turns) | 894 ms | 800 ms |
+
+**What the parallel turn does, in this run.** Per turn against the baseline on the same lines:
+
+| | turns | parallel first words, p50 | baseline, same turns, p50 | change, median |
+|---|---|---|---|---|
+| reply was ready | 12 | 828 ms | 1,473 ms | **-698 ms** |
+| reply was not ready | 12 | 1,552 ms | 1,372 ms | **+84 ms** (worst +625: "Yes.", "what would you recommend for a family of five") |
+
+So a hit saves about 0.7 s and a miss costs about 0.1 s, up to 0.6 s. With half the turns ready, the p50 of first words falls (-286 ms) and the p90 does not (+100 ms). This is the whole trade: the gain is the hit rate times 0.7 s, less the cost on misses, and 2.4 reply calls a turn (three times the calls of two).
+
+**What was ruled out.**
+* **The fix not being active:** the real backend object negotiates HTTP/2 with the endpoint (three requests: 757 ms cold, then 224 and 227 ms).
+* **Our own preparation:** building the replies ahead takes 1 to 5 ms on the main thread (24 turns, model calls stubbed). So the extra 250 to 300 ms the decision takes with 2 or more replies in flight is not our code (INFERRED: most likely the model service sharing its work between the concurrent requests; not proved).
+* **The connection limit:** `max_parallel` is 64.
+
+**Why this test could not show the fix's main benefit.** `turn_speed.py` sends the next question the moment the last reply ends. A live caller pauses; an idle connection used to be dropped after 5 s, and a new one costs 0.6 to 0.8 s (section 74). Measured against the real endpoint with no key (section 75): the first request after a 6.5 s pause took a median of 622 ms before and 206 ms after.
+
+**Changed (`scripts/turn_speed.py`).** `--pause SECONDS` waits before each follow-up question of a call (not timed), and `--set VA__NAME=value` overrides a config value for the run, so the old connection settings can be run for comparison. Tests: 2 added (the pause is taken before follow-up questions and not the first, and is not in any turn's time; overrides reach the engine; the dry run counts the waiting). The override names were checked against the config: `VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false` and `..._KEEPALIVE_S=5` give the old settings.
+
+**The next measurement (owner's run; two passes of the baseline, 48 calls each, about 3 minutes each).** The new settings first, then the old ones, both with a 7 s pause before each follow-up question:
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7 --set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false --set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__KEEPALIVE_S=5
+```
+
+I expect the first follow-up request of each call-turn to be about 0.4 s quicker with the new settings (INFERRED from the 622 and 206 ms measured above). That is the live-call saving, for both modes.
+
+**Where this leaves the parallel turn (INFERRED).** It is worth about 0.3 s at p50 for three times the model calls, and it makes the slow turns a little slower. Raising the hit rate is the lever. More lookups ready ahead raise the contention and the cost; better prediction of what the model will choose is the alternative.

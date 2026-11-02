@@ -39,13 +39,14 @@ def conversations() -> list[list[tuple[str, str | None]]]:
     return [list(c) for c in CONVERSATIONS + bs.OWNER_CALLS]
 
 
-def make_engine(backend: str, mode: str):
+def make_engine(backend: str, mode: str, overrides: dict[str, str] | None = None):
     from dealer_core.app import build_app
     from dealer_core.cli.chat import start
     from dealer_core.config import load_config
     from dealer_core.voice.pipeline import apply_voice_profile
 
-    env = {"VA__DIALOGUE__DECISION_BACKEND": backend, "VA__LLM__FALLBACKS": "[]", "VA__VOICE__MODEL_ONLY": "true", "VA__VOICE__SILENT_TURN_FALLBACK": "false", **MODES[mode]}
+    env = {"VA__DIALOGUE__DECISION_BACKEND": backend, "VA__LLM__FALLBACKS": "[]", "VA__VOICE__MODEL_ONLY": "true", "VA__VOICE__SILENT_TURN_FALLBACK": "false", **MODES[mode],
+           **(overrides or {})}
     if backend == "gpu_server":
         env.update(bs.LOCAL, VA__VOICE__DECIDE_DEADLINE_MS="30000")              # the local server answers one request at a time: a parallel decision would otherwise time out
     cfg = load_config(environ=env, overlay=ROOT / "config" / "portal.yaml")
@@ -55,14 +56,17 @@ def make_engine(backend: str, mode: str):
     return app.engine
 
 
-def run_mode(backend: str, mode: str, repeat: int, say=print) -> dict:
+def run_mode(backend: str, mode: str, repeat: int, say=print, pause_s: float = 0.0, overrides: dict[str, str] | None = None) -> dict:
+    """pause_s: seconds of silence between one reply and the caller's next question (not timed). Live callers pause; with 0 the turns follow each other at once."""
     rows = []
     for rep in range(repeat):
-        e = make_engine(backend, mode)
+        e = make_engine(backend, mode, overrides)
         for convo in conversations():
             s = e.new_session()
             e.opening(s)
-            for line, want in convo:
+            for turn, (line, want) in enumerate(convo):
+                if pause_s and turn:
+                    time.sleep(pause_s)
                 t0, first, last = time.perf_counter(), None, None
                 for last in e.handle_stream(s, line):
                     if first is None and isinstance(last, str) and last.strip():
@@ -87,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--backend", default="gpu_server", help="gpu_server (local, free) or bedrock_nemotron (costs money)")
     p.add_argument("--modes", nargs="+", choices=list(MODES), default=["baseline", "parallel"])
     p.add_argument("--repeat", type=int, default=1, help="how many times the conversations are run for each mode")
+    p.add_argument("--pause", type=float, default=0.0, help="seconds of silence before each question after the first of a call (not timed): a live caller pauses, "
+                   "and an idle connection is dropped after 5 s unless kept alive (section 74)")
+    p.add_argument("--set", action="append", default=[], metavar="VA__NAME=value", help="a config override for this run, e.g. "
+                   "VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false (to compare with the old connection settings); repeat for more")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
     turns = sum(len(c) for c in conversations()) * a.repeat
@@ -95,16 +103,20 @@ def main(argv: list[str] | None = None) -> int:
     rep = sum(CALLS[m][1] for m in a.modes) * turns
     print(f"{len(a.modes)} mode(s) x {turns} turns on {a.backend}: at most {dec + rep} model calls, about {(dec * TOKENS_DECIDE + rep * TOKENS_REPLY):,} input tokens "
           f"(an estimate: {TOKENS_DECIDE} for a decision, {TOKENS_REPLY} for a reply)")
+    if a.pause:
+        waits = sum(len(c) - 1 for c in conversations()) * a.repeat * len(a.modes)
+        print(f"with {a.pause:g} s of silence before each follow-up question: about {waits * a.pause / 60:.0f} extra minutes of waiting")
     if a.dry_run:
         print("dry run: nothing sent")
         return 0
     if cloud and (not os.environ.get(KEY_ENV) or os.environ.get(bs.ALLOW_ENV) != "1"):
         print(f"not sent: set {KEY_ENV} (your key) and {bs.ALLOW_ENV}=1 in your own terminal first. This run costs money.")
         return 2
-    results = [run_mode(a.backend, m, a.repeat) for m in a.modes]
+    overrides = dict(x.split("=", 1) for x in a.set)
+    results = [run_mode(a.backend, m, a.repeat, pause_s=a.pause, overrides=overrides) for m in a.modes]
     out = ROOT / "benchmarks" / "results" / f"turn_speed_{time.strftime('%Y-%m-%d_%H%M%S')}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"backend": a.backend, "results": results}, indent=1, ensure_ascii=False), encoding="utf-8")
+    out.write_text(json.dumps({"backend": a.backend, "pause_s": a.pause, "overrides": overrides, "results": results}, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"saved {out.relative_to(ROOT)}")
     return 0
 
