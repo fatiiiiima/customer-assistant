@@ -2070,3 +2070,52 @@ What it means (INFERRED):
 * **To measure its real speed we need a faster machine:** a GPU (the model card lists A100, H100, H200, B100, B200 and RTX 6000) or a faster Mac. Whether a rented 80 GB GPU gets under 80 ms a frame is UNKNOWN.
 * **Licence:** openmdw-1.1 allows commercial use as written, but press reports NVIDIA labels this checkpoint research-only (section above). Not settled.
 * Qwen3-Omni was not tried: its Mac conversions are text-out only.
+
+## 72. MiniCPM-o 4.5 (Q4_K_M) on this laptop: runs faster than real time, answers worse, and is slow to start (2 Nov, the owner: "try MiniCPM-o 4.5 on the laptop ... run the same nine lines with the same stock facts")
+
+MEASURED on this M3 Pro (36 GB). Runner: OpenBMB's `llama.cpp-omni` built from source with Metal (cmake installed with pip, in a private folder, not brew). Weights `openbmb/MiniCPM-o-4_5-gguf`: the Q4_K_M language model (5.03 GB), hearing, voice, projector and speech-to-waveform pieces, 7.3 GB on disk (about 10 minutes). Licence Apache-2.0 on the weights (the runner says MIT). Raw figures (ignored by git): `benchmarks/results/minicpmo_mac_2026-11-02.json`.
+
+**Setup, and one change to the runner.** The same nine synthetic caller clips as sections 70 and 71, turned into 16 kHz and cut into 1-second chunks (what its test mode takes). The command-line tool has no way to set a system prompt, and its built-in prompt is Chinese. So in my scratch copy only (not in this repository) I replaced that prompt with an English persona that reads the same stock-facts text from an environment variable. The runs are one sample each, at the tool's default sampling, so replies vary from run to run: line 1 gave a longer, more accurate answer in a first trial ("...all-wheel drive, 91,000 kilometers, 340 horsepower, and it is the only Porsche") than in the nine-line batch.
+
+**Speed.**
+
+| step | result |
+|---|---|
+| prefill of the two 1-second input chunks | 0.24 s, then 1.15 to 1.23 s (the second chunk, in every run: slower than real time) |
+| from the start of decoding to the first text | 0.53 to 0.61 s (median 0.54) |
+| from the start of decoding to the first audio | 1.45 to 2.13 s (median 1.93) |
+| text-only mode: whole reply | 0.69 to 4.87 s (median 0.97; 23 to 133 tokens) |
+| language model speed | about 30 tokens a second (32 tokens in 1.05 s) |
+| the voice | 0.46 to 0.63 of real time: faster than playback, so audio can stream |
+
+For comparison, the runner's page reports under 650 ms to first token and 12 ms a token on an M4 Max. This M3 Pro is about 2.7 times slower on the language model (INFERRED from 30 against about 83 tokens a second).
+
+Adding it up (INFERRED): after the caller stops, the last input chunk's prefill (about 1.2 s) comes first. First text is then about 1.75 s after the caller stops, the whole text reply about 2.2 s, and the first sound about 3.1 s. That is no faster than the pipeline we have now (about 2 s) and slower than the Bedrock parallel turn. A smaller input chunk might cut the 1.2 s (UNKNOWN; not tried).
+
+**What it said, against the facts in its prompt.**
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "We have a 2016 Porsche Macan, black. What other information would you like?" | right |
+| 2 other Porsches | "Yes, we have a 2016 Porsche Macan in black. It's 91,000 kilometers. It's 149,000 dirhams." | facts right; "Yes" is misleading (there is no other) |
+| 3 cheaper | "Yes, the Toyota is cheaper than the Porsche by about 50,000 dirhams. Are you interested in the Toyota?" | **wrong**: no car named, the 50,000 is made up (the Civic is 94,500 below, the Corolla 86,500) |
+| 4 Land Cruiser | "A white 2018 Toyota Land Cruiser with 92,000 kilometers and 275 horsepower for 189,000 dirhams." | right (all figures) |
+| 5 this weekend | "Yes, we have a 2018 Toyota Land Cruiser in white. It's been through 146 of 150 checks. How do you like the Land Cruiser?" | facts right; ignored the question and the free slots |
+| 6 owners | "Yes the Macan has just one previous owner." | **invented** |
+| 7 fastest | "We have a Porsche Macan, a Toyota Land Cruiser, a BMW M3, a Honda Civic, and a Toyota Corolla. Which car interests you?" | **no answer** (it is the BMW M3) |
+| 8 speak to someone | "AGMC, this is Wazir. How can I help you today?" | **missed** the request |
+| 9 goodbye | "Bye. Thank you for calling AGMC. You have reached Wazir. How may I help you?" | goodbye, then a new "How may I help you?" |
+
+Two were right, three had the right facts but missed or twisted the question, and four were wrong, invented or missed.
+
+**The three open models side by side, on this laptop** (same nine lines, same prompt):
+
+| | PersonaPlex 8-bit | VoiceChat 11B int5 | MiniCPM-o 4.5 Q4 |
+|---|---|---|---|
+| keeps up with real time | no (2.6 to 2.7 times too slow) | no (1.7 to 1.8 times too slow) | the voice does; the input prefill and decode do not (see above) |
+| reply start after the caller stops | 0.3 s of model time, but talks over the caller on 6 of 9 | 0.32 to 0.48 s of model time | about 1.75 s for text, 3.1 s for sound (INFERRED) |
+| right | 4 | 5 | 2 (3 more half right) |
+| wrong or invented | 4 | 3 | 4 |
+| licence | NVIDIA Open Model License; this build tagged non-commercial | OpenMDW 1.1; press says research only | Apache-2.0 |
+
+What it means (INFERRED): on this laptop none of the three speech models gives us a better turn than the cascade we have. MiniCPM-o's clean licence is its strength, and its Qwen3 base did not make it more truthful here: it invented an owner count and a price gap, and ignored two questions. Prompt wording, a larger quantisation (Q8 is 8.7 GB) and a faster machine could change the picture, and none was tried. Tool calling is not documented for it.
