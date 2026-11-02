@@ -2653,3 +2653,15 @@ benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/parakeet_asr_serve
 VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8012/v1 VA__VOICE__STT_REMOTE_MODEL=parakeet VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
 ```
 Add `VA__VOICE__MIN_RMS=0.04` to the second to try the noise gate.
+
+## 87. The first live calls with Parakeet (2 Nov 16:23 and 16:31) (the owner: "read the logs in audio dump")
+
+Both calls used Parakeet (every `stt_path` note is 57 to 115 ms through the server; the Qwen3 server was not running). Read with `scripts/call_latency.py` and the stretches of speech re-read by Parakeet, Qwen3-ASR (with the live 45 names and with none) and Whisper base with the hint (scratch scripts).
+
+**16:31 call (4 turns, the caller asking for a Porsche).** Heard: "I'm looking for a boss." and "Looking for a pose." Re-read: Parakeet "pose" and "pose"; Qwen3 with names "Porsche" and "bush"; Qwen3 without "bush" twice; Whisper "Yukon, Toyota, Porsche" (its own hint written back) and "post". No recogniser got both; Parakeet cannot be given the name. Because neither word was a make, the parallel turn had no search ready ("none for search_cars, so its reply is written now" on every turn): the decision took 0.75 to 1.17 s and the reply was written after it, **1.5 to 1.95 s for the agent, 1.6 to 2.8 s in all**, against a 1.1 s median for the earlier call whose words were recognised. A misheard car name costs the reply written ahead as well as the meaning.
+
+**16:23 call (13 turns, mostly fragments).** Stretches of 0.4 to 1.4 s at levels 0.01 to 0.09, read as "What about the pattern story?", "In a matter of the camera.", "Feet one.", "Okay, so I'm gonna go ahead and get a little bit of a tea." and several empty results; what was said is not known. Parakeet writes plausible English for audio it cannot read. Qwen3 with the names wrote the name list for every short clip (now dropped as no speech by the guard of section 86).
+
+**The noise gate of section 86 is withdrawn as advice.** In the first call the noise measured below 0.032 and the speech above 0.051; in these two calls real speech was at 0.02 to 0.09 and "Yeah." at 0.025 was noise or speech with no way to tell from the level. `voice.min_rms` stays 0.005.
+
+**Conclusion.** Parakeet is not better than the others on this speaker; no recogniser has been measured on enough of this speaker's speech to choose (12 recorded turns). Next: a read-aloud set of this speaker's lines (car names, numbers, times, questions) in a call with the recorder on, scored against the four recognisers.
