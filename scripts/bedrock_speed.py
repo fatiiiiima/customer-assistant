@@ -61,6 +61,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 KEY_ENV, ALLOW_ENV = "BEDROCK_API_KEY", "VOICE_AGENT_ALLOW_CLOUD"
 BASE = "https://bedrock-mantle.us-east-1.api.aws/v1"
 MODELS = ["qwen.qwen3-next-80b-a3b-instruct", "mistral.ministral-3-8b-instruct", "anthropic.claude-haiku-4-5", "google.gemma-4-26b-a4b"]
+MODEL_GROUPS = {         # names for `run --models`, so a round of models is one word (the AWS cards were read on 2 Nov; the boss allows any model on the key's list but OpenAI's and Anthropic's)
+    "nov2": ["google.gemma-4-e2b", "nvidia.nemotron-nano-9b-v2", "mistral.ministral-3-14b-instruct", "qwen.qwen3-coder-30b-a3b-instruct", "zai.glm-4.7-flash"],
+}
 OPENAI_PATH = re.compile(r"^(?:google\.gemma-4|openai\.gpt-[56])")      # served under /openai/v1 on bedrock-mantle (AWS model cards)
 NEW_OPENAI = re.compile(r"^openai\.gpt-[56]")                           # OpenAI's newer models: max_completion_tokens, no temperature
 THINKS = re.compile(r"^(?:google\.gemma-4|nvidia\.nemotron-nano-3|openai\.gpt-|zai\.glm)")   # take a reasoning effort (AWS model cards)
@@ -320,6 +323,9 @@ def follow_up(b, rec: dict) -> tuple[float | None, str]:
     return ((time.perf_counter() - t0) * 1000 if buf.strip() else None), buf.strip()
 
 
+THINKING_SHOWN = re.compile(r"</?think|\bthe user (?:is|wants|asks|said)\b|\blet me (?:think|check the|see)\b", re.IGNORECASE)    # reasoning that came out in the reply text: a caller would hear it
+
+
 def full_reply(b, rec: dict) -> dict:
     """A whole reply, streamed: time to its first speakable piece (writer.split_point, as the voice starts) and to its end; finished or cut off."""
     from dealer_core.dialogue.writer import split_point
@@ -337,7 +343,8 @@ def full_reply(b, rec: dict) -> dict:
         action, buf = buf.strip(), ""
     text = buf.strip()
     out = {"first_ms": None if first is None else round(first), "total_ms": round((time.perf_counter() - t0) * 1000), "words": len(text.split()),
-           "finished": bool(re.search(r"[.!?][\"')]*$", text)), "customer": rec["customer"], "reply": text[:400]}
+           "finished": bool(re.search(r"[.!?][\"')]*$", text)), "customer": rec["customer"], "reply": text[:400],
+           "thinking_shown": bool(THINKING_SHOWN.search(text))}
     if rec.get("one_call"):
         out["action"], out["want"] = action[:80], rec.get("want")
     return out
@@ -419,7 +426,7 @@ def summary(r: dict) -> dict:
             "right": f"{sum(x['right'] for x in judged)}/{len(judged)}" if judged else "-",
             "follow_p50": pct(f, 50), "follow_p90": pct(f, 90), "follow_n": len(f), "errors": len(r["errors"]),
             "full_first_p50": pct(first, 50), "full_first_p90": pct(first, 90), "full_total_p50": pct(total, 50), "full_total_p90": pct(total, 90),
-            "full_n": len(w), "full_finished": f"{sum(x['finished'] for x in w)}/{len(w)}" if w else "-",
+            "full_n": len(w), "full_finished": f"{sum(x['finished'] for x in w)}/{len(w)}" if w else "-", "full_thinking_shown": sum(bool(x.get("thinking_shown")) for x in w),
             "decide_under_target": None if not d else pct(d, 90) < TARGET_MS, **one_call_summary(w)}
 
 
@@ -493,6 +500,8 @@ def run(a) -> int:
     rows = [summary(r) for r in results]
     print("\nmilliseconds, from this machine (network = a plain GET /models)\n" + table(rows))
     for s in rows:
+        if s.get("full_thinking_shown"):
+            print(f"  {s['model']}: {s['full_thinking_shown']} of {s['full_n']} replies had its reasoning in the text (a caller would hear it)")
         if s.get("one_n"):
             print(f"  {s['model']} one call: right action {s['one_right']} (the expected one, where the test sets one); "
                   f"{s['one_replied']}/{s['one_n']} answers had the reply in them; its first piece p50 {s['one_first_p50']} / "
@@ -532,6 +541,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--reasoning", choices=["none", "minimal", "low", "medium", "high"], help="reasoning effort, for models that think first")
     r.add_argument("--service-tier", choices=["default", "priority", "flex"], help="Bedrock service tier (priority: faster, costs more)")
     a = p.parse_args(argv)
+    if a.cmd == "run":
+        a.models = [m for name in a.models for m in MODEL_GROUPS.get(name, [name])]
     if a.cmd == "capture":
         if a.full:
             return capture_full(a.out or (ONE_CALL_PROMPTS if a.one_call else FULL_PROMPTS), one_call=a.one_call)

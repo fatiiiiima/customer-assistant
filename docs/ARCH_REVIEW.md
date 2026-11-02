@@ -1919,3 +1919,34 @@ AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/tur
 ```
 
 It prints first words, whole turn and right action for each mode, and saves every turn's note to `benchmarks/results/turn_speed_<time>.json` (ignored by git). Each turn is sent after the agent's own earlier replies, so these are Nemotron's own conversations, not the local model's.
+
+## 68. Five more models in the speed test (2 Nov, the owner: "add the five untested models to the speed test and test them", after the boss allowed any model on the list except OpenAI's and Anthropic's)
+
+Written, not run: a speed run costs money, so the owner runs it.
+
+The five, chosen from the key's 62-model list (section 55 and the list pasted on 30 Oct), none from OpenAI (this includes gpt-oss) or Anthropic. `run --models nov2` now expands to them (`MODEL_GROUPS` in `scripts/bedrock_speed.py`):
+
+| model | what its AWS card says (read 2 Nov) | why it was picked (GUESS where marked) |
+|---|---|---|
+| `google.gemma-4-e2b` | 2.3B effective parameters; "designed for low-latency workloads"; **takes audio input**; `/openai/v1`; priority tier; reasoning on by default, and AWS recommends `reasoning_effort` high for it so the reasoning stays out of the reply | the smallest model with reasoning; its audio input matters for the speech-in options (GUESS: quality on prices and numbers is weak) |
+| `nvidia.nemotron-nano-9b-v2` | 9B dense; `/v1`; priority tier; Legacy, ends 30 March 2027 | the same family as the cleanest model so far (GUESS: similar accuracy; it is a reasoning model, and the card shows no switch) |
+| `mistral.ministral-3-14b-instruct` | card did not load; assumed to match the 8B and 3B, which took `/v1` and priority | the next size up from the two that invented figures (GUESS: it may not) |
+| `qwen.qwen3-coder-30b-a3b-instruct` | 3B active of 30B; `/v1`; priority tier; no reasoning; Legacy, ends 30 March 2027 | the fastest kind (about 3B active, no thinking). Coding-tuned, so replies in plain speech are a GUESS |
+| `zai.glm-4.7-flash` | "optimized for fast inference and low-latency tasks"; `/v1`; priority tier; Legacy, ends 30 March 2027 | small and fast on paper (GUESS: reasoning by default, so `--reasoning none` may be refused) |
+
+Left out, GUESS from size or design: MiniMax M2.x, Kimi, DeepSeek, GLM 4.6 / 4.7 / 5, Grok 4.3, Qwen3 235B, Qwen3-Next 80B (MEASURED too slow), Mistral Large 3, Nemotron Super 120B, Gemma 4 31B (dense), Gemma 3 (27B is a base model), Magistral, the coding models, Voxtral and Palmyra.
+
+What changed in the script:
+* `MODEL_GROUPS["nov2"]`, and `--models nov2` expands to the five.
+* A reply with its reasoning in the text ("<think>", "the user wants ...") is counted per model and printed. A caller would hear it. It matters most for Gemma 4 E2B, whose card warns about it, and for Nemotron 9B v2.
+* The routes and settings were checked in a test: only Gemma goes to `/openai/v1`; `--reasoning` goes only to Gemma 4 and GLM (as `THINKS` already had it); all five get `service_tier: priority`.
+
+Tests (`tests/unit/test_bedrock_speed.py`, 3 added): the group is five models none from OpenAI or Anthropic and each goes where its card says; a group name expands and a dry run counts the calls; a reply showing its reasoning is counted.
+
+The run: the 17 decisions (12 with an expected action) and 20 whole replies, as in section 63, one call at a time. The dry run says 190 calls, about 174,000 input tokens and at most 41,000 output tokens across the five. At Nemotron's priority rates (these five models' prices not checked) that is about 3 to 4 US cents (INFERRED).
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/bedrock_speed.py run --models nov2 --decisions 17 --follow-ups 0 --full-replies 20 --reasoning none --service-tier priority
+```
+
+If Gemma 4 E2B shows its reasoning in the text with `none`, run it again with the card's recommended `--reasoning high` and compare.

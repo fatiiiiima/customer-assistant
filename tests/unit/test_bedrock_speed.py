@@ -236,3 +236,34 @@ def test_capture_one_call_writes_its_own_file(monkeypatch):
     monkeypatch.setattr(bs, "capture_full", lambda out, one_call=False: seen.update(out=out, one_call=one_call) or 0)
     assert bs.main(["capture", "--full", "--one-call"]) == 0 and seen == {"out": bs.ONE_CALL_PROMPTS, "one_call": True}
     assert bs.main(["capture", "--full"]) == 0 and seen == {"out": bs.FULL_PROMPTS, "one_call": False}
+
+
+def test_the_nov2_group_is_five_models_none_from_openai_or_anthropic_and_each_goes_where_its_card_says():
+    """2 Nov, the owner's boss: any model on the list except OpenAI's and Anthropic's. Routes from the AWS cards: Gemma 4 under /openai/v1, the rest under /v1."""
+    models = bs.MODEL_GROUPS["nov2"]
+    assert len(models) == 5 and not any(m.startswith(("openai.", "anthropic.")) for m in models)
+    base = "https://bedrock-mantle.us-east-1.api.aws/v1"
+    routes = {m: bs.base_for(m, base) for m in models}
+    assert routes["google.gemma-4-e2b"].endswith("/openai/v1")
+    assert all(r == base for m, r in routes.items() if m != "google.gemma-4-e2b")
+    assert all(bs.applies(m, "none", "priority")[1] == "priority" for m in models)               # all five take the priority tier (cards)
+    assert bs.applies("google.gemma-4-e2b", "none", "priority")[0] == "none" and bs.applies("nvidia.nemotron-nano-9b-v2", "none", "priority")[0] is None
+
+
+def test_a_group_name_in_models_expands_and_a_dry_run_counts_the_calls(tmp_path, capsys):
+    prompts, full = tmp_path / "p.json", tmp_path / "f.json"
+    prompts.write_text(json.dumps(RECORDS))
+    full.write_text(json.dumps([FULL]))
+    args = ["run", "--prompts", str(prompts), "--full-prompts", str(full), "--models", "nov2", "--decisions", "1", "--follow-ups", "0", "--full-replies", "3", "--dry-run"]
+    assert bs.main(args) == 0
+    out = capsys.readouterr().out
+    assert "5 model(s) x 5 calls" in out and all(f"  {m}" in out for m in bs.MODEL_GROUPS["nov2"])           # a warm-up, a decision and 3 replies each
+
+
+def test_a_reply_that_shows_its_reasoning_is_counted():
+    assert bs.THINKING_SHOWN.search("<think>The user wants a Toyota</think> We have four.")
+    assert bs.THINKING_SHOWN.search("Okay, the user is asking about a Porsche. We have a Macan.")
+    assert not bs.THINKING_SHOWN.search("We have a 2016 Porsche Macan in black. Would you like to hear more?")
+    s = bs.summary({"model": "m", "mode": "agent", "network_ms": [300], "decide": [], "follow_up": [], "errors": [],
+                    "full_reply": [{"first_ms": 500, "total_ms": 600, "finished": True, "thinking_shown": True}, {"first_ms": 400, "total_ms": 500, "finished": True}]})
+    assert s["full_thinking_shown"] == 1
