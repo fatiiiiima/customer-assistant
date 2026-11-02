@@ -1950,3 +1950,38 @@ AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/bed
 ```
 
 If Gemma 4 E2B shows its reasoning in the text with `none`, run it again with the card's recommended `--reasoning high` and compare.
+
+## 69. The five more models, measured (2 Nov, run by the owner): none is better than Nemotron Nano 3
+
+MEASURED with the section 68 command, from this M3 Pro to `us-east-1`, priority tier, `--reasoning none` where a card takes it (Gemma 4 and GLM). 190 calls, no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-11-02_101233.json`.
+
+| model | decision p50 / p90, right action | reply: first piece p50 / p90 | reply: end p50 | finished | figures or facts not in the prompt |
+|---|---|---|---|---|---|
+| `google.gemma-4-e2b` | 540 / 660 ms, 10/12 | 1,102 / 2,522 ms | 1,169 ms | 20/20 | none found |
+| `nvidia.nemotron-nano-9b-v2` | 569 / 878 ms, **0/12** | 709 / 831 ms | 1,912 ms | **4/20** | thinks aloud in the reply (see below) |
+| `mistral.ministral-3-14b-instruct` | 549 / 834 ms, 11/12 | 708 / 850 ms | 768 ms | 20/20 | **3 replies** (see below) |
+| `qwen.qwen3-coder-30b-a3b-instruct` | 491 / 674 ms, 11/12 | 681 / 783 ms | 698 ms | 20/20 | none found |
+| `zai.glm-4.7-flash` | 498 / 590 ms, 10/12 | 591 / 796 ms | 615 ms | 20/20 | none in figures; one made-up promise |
+
+For comparison, Nemotron Nano 3 in the earlier runs (sections 56, 63, 66): decision 509 to 597 ms, right action 12/12, reply first piece 660 to 819 ms (p50), nothing invented. Those runs were on other days, so the comparison is loose (UNKNOWN how much of a gap is the network).
+
+**The network was uneven in this run.** The plain trip took 243 ms for GLM and 1,114 to 1,185 ms for some samples of Qwen3-Coder and Nemotron 9B. GLM's edge of 100 to 200 ms is about the size of that difference (INFERRED), so it is not a result. The same goes for Qwen3-Coder's decision being 20 to 100 ms quicker than Nemotron's.
+
+**What each did, read by hand:**
+* **Gemma 4 E2B:** the slowest of the five, so "designed for low latency" does not show on Bedrock. Reasoning off worked, with no reasoning in the text. It took "hi there" for a search. Its replies are plain and correct.
+* **Nemotron Nano 9B v2:** unusable as set up. It thinks first, so every decision came back as "Okay" (0/12) and almost every reply starts "Okay, let's see. The customer just said..." and is cut off (4 of 20 finished). My script's reasoning check caught 9 of those 20 and the figures check 5. A reasoning-off switch exists in NVIDIA's own docs (a line in the system prompt), but the AWS card shows none, and I did not try it.
+* **Ministral 3 14B:** the most fluent, and it invents:
+  * a car that is not in stock: to "do you have any other Porsche cars?" it offered "a 2017 Porsche Cayenne, grey, 89,000 km, 198,000 dirhams". The prompt has only the Macan;
+  * a speed that is not in the prompt: "0-100 km/h in 3.4 seconds" for the M3;
+  * a price boundary that is not in the prompt ("under 62,500"), and "You're all set for Saturday" after a goodbye, when nothing was booked;
+  * Markdown bold in one reply.
+* **Qwen3-Coder 30B-A3B:** the only one that matches Nemotron on both counts: 11/12, no figure or fact outside the prompt, every reply finished. It missed some things:
+  * "which one is the fastest" listed two cars and did not say which;
+  * "the second one" did not name the car;
+  * it counted four Toyotas and named three;
+  * one reply took 2.7 s to its first piece.
+
+  It is a coding model and is Legacy until March 2027.
+* **GLM 4.7 Flash:** the quickest replies, but it took "tell me about the Land Cruiser" and "the second one" for searches, and it answered "that's all, thanks, bye" with "I'll make sure the Land Cruiser is ready for you at the showroom": a promise nobody made.
+
+What it means (INFERRED): no model on the list is faster than Nemotron by more than the run-to-run swing, which is itself 100 to 150 ms (Nemotron's first piece was 819 ms in one run and 660 ms in another). The models are not the limit. Section 63's arithmetic still holds: the fixed parts are the wait for the end of speech (about 0.2 s), recognition (about 0.27 s), the voice start (under 0.16 s) and the trip (0.25 to 0.39 s). That leaves about 0.2 s for the model if a turn is to reach 1 s, and only one call fits. The ways forward are fewer round trips (the parallel turn), a closer region, or taking recognition out (speech in, section 68's note on audio-input models). Nemotron Nano 3 stays the model for the Nemotron-only tests. Qwen3-Coder is the only one worth a second look, and only as a spare.
