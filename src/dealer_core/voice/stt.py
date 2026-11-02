@@ -27,11 +27,12 @@ def token_cap(audio_seconds: float) -> int:
     return min(440, max(MIN_TOKENS, int(audio_seconds * MAX_TOKENS_PER_SEC) + 16))      # Whisper's own ceiling is 448
 
 
-def is_degenerate(text: str, audio_seconds: float) -> bool:
-    """A transcript that is Whisper looping, not speech: one punctuation mark or letter repeated many times, or far more text than the audio can hold."""
+def is_degenerate(text: str, audio_seconds: float | None) -> bool:
+    """A transcript that is Whisper looping, not speech: one punctuation mark or letter repeated many times, or far more text than the audio can hold.
+    `audio_seconds` None = the length is not known: only the repeats count (2 Nov: with 0.0 any sentence over 65 characters was a "loop")."""
     if re.search(r"([^\w\s])\1{5,}", text) or re.search(r"(\w)\1{9,}", text):
         return True
-    return len(text) > 25 * max(audio_seconds, 1.0) + 40
+    return audio_seconds is not None and len(text) > 25 * max(audio_seconds, 1.0) + 40
 
 
 def hotword_terms(path: Path) -> list[str]:

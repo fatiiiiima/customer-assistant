@@ -268,7 +268,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             from .services import clean_transcript
             from .speculate import Speculation
 
-            spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0]),
+            spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000),
                                (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
                                lambda: len(brain.session.history))
             endpointer.speculation = stt.speculation = brain.speculation = spec

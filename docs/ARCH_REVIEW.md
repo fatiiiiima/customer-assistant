@@ -2598,3 +2598,32 @@ The recorder of section 83 was on: 129 notes, 185 s of audio, 23 turns. Read wit
 **Not changed, and why.** The name list, the noise turns and the made-up facts are behaviour the owner may want to decide: `model_only` is a test of the model alone, and filtering "um" or checking facts is code beside it. Options are in the reply to the owner.
 
 **Parakeet.** It was not on the recogniser shoot-out (section 79) and nothing was run on it. It appears once in the early notes as an idea for streaming recognition, and once by mistake: the local `speech-server` mapped `whisper-1` to Parakeet-TDT and downloaded 611 MB, which was deleted (section 79). It takes no word list, so it would not fix car names by itself; it has not been measured on the 252 turns.
+
+## 85. Parakeet-TDT on the 252 turns and the live call; and why long sentences came back as "um" (2 Nov, the owner: "test Parakeet-TDT first: tell me the download size, then run it on the 252 turns and this call's speech against Qwen3-ASR and Whisper")
+
+**Download.** `mlx-community/parakeet-tdt-0.6b-v2` (NVIDIA Parakeet-TDT 0.6B v2, English, CC-BY-4.0, MLX): **2.47 GB** (one 32-bit weights file; no smaller build exists in `mlx-community`), into the Hugging Face cache, run in the private MLX environment of section 81 with no new packages. `scripts/asr_shootout/run_parakeet.py`; `score.py` reads it. Not in the project's environment and not used by the worker. (v3, multilingual, is another 2.5 GB and was not fetched.)
+
+**The 252 turns** (the same as section 79; Parakeet takes no word list or hint):
+
+| | all 252 | recorded (12) | clean (120) | headset mic (120) | after the end of speech (median / p90) |
+|---|---|---|---|---|---|
+| Whisper base + hint (now) | 15.7% | 10.3%, 8 exact | 11.3% | 21.0% | 256 / 274 ms |
+| Qwen3-ASR 0.6B, no context | 8.6% | 14.1%, 4 exact | 8.7% | 7.6% | 70 / 86 ms |
+| Qwen3-ASR 0.6B + the 40 stock names | 8.0% | 5.1%, 9 exact | | | 124 ms through the worker |
+| **Parakeet-TDT 0.6B v2** | **8.3%** | **11.5%, 5 exact** | 8.3% | 7.9% | **40 / 47 ms** |
+
+By kind of turn (words wrong, Parakeet / Whisper / Qwen3 / Qwen3 + names): **digits** 11.0 / 42.5 / 15.4 / 15.4; **car names** 9.6 / **6.8** / 19.2 / 13.7; **one or two words** 18.6 / **11.6** / 18.6 / 18.6.
+
+**Reading it.** Parakeet is as accurate as Qwen3-ASR without context (8.3% against 8.6%), about half Whisper's error overall, and the fastest (40 ms). It has no way to be told the car names and gets the same ones wrong that Qwen3 does without them: "Porsche" as "Bourse", "Macan" as "macin" or "Mackin", "Land Cruiser" as "And closer". Whisper with the hint is the best of the four on car names and on one- or two-word answers, and the worst on digits and in noise. No recogniser here is better than the others on every kind of turn. Twelve recorded turns are too few to rank on; the 240 synthetic ones are the larger sample.
+
+**This call's 23 stretches of speech** (clips cut the way the worker does, with 0.5 s before): on the speech, all four read most turns the same ("Any model, any budget.", "No, I'm looking for a Toyota car, not Tesla.", "Go through the rest." twice, "What's the mileage on this car?"). Car names: Parakeet "Cambrie" (Camry), "Yars" and "CRS" (Yaris); Qwen3 with the live list "Camry" and "Yaris" right, "Many people have owned this Yaris before." (Qwen3 with no list "yachtus"); Whisper "the Camry, the M3, the Camry" and "the CRS". On the room-noise stretches **every recogniser writes words**: Parakeet "Yeah.", "That's really good.", "And it's weak."; Qwen3 without a list "So.", "Okay."; Whisper "you", "it's not cheap."; Qwen3 with the stock names "um". Switching recogniser does not remove the noise turns.
+
+**The lost sentence is found (it was not the recogniser).** "No, I'm asking if this Yaris has been owned by other people before." (67 characters) reached the agent as "um" in the live call, and the same clip read correctly when sent straight to the server. `clean_transcript` judged the early recognition (the one made while Smart Turn holds a pause) with the clip length counted as 0 s, and `is_degenerate` calls any text over `25 x max(seconds, 1) + 40` = **65 characters** a loop, so it was replaced by `UNCLEAR` ("um"). Every sentence over 65 characters that was held by Smart Turn came out as "um", whichever recogniser wrote it; these are the long questions. The 252 test turns are all under 65 characters, so no earlier test could see it.
+
+The same rule explains the noise turns: Qwen3-ASR with a word list writes the list itself for a clip with no speech (section 84), a 300-character "loop" for a 0.7 s clip, which became "um".
+
+**Fixed.** `is_degenerate(text, None)` and `clean_transcript(text, audio_seconds=None)` judge only repeats when the length is not known; the early recognition passes the real length of the audio (`len(pcm) / 32000`). A text far longer than its audio is still a loop. `tests/unit/test_long_transcripts.py` (4); `python -m pytest`: 1,659 passed, 68 skipped; lint findings on the touched files unchanged.
+
+**Correction to section 84.** "One sentence lost: cause not found" is answered above. The noise "um" were the word list written back, turned into "um" by the same length rule.
+
+**Not done.** Parakeet on the NVIDIA server the worker would use in production (this was the MLX build on the Mac); hot-word or context biasing for Parakeet (NeMo has some; not tried); a combination (Parakeet for the sentence, Whisper for one or two words and car names); dropping a transcript that is the word list written back (now still "um"); the weights (2.47 GB in `~/.cache/huggingface`) are kept until the owner says to delete them.

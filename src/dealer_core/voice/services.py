@@ -84,9 +84,11 @@ def collapse_repeats(text: str) -> str:
     return " ".join(out).strip(" ,")
 
 
-def clean_transcript(text: str) -> str:
-    """The recognizer's words as the agent receives them: loops collapsed, a repeated-word invention dropped (empty)."""
-    if text and is_degenerate(text, 0.0):
+def clean_transcript(text: str, audio_seconds: float | None = None) -> str:
+    """The recognizer's words as the agent receives them: loops collapsed, a repeated-word invention dropped (empty). `audio_seconds`: how long the clip was, when known (a
+    transcript far longer than the audio can hold is a loop); without it only repeats are judged. Until 2 Nov the unknown length counted as 0 s, so every sentence over 65
+    characters recognised during Smart Turn's hold came out as "um" (UNCLEAR)."""
+    if text and is_degenerate(text, audio_seconds):
         return UNCLEAR
     text = collapse_repeats(squeeze_punctuation(text)) if text else ""
     return "" if text and is_phantom(text) else text

@@ -28,6 +28,7 @@ def load_json(name, label):
 load_json("whisper", "Whisper base (now)")
 load_json("nemotron", "Nemotron stream 160ms")
 load_json("moonshine", "Moonshine stream small")
+load_json("parakeet", "Parakeet-TDT 0.6B v2")
 if (here / "res_nemotron_lead.json").exists():                    # the same models with 0.5 s of quiet before the speech, as a live stream has; the timing is the paced run's
     for name, label in (("nemotron", "Nemotron stream 160ms"), ("moonshine", "Moonshine stream small")):
         lead = {r["i"]: r for r in json.load(open(here / f"res_{name}_lead.json"))}
