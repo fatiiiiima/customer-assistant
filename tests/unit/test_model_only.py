@@ -314,3 +314,24 @@ def test_parallel_booking_words_also_get_the_free_times_reply_ready_ahead():
     r = said(e, s, "can I see it tomorrow")
     assert "check_slots was used" in r.debug.note
     assert set(e._speculate(e.new_session(), "can I speak to someone")) <= {"none"}              # and still no hand-off ahead, which acts outside the call
+
+
+def test_the_start_of_a_call_warms_the_connection_in_the_background_without_waiting_for_it():
+    """Section 75: opening a call opens (or keeps) the connection to the model, on a thread, so the greeting is not delayed."""
+    done = threading.Event()
+    started = []
+
+    class Remote(Scripted):
+        def warm_connection(self):
+            started.append(time.perf_counter())
+            time.sleep(0.4)
+            done.set()
+            return True
+
+    b = Remote()
+    e, _ = agent(None, backend=b)
+    s = e.new_session()
+    t = time.perf_counter()
+    e.opening(s)
+    assert time.perf_counter() - t < 0.2                                   # the greeting did not wait for the 0.4 s warm-up
+    assert done.wait(2.0) and len(started) == 1                            # and the same backend, which also writes the replies, was warmed once, not twice

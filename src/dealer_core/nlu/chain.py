@@ -87,6 +87,10 @@ class BackendChain:
     def name(self) -> str:
         return self.backends[self.active].name
 
+    def warm_connection(self) -> bool:
+        """The active backend's connection, opened ahead of a call's first request (see NluBackend.warm_connection)."""
+        return bool(getattr(self.backends[self.active], "warm_connection", lambda: False)())
+
     def _call(self, fn: Callable[[NluBackend], object]):
         last: Exception | None = None
         for i in range(self.active, len(self.backends)):

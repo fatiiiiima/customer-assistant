@@ -19,6 +19,7 @@ by code ("prefill") is continued with `continue_final_message` (vLLM) and, for s
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -30,6 +31,17 @@ from . import prompts
 from .backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
 
 
+log = logging.getLogger(__name__)
+
+
+def _http2_available() -> bool:
+    try:
+        import h2  # noqa: F401 - httpx needs it for http2=True
+    except ImportError:
+        return False
+    return True
+
+
 class OpenAICompatBackend(NluBackend):
     def __init__(self, name: str, cfg: BackendCfg, llm: LlmCfg) -> None:
         import httpx
@@ -38,8 +50,14 @@ class OpenAICompatBackend(NluBackend):
         self.mode = resolve_prompt_mode(cfg)
         self.base = cfg.host.rstrip("/")
         key = os.environ.get(cfg.api_key_env) if cfg.api_key_env else None
+        limits = {"max_connections": cfg.max_parallel, "max_keepalive_connections": cfg.max_parallel}
+        if cfg.keepalive_s is not None:
+            limits["keepalive_expiry"] = cfg.keepalive_s
+        http2 = cfg.http2 and _http2_available()
+        if cfg.http2 and not http2:
+            log.warning("backend %s: http2 is set but the h2 package is missing; using HTTP/1.1", name)
         self.client = httpx.Client(timeout=cfg.timeout_s, headers={"Authorization": f"Bearer {key}"} if key else {},
-                                   limits=httpx.Limits(max_connections=cfg.max_parallel, max_keepalive_connections=cfg.max_parallel))
+                                   limits=httpx.Limits(**limits), http2=http2)
         self.can_choose = True                     # False once the server refused a constrained choice (then the decision is asked as free text)
 
     def health(self) -> BackendHealth:
@@ -52,6 +70,15 @@ class OpenAICompatBackend(NluBackend):
         if names and self.cfg.model not in names:
             return BackendHealth(False, f"model {self.cfg.model!r} not served at {self.base} (it serves {names[:3]})")
         return BackendHealth(True, f"openai-compatible {self.cfg.model} at {self.base}")
+
+    def warm_connection(self) -> bool:
+        """Open (or keep) a connection to the server with a cheap request, so the first real call of a call does not pay for a new one (0.6 to 0.8 s to Bedrock from Dubai,
+        ARCH_REVIEW section 74). Never raises: a failure just means the first call pays."""
+        try:
+            self.client.get(f"{self.base}/models", timeout=5.0).raise_for_status()
+        except Exception:  # noqa: BLE001 - warming is best effort
+            return False
+        return True
 
     # -- internals ---------------------------------------------------------------------------
     def _body(self, system: str, user: str, max_tokens: int, temperature: float | None, prefill: str = "", schema: dict | None = None,

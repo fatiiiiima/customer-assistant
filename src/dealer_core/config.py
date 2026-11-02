@@ -74,6 +74,8 @@ class BackendCfg(_Strict):
     api_key_env: str | None = None               # cloud_stub, and openai on a hosted service (Bedrock): env var holding the key (never in config)
     extra_body: dict[str, Any] = Field(default_factory=dict)   # openai only: fields added to every request (Bedrock: reasoning_effort, service_tier)
     cloud: bool = False                          # a third-party service outside the company (Bedrock): built only with VOICE_AGENT_ALLOW_CLOUD=1
+    keepalive_s: float | None = None             # openai only: seconds an idle connection is kept open (None = httpx's own 5 s). A new connection to Bedrock costs 0.6 to 0.8 s from Dubai (section 74)
+    http2: bool = False                          # openai only: HTTP/2, so the decision and the replies share one connection and stopping a reply does not close it (needs the h2 package)
 
 
 class LlmCfg(_Strict):

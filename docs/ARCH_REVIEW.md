@@ -2200,3 +2200,39 @@ So a request on a new connection loses about 0.6 to 0.8 s before it is even sent
 1. Keep connections alive longer (about 50 s), and warm one at the start of the call. No new packages.
 2. HTTP/2 for the Bedrock backend, so the decision and the replies share one connection and stopping a reply does not close it. This installs `h2` 4.4.1, `hpack` 4.2.0 and `hyperframe` 6.1.0 (about 0.1 MB in all, my estimate; the dry run resolved them).
 3. Then run the same command again and compare: the decision time with replies in flight is the thing to watch (it should fall toward 500 ms), and the p90.
+
+## 75. The connection fix: HTTP/2, a 50 s keep-alive, and a connection opened at the start of a call (2 Nov, the owner: "build the connection fix ... then I will rerun turn_speed")
+
+Section 74 found that a new connection to Bedrock costs 0.6 to 0.8 s from here, that the parallel turn probably opens new ones every turn, and that our client closes any idle connection after 5 s (httpx's default). This is the fix. It is not yet measured on a real model call; that is the owner's rerun.
+
+**Built.**
+* **Config** (`BackendCfg`): `keepalive_s` (seconds an idle connection is kept; unset means httpx's 5 s) and `http2`. Only `bedrock_nemotron` sets them: `keepalive_s: 50`, `http2: true`. Every other backend is unchanged (a test checks the local server keeps 5 s and HTTP/1.1).
+* **Client** (`nlu/openai_compat.py`): builds the httpx client with those settings. If `http2` is set but the `h2` package is missing, it falls back to HTTP/1.1 and logs a warning; nothing breaks.
+* **Dependency:** `httpx[http2]` in `pyproject.toml`, which adds `h2` 4.4.1, `hpack` 4.2.0 and `hyperframe` 6.1.0 and nothing else (the lock file diff adds exactly those three).
+* **Warm-up:** `warm_connection()` on the backend (one cheap `GET /models`, never raises), passed through `BackendChain`, and called in a background thread by `AgentEngine.opening()`, which runs at the start of every call. The greeting does not wait for it, and a backend that serves both the decisions and the replies is warmed once.
+
+**Measured on the real Bedrock endpoint, with no key sent** (the 401 answer is enough to time the connection; from this Mac, 2 Nov):
+
+| | old (HTTP/1.1, 5 s keep-alive) | new (HTTP/2, 50 s keep-alive) |
+|---|---|---|
+| first request on a cold client | 861 ms | 709 ms |
+| a warm request | 230 and 345 ms | 214 and 229 ms |
+| three requests at once | 206, 670, 670 ms (done in 671 ms) | 225, 222, 222 ms (done in 227 ms) |
+| first request after a 6.5 s pause (four trials) | 622, 621, 673, 582 ms (median 622) | 210, 193, 218, 203 ms (median 206) |
+
+* **At once:** the extra requests of the old setup each opened a connection; on HTTP/2 all three shared one. That is the parallel turn's situation.
+* **After a pause:** the old setup paid a new connection every time (a caller thinking for longer than 5 s); the new one did not. That saves about 0.4 s on the first call of such a turn, in both modes.
+* **How long Bedrock keeps an idle HTTP/2 connection:** I tried idle gaps of 1, 3, 5, 8, 12, 20 and 35 s; each next request took 200 to 280 ms, so none was dropped. A single 902 ms reading after a 6.5 s pause in a first test did not repeat in the four trials.
+* **Limits of this check:** it times the connection, not the model, and a request with no key is answered at the edge. A caller silent for more than a minute still pays once. I did not add a repeating keep-warm ping.
+
+**Tests** (`tests/unit/test_bedrock_backend.py`, 4 added; `tests/unit/test_model_only.py`, 1 added). The pool really is HTTP/2 with a 50 s keep-alive for Bedrock and 5 s HTTP/1.1 for the local server; the fallback without `h2`; `warm_connection` makes one cheap request and returns False instead of raising; the chain warms the active backend; opening a call warms once in the background without delaying the greeting. `pytest tests/unit`: 1,496 passed, 40 skipped. Lint counts unchanged on every touched file.
+
+**What to watch in the owner's rerun** (same command as section 73):
+* the decision time with 2 or more replies in flight, which was about 880 ms against about 400 ms with none (section 74) and should fall toward 500 ms;
+* the first turn, which had its decision at 1,658 ms and went on with no decision;
+* the p90 of first words (1,691 ms against 1,614 ms for the baseline);
+* the baseline too: with the new client its decisions and replies may also be quicker.
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```

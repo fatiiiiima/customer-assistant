@@ -67,3 +67,65 @@ def test_without_the_switch_the_chain_falls_back_to_a_local_model_and_says_so(mo
 
     chain = BackendChain.from_config(c, primary="bedrock_nemotron", factory=factory)
     assert made[0] == "bedrock_nemotron" and len(chain.backends) == len(made) - 1          # the Bedrock one was not built
+
+
+# ------------------------------------------------------------------------------------------------ the connection (ARCH_REVIEW section 75)
+def _bedrock(monkeypatch, tmp_path, **update):
+    monkeypatch.setenv(ALLOW_CLOUD_ENV, "1")
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", KEY)
+    c = cfg()
+    return make_backend("bedrock_nemotron", c.llm.backends["bedrock_nemotron"].model_copy(update=update), c.llm, tmp_path)
+
+
+def test_the_bedrock_connection_is_http2_and_kept_for_50_seconds_other_backends_keep_httpxs_five(monkeypatch, tmp_path):
+    """Section 74: a new connection to Bedrock costs 0.6 to 0.8 s from Dubai, and httpx drops an idle one after 5 s."""
+    pool = _bedrock(monkeypatch, tmp_path).client._transport._pool
+    assert pool._http2 is True and pool._keepalive_expiry == 50.0
+    c = cfg()
+    local = make_backend("local_server", c.llm.backends["local_server"], c.llm, tmp_path)
+    assert local.client._transport._pool._http2 is False and local.client._transport._pool._keepalive_expiry == 5.0      # nothing changes for the others
+
+
+def test_without_the_h2_package_it_falls_back_to_http11_and_says_so(monkeypatch, tmp_path, caplog):
+    from dealer_core.nlu import openai_compat
+
+    monkeypatch.setattr(openai_compat, "_http2_available", lambda: False)
+    with caplog.at_level("WARNING"):
+        pool = _bedrock(monkeypatch, tmp_path).client._transport._pool
+    assert pool._http2 is False and "h2 package is missing" in caplog.text
+
+
+def test_warming_a_connection_is_one_cheap_request_and_never_raises(monkeypatch, tmp_path):
+    backend = _bedrock(monkeypatch, tmp_path)
+    seen = []
+
+    def ok(request):
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"data": []})
+
+    backend.client = httpx.Client(transport=httpx.MockTransport(ok), headers=dict(backend.client.headers))
+    assert backend.warm_connection() is True and seen == [("GET", "/v1/models")]
+
+    def boom(request):
+        raise httpx.ConnectError("no route")
+
+    backend.client = httpx.Client(transport=httpx.MockTransport(boom))
+    assert backend.warm_connection() is False                              # the first real call just pays, as before
+
+
+def test_the_chain_warms_the_active_backend_and_a_backend_with_nothing_to_warm_says_false():
+    class Remote:
+        name = "remote"
+        warmed = 0
+
+        def warm_connection(self):
+            Remote.warmed += 1
+            return True
+
+    class Local:
+        name = "local"
+
+    chain = BackendChain([Remote(), Local()])
+    assert chain.warm_connection() is True and Remote.warmed == 1
+    chain.active = 1
+    assert chain.warm_connection() is False                                 # (the base class does the same for a backend that has no method)

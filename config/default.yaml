@@ -108,6 +108,8 @@ llm:
       api_key_env: AWS_BEARER_TOKEN_BEDROCK          # AWS's standard name for a Bedrock API key (the owner's .env has it)
       cloud: true
       extra_body: {reasoning_effort: none, service_tier: priority}   # no thinking before answering; Bedrock's faster (dearer) tier
+      keepalive_s: 50                              # a new connection to Bedrock costs 0.6 to 0.8 s from Dubai, and httpx drops an idle one after 5 s (section 74)
+      http2: true                                  # one connection for the decision and the replies; stopping a reply does not close it
       prompt_mode: static
       timeout_s: 6.0
       max_parallel: 64

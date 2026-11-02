@@ -440,7 +440,18 @@ class AgentEngine:
     def new_session(self) -> Session:
         return Session()
 
+    def _warm_connections(self) -> None:
+        """At the start of a call, in the background: a connection to each remote model is opened (or kept) before the caller's first question. A new one to Bedrock costs
+        0.6 to 0.8 s from Dubai (ARCH_REVIEW section 74); a request on an open one waits for none of that."""
+        seen: set[int] = set()
+        for b in (self.backend, getattr(self.reply_writer, "backend", None)):
+            warm = getattr(b, "warm_connection", None)
+            if warm is not None and id(b) not in seen:
+                seen.add(id(b))
+                threading.Thread(target=warm, daemon=True).start()
+
     def opening(self, s: Session) -> str:
+        self._warm_connections()
         name = self.svc.cfg.app.agent_name
         c = self.svc.get_car(s.car) if s.car else None
         if name:
