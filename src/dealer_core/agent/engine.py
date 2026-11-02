@@ -956,7 +956,7 @@ class AgentEngine:
         return [fact_sheet([car], self._branch_name),
                 f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
                 + " ".join(x for x in (A.group_sentence(g, d) for g in A.FACT_GROUPS) if x) + (f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}." if d.drive else "")
-                + " Anything not listed here is not recorded: say you don't have it on record."]
+                + f" Not recorded, so say you don't have it on record: {', '.join(A.unrecorded(d))}; and anything else not listed here."]
 
     def prefetch(self, s: Session) -> int:
         """While the agent speaks, send the start of the next likely prompt to the model server, which keeps what it reads (29 Oct, the owner's call: the first
@@ -1026,11 +1026,15 @@ class AgentEngine:
                 lines.append(line[:line.index(" dirhams") + len(" dirhams")])      # another car in the call: name, colour and price
             else:
                 lines.append(line)
-        if lines and lines[-1] == "Cars in this call (true facts you may use):":
+        lines = list(dict.fromkeys(lines))                       # each line once (a search turn gave its three cars twice: as the examples, and again as the cars in this call)
+        while lines and lines[-1] == "Cars in this call (true facts you may use):":
             lines.pop()
+        for i in range(len(lines) - 2, -1, -1):                  # a heading left with nothing under it (its cars were given above)
+            if lines[i] == "Cars in this call (true facts you may use):" and not lines[i + 1].startswith("- "):
+                del lines[i]
         if focus:
             stable[:0] = self._car_facts(car, d)
-            told = s.said_about.get(s.car, [])
+            told = [t for t in s.said_about.get(s.car, []) if t != "about"]          # ("about" is the blurb: "heard about its about" read as nonsense)
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
         words = " ".join(ex.tokens_of(text))
@@ -1189,6 +1193,7 @@ class AgentEngine:
         focus = self.svc.get_car(s.car) if s.car else None
         draft = (f"car {s.car or '-'}, name {s.draft_name or '-'}, phone {s.draft_phone or '-'}, "
                  f"when {T.when_full(s.draft_slot) if s.draft_slot else '-'}, read back to the customer: {'yes, waiting for their yes/no' if s.read_back else 'no'}")
+        drafting = bool(s.draft_name or s.draft_phone or s.draft_slot or s.read_back or s.state in (State.SLOT, State.CONTACT, State.CONFIRM))     # no draft, no line: it only added tokens
         shown = "; ".join(f"{i + 1}) {c.stock_id} {c.year} {c.make} {c.model}" for i, c in enumerate(s.shown)) or "none"
         convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
         # The customer's words are matched to the stock by code (spelling-tolerant), so the model never has to know the whole inventory.
@@ -1198,7 +1203,7 @@ class AgentEngine:
             hint = f"CODE HINT (spelling corrected): the customer's words match make {found['make']}" + (f", model {found['model']}" if found.get("model") else "") + f", ids {ids}\n"
         return (f"NOW: {now:%A %d %B %Y, %H:%M} (Dubai). Open every day.\n{hint}"
                 f"CAR IN FOCUS: {focus.stock_id + ' ' + T.car_name(focus) if focus else 'none'}\nLAST SHOWN: {shown}\n"
-                f"SEARCH SO FAR: {s.filters or 'nothing'}\nBOOKING DRAFT: {draft}\nCONVERSATION:\n{convo}\n")
+                f"SEARCH SO FAR: {s.filters or 'nothing'}\n{'BOOKING DRAFT: ' + draft + chr(10) if drafting else ''}CONVERSATION:\n{convo}\n")
 
     def _fast_decide(self, s: Session, text: str) -> dict | None:
         """The turns whose action the code can tell for certain, without asking the model (saves its 0.25-0.4 s decision call):
@@ -1539,7 +1544,7 @@ class AgentEngine:
                         stream.close()
                         return decision
                     buf = buf[m.end():].lstrip()
-                while cut := split_point(buf, clauses=not spoken):
+                while cut := split_point(buf, clauses=not spoken, min_words=self.reply_writer.first_clause_words):
                     sentence, buf = buf[:cut[0]], buf[cut[1]:]
                     if (ok := take(sentence)):
                         adopt(spoken)

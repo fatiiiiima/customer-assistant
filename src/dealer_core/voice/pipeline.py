@@ -151,12 +151,13 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     w.max_tokens = min(w.max_tokens, cfg.voice.reply_max_tokens)
     w.retries = 0
     w.opener = cfg.voice.opener
+    w.first_clause_words = max(1, cfg.voice.first_clause_words)
     w.first_deadline_s = (cfg.voice.first_sentence_deadline_ms / 1000.0) or None   # a model that has not given a usable first sentence by then is not waited for
     w.history_lines = cfg.voice.history_lines
     if not cfg.negotiation.enabled:                         # the website: fixed prices, so the instructions need no counter-offer example (about half the tokens)
-        from ..dialogue.writer import SYSTEM_VOICE
+        from ..dialogue.writer import SYSTEM_MODEL_ONLY, SYSTEM_VOICE
 
-        w.system = SYSTEM_VOICE
+        w.system = SYSTEM_MODEL_ONLY if cfg.voice.model_only else SYSTEM_VOICE      # the test mode: the model is not shown the code's wording, so its instructions leave that out (section 90)
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
     if cfg.voice.model_only:                                  # the model writes lists too (a 3-car list with prices is about 70 tokens): a reply cut there is dropped

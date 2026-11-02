@@ -214,6 +214,7 @@ class VoiceCfg(_Strict):
     history_lines: int = 6                       # lines of the conversation the model is shown for a reply (the text chat keeps 10)
     reply_max_words: int = 30
     reply_max_tokens: int = 110
+    first_clause_words: int = 6                   # the reply's first spoken piece may end at a comma once it has this many words (6 = as before; 3 starts speech on "I've got ten Toyotas," instead of waiting for a longer clause)
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
     barge_in_min_speech_secs: float = 0.3         # barge-in: the caller must speak this long over the agent (after the detector's own 0.1 s start) before it stops: a cough or a click does not
