@@ -1800,3 +1800,44 @@ Tests (`tests/unit/test_model_only.py`, `tests/unit/test_bedrock_speed.py`) chec
 * the prompt is under half the two calls';
 * the setting is off without the test mode;
 * the speed test times a one-call answer from after its action line.
+
+## 65. The one-call turn on Nemotron: about half a second faster, but the wrong action more often (2 Nov, run by the owner)
+
+MEASURED with the section 64 command, from this M3 Pro to `us-east-1`, priority tier, no reasoning. There were no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-10-30_173116.json`.
+
+| | p50 | p90 |
+|---|---|---|
+| the decision alone (17 calls, 12/12 judged right) | 509 ms | 712 ms |
+| one call: its first piece said (24 calls, all with a reply) | 716 ms | 952 ms |
+| two calls: the reply's first piece after the decision | 819 ms (section 63), 660 ms (the owner's repeat of section 63, `..._173301.json`) | 1,115 / 936 ms |
+
+Two calls take the decision plus the reply's first piece: about 1.17 to 1.33 s, adding the p50s (INFERRED; the p50 of a sum is not the sum of the p50s). One call takes about 0.72 s. **That saves about 0.45 to 0.6 s a turn.** It brings a turn to about 1.15 s with recognition (0.27 s) and the voice's start (under 0.16 s, section 41), still over the 1 s rule.
+
+Read by hand and scored, two problems:
+* **The action was the expected one on 8 of 17 judged lines.** Wrong ones included:
+  * a car's facts read out for "I'd like to test drive it", "can I see it this weekend" and "that's all, thanks, bye";
+  * "compare_cars" for "What is the mileage?";
+  * a made-up action, "greeting".
+
+  The separate decision call got 12 of 12 on its own judged set (not the same lines).
+* **On 5 of 24 replies it repeated the instructions' example car** ("the 2019 Camry is white, with 60,000 km, at 58,000 dirhams"), which is not in stock. In the agent, two of them would have been spoken: "Yes." and "How many owners has it had?" both named a READY car.
+
+Changed (`ONE_CALL_SYSTEM`):
+* the example is gone, and a test checks that the instructions hold no year, price or car name;
+* the instructions now say how to choose: booking words go to `prepare_booking`, goodbye to `end_call`, a person to `handoff`, a question about one car to `get_car`, cars by make or type to `search_cars`, and small talk to `none`.
+
+MEASURED on the local model (Qwen3-4B, the same 17 judged lines):
+
+| version | right action |
+|---|---|
+| one call, before | 6/17 |
+| one call, after | 10/17 |
+| usual separate decision | 14/17 |
+
+One call still picks the wrong action more often than a call that only decides (INFERRED: one prompt asks for two jobs, and the prepared facts pull it toward reading them out).
+
+The speed test now records the expected action with each captured prompt and reports "right action n/m" for the one-call answers. The prompts were captured again: 24 one-call prompts and 18 second calls. To measure the new instructions on Nemotron (59 calls; about 48,000 input and at most 17,000 output tokens by the dry run, about 1 US cent at the priority rates, INFERRED):
+
+```
+uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 42 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
+```

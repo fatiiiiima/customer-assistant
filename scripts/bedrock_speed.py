@@ -157,7 +157,7 @@ def capture_full(out: Path, one_call: bool = False) -> int:
     app = build_app(cfg, inventory="portal", portal_data=SITE_DATA, backend="gpu_server", engine="agent", quality="full")
     start(app, quiet=True)
     apply_voice_profile(app, cfg)
-    e, records, now = app.engine, [], {"line": ""}
+    e, records, now = app.engine, [], {"line": "", "want": None}
     e.silent_fallback = False
     writer = e.reply_writer.backend
     real_stream = writer.lead_in_stream
@@ -165,7 +165,7 @@ def capture_full(out: Path, one_call: bool = False) -> int:
     def stream(system, user, max_tokens=36, temperature=None, deadline_s=None, prefill=""):
         if not prefill:
             records.append({"kind": "full_reply", "system": system, "user": user, "max_tokens": max_tokens, "temperature": temperature, "customer": now["line"],
-                            "one_call": system == ONE_CALL_SYSTEM})
+                            "one_call": system == ONE_CALL_SYSTEM, "want": now["want"]})
         yield from real_stream(system, user, max_tokens, temperature, deadline_s, prefill=prefill)
 
     writer.lead_in_stream = stream
@@ -173,8 +173,8 @@ def capture_full(out: Path, one_call: bool = False) -> int:
     for convo in CONVERSATIONS + OWNER_CALLS:
         s = e.new_session()
         e.opening(s)
-        for line, _ in convo:
-            now["line"] = line
+        for line, want in convo:
+            now["line"], now["want"] = line, want
             t0, first = time.perf_counter(), None
             for r in e.handle_stream(s, line):
                 if first is None and isinstance(r, str) and r.strip():
@@ -339,7 +339,7 @@ def full_reply(b, rec: dict) -> dict:
     out = {"first_ms": None if first is None else round(first), "total_ms": round((time.perf_counter() - t0) * 1000), "words": len(text.split()),
            "finished": bool(re.search(r"[.!?][\"')]*$", text)), "customer": rec["customer"], "reply": text[:400]}
     if rec.get("one_call"):
-        out["action"] = action[:80]
+        out["action"], out["want"] = action[:80], rec.get("want")
     return out
 
 
@@ -429,7 +429,18 @@ def one_call_summary(w: list[dict]) -> dict:
     if not one:
         return {}
     first = [x["first_ms"] for x in one if x["first_ms"] is not None]
-    return {"one_n": len(one), "one_replied": len(first), "one_first_p50": pct(first, 50), "one_first_p90": pct(first, 90)}
+    judged = [x for x in one if x.get("want")]
+    right = sum(_action_name(x["action"]) == x["want"] for x in judged)
+    return {"one_n": len(one), "one_replied": len(first), "one_first_p50": pct(first, 50), "one_first_p90": pct(first, 90),
+            "one_right": f"{right}/{len(judged)}" if judged else "-"}
+
+
+def _action_name(line: str) -> str:
+    """'ACTION: get_car AG-101' -> 'get_car' (the engine's own reading of the line)."""
+    from dealer_core.agent.engine import _ACTION_LINE
+
+    m = _ACTION_LINE.match(line or "")
+    return m.group(1).lower() if m else ""
 
 
 def table(rows: list[dict]) -> str:
@@ -483,7 +494,8 @@ def run(a) -> int:
     print("\nmilliseconds, from this machine (network = a plain GET /models)\n" + table(rows))
     for s in rows:
         if s.get("one_n"):
-            print(f"  {s['model']} one call: {s['one_replied']}/{s['one_n']} answers had the reply in them; its first piece p50 {s['one_first_p50']} / "
+            print(f"  {s['model']} one call: right action {s['one_right']} (the expected one, where the test sets one); "
+                  f"{s['one_replied']}/{s['one_n']} answers had the reply in them; its first piece p50 {s['one_first_p50']} / "
                   f"p90 {s['one_first_p90']} ms (two calls: the decision p50 above + the reply's first piece)")
     for r in results:
         for e in r["errors"][:3]:

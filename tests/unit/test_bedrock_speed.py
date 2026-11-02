@@ -225,8 +225,10 @@ def test_a_one_call_answer_is_timed_from_after_its_action_line(monkeypatch):
     assert r["action"] == "ACTION: get_car AG-101" and r["reply"] == "The Macan is 149,000 dirhams. Want a drive?" and r["finished"]
     r = bs.full_reply(Fake(["ACTION: showroom_info"]), rec)
     assert r["action"] == "ACTION: showroom_info" and r["reply"] == "" and r["first_ms"] is None
-    s = bs.one_call_summary([{"action": "a", "first_ms": 500}, {"action": "b", "first_ms": None}, {"first_ms": 900}])
-    assert s["one_n"] == 2 and s["one_replied"] == 1 and s["one_first_p50"] == 500        # a second-call reply (no action) is not counted in it
+    s = bs.one_call_summary([{"action": "ACTION: get_car AG-1", "want": "get_car", "first_ms": 500}, {"action": "ACTION: get_car AG-1", "want": "end_call", "first_ms": None},
+                             {"action": "ACTION: none", "want": None, "first_ms": 700}, {"first_ms": 900}])
+    assert s["one_n"] == 3 and s["one_replied"] == 2 and s["one_first_p50"] == 500        # a second-call reply (no action) is not counted in it
+    assert s["one_right"] == "1/2"                                                         # judged only where the test names the expected action
 
 
 def test_capture_one_call_writes_its_own_file(monkeypatch):

@@ -161,3 +161,12 @@ def test_one_call_a_ready_action_with_no_reply_after_it_is_written_in_a_second_c
     assert r.reply == "Here is the second call's reply. Anything else?" and len(b.writes) == 1 and not b.prompts
     assert r.debug.intent == "search_cars" and "no reply after it" in r.debug.note
     assert s.shown and sum(1 for who, _ in s.history if who == "customer") == 1      # the search ran once into the call, the words remembered once
+
+
+def test_one_call_instructions_hold_no_car_or_figure_the_model_could_repeat():
+    """2 Nov, Nemotron on Bedrock: 5 of 24 one-call replies repeated the instructions' example car ("the 2019 Camry is white ... 58,000 dirhams"), not in stock."""
+    import re
+
+    from dealer_core.agent.engine import ONE_CALL_SYSTEM
+
+    assert not re.search(r"\d{4}|\d,\d{3}|dirham", ONE_CALL_SYSTEM) and "Camry" not in ONE_CALL_SYSTEM and "end_call" in ONE_CALL_SYSTEM and "prepare_booking" in ONE_CALL_SYSTEM
