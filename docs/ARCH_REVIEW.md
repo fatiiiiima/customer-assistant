@@ -2321,3 +2321,53 @@ To measure the combination (the owner's run, both modes with the new settings an
 ```
 AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --pause 7
 ```
+
+## 78. The parallel turn with the connection fix and a pause: about 0.3 s faster on average; the distance to the region is now the biggest piece left (2 Nov, run by the owner)
+
+MEASURED with the last command of section 77 (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --pause 7`): both modes with the new connection settings (HTTP/2, 50 s keep-alive, a connection opened at the start of a call) and 7 s of silence before each follow-up question. The same 24 turns, Nemotron Nano 3, priority tier. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_130433.json`.
+
+| | baseline (two calls) | parallel |
+|---|---|---|
+| first words, p50 / p90 | 1,373 / 1,880 ms | **1,177 / 1,570 ms** |
+| whole turn, p50 / p90 | 1,428 / 1,951 ms | 1,301 / 1,790 ms |
+| right action | 14/17 | 15/17 |
+| reply ready when the decision arrived | | 12 of 24 turns |
+| replies written ahead per turn | | 2.4 on average, 4 at most (58 in all) |
+
+| | turns | parallel, p50 | baseline, same turns, p50 | change, median |
+|---|---|---|---|---|
+| reply ready | 12 | 762 ms | 1,419 ms | **-664 ms** |
+| reply not ready | 12 | 1,348 ms | 1,300 ms | **+102 ms** (worst: "which one is the fastest", +1,075 ms) |
+
+* **Per turn:** faster by more than 100 ms on 14 turns, within 100 ms on 4, slower by more than 100 ms on 6; median -372 ms, mean -356 ms.
+* **The decision.** Median 667 ms across the parallel turns (860 ms in the first run, 762 ms in the second; section 76), worst 1,222 ms, and no "no decision" turn. With 2 or more replies in flight it took 678 to 723 ms against 575 ms with none: the extra wait from sharing the service is now about 100 to 150 ms (it was 250 to 300 ms), which is a smaller version of the same effect.
+
+**The medians of parallel jump from run to run (994, 1,125, 1,177 ms) and the means do not, for a reason.** About half the turns are hits (about 760 ms) and half misses (about 1,350 ms), so the median sits on the line between the two groups and moves when one or two turns change sides. The means and the paired differences are steadier. Pooling the three runs that have both modes (72 turns, first words):
+
+| | baseline mean | parallel mean | mean change | median change | reply ready |
+|---|---|---|---|---|---|
+| run 1: old connection settings, no pause (section 74) | 1,379 ms | 1,112 ms | -266 ms | -360 ms | 13/24 |
+| run 2: new settings, no pause (section 76) | 1,445 ms | 1,187 ms | -258 ms | -186 ms | 12/24 |
+| run 3: new settings, 7 s pause (this one) | 1,478 ms | 1,122 ms | -356 ms | -372 ms | 12/24 |
+| **all three, 72 turns** | 1,434 ms | 1,140 ms | **-294 ms** | -332 ms | 37/72 (51%) |
+
+The mean saving is 294 ms with a standard error of 63 ms (about ±123 ms at 95%); faster by more than 100 ms on 44 of 72 turns, slower by more than 100 ms on 17. In run 3, the first question of a call (5 turns) went from a mean of 1,756 to 935 ms and the 19 follow-ups from 1,405 to 1,171 ms; the first-question figure rests on 5 turns, so it is not a finding.
+
+**What the parallel turn is worth, with the fix (INFERRED from the table above):** about 0.3 s of first words on average, for 2.4 extra reply calls a turn (three times the model calls, section 73), and the slow turns are not made faster. Against the starting point of this series, the old connection settings with two calls and a pause (first words p50 1,586 ms, section 77), the live-call figure is now 1,177 ms: about 0.4 s less in all, across runs on different minutes.
+
+**Where the time goes now.** On a hit, first words come with the decision; the decision costs a trip to the region (about 215 ms) plus the model's own work. Everything below was measured from this Mac, with no key, new connection each time, five tries per region (medians):
+
+| region | TCP connect | TLS done | whole request |
+|---|---|---|---|
+| us-east-1 (N. Virginia, today) | 216 ms | 649 ms | 885 ms |
+| eu-central-1 (Frankfurt) | 137 ms | 414 ms | 552 ms |
+| eu-north-1 (Stockholm) | 154 ms | 458 ms | 622 ms |
+| ap-southeast-1 (Singapore) | 100 ms | 312 ms | 407 ms |
+| **ap-south-1 (Mumbai)** | **48 ms** | **131 ms** | **177 ms** |
+| me-central-1 (UAE) | no answer from the Bedrock endpoint name | | |
+
+The TCP connect time is one trip. Mumbai is 4.5 times closer than N. Virginia: a request on a warm connection would wait about 50 ms for the trip instead of about 215 ms, and a new connection (now rare) would cost 131 ms instead of 649 ms. The Nemotron Nano 3 30B model card lists Mumbai (and Frankfurt and Stockholm) as available in-region, and the priority tier as supported. I did not call the model there: that needs a key made in that region (a long-term Bedrock key works only in the region it was made in, per the key documentation).
+
+What it would be worth (INFERRED, subtracting the difference in trip time from the measured turns): about 170 ms from each call in the critical path. That is roughly 0.17 s on a parallel hit, and about 0.34 s for the baseline's two calls in a row; first words near 1.0 s at p50 in parallel. The owner decided on 30 Oct (section 55) that the region stays `us-east-1`, because the company's key has its models there. This is the measurement behind reopening that question for this one model, and it is the owner's and the boss's call.
+
+**Then the whole turn from the end of the caller's speech (INFERRED, adding the figures from earlier sections):** about 0.2 s wait for the end of speech, 0.27 s recognition, 1.18 s first words and under 0.16 s for the voice to start: about 1.8 s today in parallel. With Mumbai and the parallel turn about 1.6 s. The owner's 1 s rule needs the fixed parts to shrink too (streaming recognition, a faster end-of-turn decision), not only the model call.
