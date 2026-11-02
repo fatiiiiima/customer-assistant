@@ -2558,3 +2558,19 @@ benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.p
 ```
 VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
 ```
+
+## 83. A live call can now be read afterwards (2 Nov, the owner: "can you see the transcripts? it's still quite slow. also, sometimes the barge in does not work, or it does work but the bot keeps speaking, and when its done, what i said to barge in appears and it replies")
+
+**What could and could not be said from the page transcript alone.**
+* **Seen:** the booking *was* saved by the worker (AG-129, the number and the Monday 6 pm slot all match the database). The red line on the page ("Unknown car_id. Search first.") comes from the site's mirror of the booking, whose `carById` does not know the 49 extra demo cars; the agent's facts all matched the database. The "Are you still there?" prompts are the 8 s quiet clock working as designed. "How many.", "um" and "Sounds like." were answered because `voice.model_only` skips the fragment checks.
+* **Not seen:** why four turns took 3.6 to 8.2 s (the rest 1.1 to 2.1 s), and why a barge-in sometimes did not stop the agent. The page shows only the total; the worker's notes stay in the owner's terminal and the audio recorder was off. A cause given now would be a guess.
+
+**Changed (the recorder only; with `VA_DUMP_AUDIO_DIR` unset nothing is written and no decision changes).** Beside the audio, `<stamp>_in.txt` now also gets:
+* **`turn`**: one JSON line per answered turn: intent, how it was decided (`via`), the state, `decision_ms`, `first_piece_ms`, `turn_ms`, the reply's word count, whether the call ended, and the engine's own note (cut to 700 characters) (`turn_trace` in `voice/pipeline.py`).
+* **`cut`** / **`over_agent`** (`BargeIn`): a cut says how many seconds of speech over the level it took and the loudest 20 ms; `over_agent` says why speech over the agent did *not* stop it (too short, too quiet, or the agent finished first), again with seconds and loudest level. This separates "the level was too high for a quiet voice" from "the detector never fired".
+* **`late_cut`** / **`late_kept`** (`LateBargeIn`): the words that arrived while the agent was still audible, and whether they stopped it. A `late_kept` of real words is the owner's "it keeps speaking and then answers what I said".
+* The quiet-spell prompts were already recorded as `said`.
+
+**Tests** (`tests/unit/test_call_trace.py`, 6; full suite `python -m pytest`: 1,652 passed, 68 skipped; lint findings on the touched files are the ones that were there before): a cut is noted with seconds and loudness; a too-short and a too-quiet speech each say so; the agent finishing first is noted; no recorder means the same decisions; late words are noted as cut or kept; a turn line carries the decision path and the three times.
+
+**Next.** The owner runs one live call with the recorder on (command in the reply), says which turns were slow and which barge-ins failed (the time on the page is enough), and the notes and audio are read against that. `scripts/barge_replay.py` can then replay the audio through the detector with other settings.

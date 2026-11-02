@@ -5,6 +5,7 @@ All local. The language model runs on the iGPU, Whisper on the CPU, Piper on the
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -41,6 +42,13 @@ class VoiceParts:
     stt_engine: WhisperOpenVino | RemoteWhisper
     tts_engine: PiperSherpa
     hotword_groups: dict = field(default_factory=dict)
+
+
+def turn_trace(result) -> str:
+    """One line for the call recorder per turn the agent answered: how it was decided and how long each part took (the notes the worker keeps in its own log, saved beside the audio)."""
+    d = result.debug
+    return json.dumps({"intent": d.intent, "via": d.via, "state": d.state_after, "decision_ms": round(d.nlu_ms), "first_piece_ms": round(d.lead_ms), "turn_ms": round(d.total_ms),
+                       "words": len(result.reply.split()), "ended": result.ended, "note": d.note[:700]}, ensure_ascii=False)
 
 
 def attach_stock_hotwords(stt_engine, inventory) -> None:
@@ -202,6 +210,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                 vad_analyzer._params = params
 
     def after_turn(result) -> None:
+        if trace is not None:
+            trace("turn", turn_trace(result))
         follow_the_question()
         if on_turn:
             on_turn(result)
@@ -212,6 +222,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         heard_hook, say_hook = on_heard, on_say
         on_heard = lambda text: (in_tap.note("heard", text), heard_hook(text) if heard_hook else None)[1]
         on_say = lambda text: (in_tap.note("said", text), say_hook(text) if say_hook else None)[1]
+    trace = (lambda kind, text: in_tap.note(kind, text)) if in_tap is not None else None       # the call recorder, when it is on (VA_DUMP_AUDIO_DIR): after_turn and the barge-in stages write to it
     from .services import EchoGuard
 
     attach_stock_hotwords(parts.stt_engine, app.inventory)
@@ -287,8 +298,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
         from .bargein import BargeIn, LateBargeIn
 
-        stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level))
-        late = LateBargeIn(brain, playback)                   # words said over the agent that were too short to stop it: they stop it when recognised
+        stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level, on_event=trace))
+        late = LateBargeIn(brain, playback, on_event=trace)                   # words said over the agent that were too short to stop it: they stop it when recognised
     for name, proc in (("vad", None), ("stt", stt), ("late", late), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)
