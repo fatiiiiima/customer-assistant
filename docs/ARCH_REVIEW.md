@@ -2463,3 +2463,71 @@ It fixes "Plan Cruiser" (to Land Cruiser) with the global list, and "Bosch" and 
 **Decision for the owner.** Go ahead with step 1 and 2, which needs the 0.8 GB download (about 100 MB of packages and 713 MB of weights), or choose another route. Expected gain when it works (INFERRED): about 0.18 s less per turn from the recogniser alone, and fewer words wrong on headset audio (21.0% to 7.6% in section 79).
 
 **Not covered here.** The production recogniser is a shared GPU server (`voice.stt_url`), not this laptop; Qwen3-ASR's speed and cost on that server, and whether it can be served there with the same `prompt` field, are UNKNOWN. A streaming recogniser (Nemotron, section 79) is a separate piece of work.
+
+## 81. The Qwen3-ASR server, and which context to give it (2 Nov, the owner: "build the Qwen3-ASR server ... write scripts/qwen3_asr_server.py with tests, then run the context A/B on the 252 turns")
+
+Built and measured; not yet used by the worker.
+
+**Built.**
+* `scripts/qwen3_asr_server.py`: Qwen3-ASR 0.6B on the Mac's GPU (MLX) behind the OpenAI transcription API, so `RemoteWhisper` talks to it unchanged (`voice.stt_url`). It follows `scripts/canary_server.py` (the standard-library HTTP server, a private MLX environment). The worker's `prompt` goes to the model as its system prompt; an extra `hotwords` field (comma separated) goes to the model as its hot-word list; the language is always forced (the worker's "en" becomes "English"; never auto-detect, which once chose Russian); recognition is one at a time behind a lock; the model is warmed at start; nothing the caller said is logged.
+* `tests/unit/test_qwen3_asr_server.py`, 9 tests, all with a fake model (no MLX needed): the upload keeps the audio bytes and the fields; any WAV becomes 16 kHz mono; the language mapping; the worker's own `RemoteWhisper` client against the real HTTP server, with the hint arriving as the system prompt; no hint, hot-words and `response_format=text`; health, unknown paths, a missing file and a bad upload all answer without taking it down and without echoing anything from the upload; a model failure is an error answer with only its type, and the next request works; the adapter passes `system_prompt`, `hotwords` and the language the way the model expects; three simultaneous callers are all answered and never inside the model together. `pytest tests/unit`: 1,507 passed, 40 skipped.
+* `scripts/asr_shootout/context_ab.py`: the A/B below.
+
+**Downloads and speed.** About 100 MB of packages into a private environment (447 MB once unpacked: `benchmarks/results/asr_shootout/qwen3-venv`, git-ignored) and the 4-bit weights `mlx-community/Qwen3-ASR-0.6B-4bit` (`model.safetensors` 708 MB, in the Hugging Face cache). MEASURED: the server is ready 7 s after it starts; a warm request takes 74 to 86 ms for a short turn, and the first call without a warm-up took 1.3 s (the server warms itself).
+
+**The Python version hears better than the Swift tool did, with no context at all.** Through this server the "Porsche." clip that the `speech` tool heard as "Bosch." is heard right. On the 12 recorded turns with no context: 10.3% words wrong and 6 exact (the Swift tool: 14.1% and 4). The pipelines differ (other weights, the English prefix forced).
+
+**The A/B** (all 252 turns, words wrong "as read" / turns heard exactly; the median time the server took):
+
+| context | recorded (12) | clean (120) | headset (120) | all 252 | median ms |
+|---|---|---|---|---|---|
+| Whisper base (today, with its hint) | 10.3% / 8 | 11.3% / 99 | 21.0% / 87 | 15.7% / 194 | 256 (after the end of speech) |
+| none | 10.3% / 6 | 8.3% / 98 | 7.4% / 101 | 8.0% / 205 | 83 |
+| the stock names as a sentence (system prompt) | 7.7% / 7 | 9.6% / 94 | 10.2% / 97 | 9.7% / 198 | 109 |
+| the worker's own hint, as it sends it (answering state, plus the agent's last line) | 11.5% / 7 | 8.1% / 98 | 7.9% / 100 | 8.2% / 205 | 113 |
+| a short list of names (system prompt) | 9.0% / 6 | 8.9% / 96 | 8.5% / 98 | 8.7% / 200 | 87 |
+| **the stock names as the model's hot-word list (`hotwords`)** | **5.1% / 9** | 8.7% / 96 | 7.9% / 100 | **8.0% / 205** | 97 |
+| the worker's hint plus the hot-words | 5.1% / 9 | 8.9% / 96 | 8.5% / 98 | 8.4% / 203 | 131 |
+
+**Hot-words are the right way to give it the car names.**
+* On the recorded turns they take it from 6 to 9 exact of 12 (5.1% words wrong against Whisper's 10.3%) and cost nothing on the other 240 turns (8.0% overall, the same as no context). A system prompt in sentences mostly does not help and sometimes hurts: with the worker's own hint, "Yes, talk about the Macan." became "...a bit more.", the model carrying on from the conversation text.
+* **The worker's state hints do not help it:** with the contact-state hint the phone numbers are 14.0% wrong (the same as none); the slot-state hint, which Whisper likes, raised the time turns from 0% to 5.6% wrong and the one- and two-word turns from 16.3% to 31.0%.
+* **Cost:** a longer system prompt adds 15 to 30 ms (113 against 83 ms); the hot-word list adds about 14 ms.
+
+**By kind of turn** (words wrong / exact):
+
+| | Whisper base (now) | Qwen3, no context | Qwen3 + hot-words |
+|---|---|---|---|
+| all 252 | 15.7% / 194 | 8.0% / 205 | 8.0% / 205 |
+| phone numbers (30) | 42.5% / 16 | 14.0% / 17 | 15.4% / 18 |
+| names ("the name is...", 18) | 14.3% / 7 | 8.3% / 11 | 8.3% / 11 |
+| a car word in it (13) | 5.5% / 12 | 10.9% / 8 | **3.6% / 11** |
+| one or two words (62) | **11.6% / 54** | 16.3% / 48 | 18.6% / 50 |
+
+**What the agent makes of the phone numbers:** its own reader (`extractors.contact` and `normalize_phone`) gets the right number from all 12 spoken numbers with all three recognisers. Qwen3-ASR writes them as words ("Zero five zero seven nine..."), and the agent reads that. So the digit gap in the table is formatting; the agent's result is the same.
+
+**Where it is worse.** Short answers.
+* **"half two" (said six times):** Qwen3 heard "um" or "Have to." every time, with every context; Whisper got it 4 of 6 ("have to" twice).
+* **"the RAV4":** Qwen3 writes "The RA V4." or "The RAV 4." (1 to 3 of 6 exact with any context); Whisper 5 of 6. The agent finds a model by its letters joined, so "RA V4" would be missed (UNKNOWN until tried).
+* **Other short misses:** "yep book it" as "Yet book it." (6 of the 8 errors that remain on the synthetic turns are "yep book it", "under the name Sara"/"Sarah" and the like).
+
+**Offline policies** that lean on Whisper for these (the transcripts of both are on hand; each is words wrong / turns exact for all 252, and for the recorded 12):
+
+| | all 252 | recorded 12 | one or two words |
+|---|---|---|---|
+| Whisper only (today) | 15.7% / 194 | 10.3% / 8 | 11.6% / 54 |
+| Qwen3 + hot-words only | 8.0% / 205 | 5.1% / 9 | 18.6% / 50 |
+| Whisper when Qwen3 gives one word or a filler (4 turns) | 7.7% / 207 | 5.1% / 9 | 16.3% / 52 |
+| **Whisper when the clip is under 1.0 s (34 turns)** | **7.4% / 208** | 5.1% / 9 | 13.2% / 53 |
+| Whisper when the clip is under 1.3 s (116 turns) | 7.7% / 206 | 5.1% / 9 | 16.3% / 52 |
+| Whisper when the two disagree and Qwen3 gave two words or fewer (11 turns) | 7.3% / 208 | 5.1% / 9 | 16.3% / 52 |
+
+The gain is small (8.0% to about 7.4%) and it needs the worker to keep Whisper loaded; the cheaper fix for "RAV4" is to join the letters of a stock model name (an exact match with the spaces removed, with no fuzzy guessing).
+
+**What it means (INFERRED).** Qwen3-ASR 0.6B with the stock's names as hot-words is a better recogniser for this job than today's Whisper base on everything measured but the shortest answers: 8.0% against 15.7% words wrong overall, 5.1% against 10.3% on the owner's recordings, names and car words right, and about 170 ms sooner (97 against 256 ms). The shortest answers ("half two", "the RAV4") need a plan.
+
+**Limits.** Only 12 real turns (9 against 6 exact is three turns); 240 synthetic turns from three Kokoro voices; short clips; one pass; the hot-words are the portal stock's names, which the worker also has (its Whisper hint is built from them too). Not tried: silence, room noise and the agent's own voice leaking back (Qwen3-ASR may produce words from nothing, as Whisper sometimes does; `tests/unit/test_stt_guard.py` shows the guards the worker has), several callers at once, the voice running at the same time, a live call.
+
+**To use it in the worker (next, not done).** `RemoteWhisper` sends only `prompt`; for this server it should send the stock names as `hotwords` and no `prompt`. That is a small, tested change behind a setting (`voice.stt_hotwords_field`), so a GPU Whisper server is not sent a field it does not know. Then: the no-speech checks, the "RAV4" join, a decision on a Whisper fallback for clips under a second, and a live call.
+
+Running it by hand: `benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.py --port 8011`.
