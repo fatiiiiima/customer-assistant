@@ -2509,7 +2509,7 @@ Built and measured; not yet used by the worker.
 **Where it is worse.** Short answers.
 * **"half two" (said six times):** Qwen3 heard "um" or "Have to." every time, with every context; Whisper got it 4 of 6 ("have to" twice).
 * **"the RAV4":** Qwen3 writes "The RA V4." or "The RAV 4." (1 to 3 of 6 exact with any context); Whisper 5 of 6. The agent finds a model by its letters joined, so "RA V4" would be missed (UNKNOWN until tried).
-* **Other short misses:** "yep book it" as "Yet book it." (6 of the 8 errors that remain on the synthetic turns are "yep book it", "under the name Sara"/"Sarah" and the like).
+* **The phrases heard wrong most often on the synthetic turns** (each said six times, except where noted; hot-words on): "half two" 6 wrong; "yep book it" heard as "Yet book it." 6; "under the name Sara" written "Sarah" 6 (a spelling of a name); the spoken phone number 6 (written as words, which the agent reads correctly, see above); "the RAV4" 3 (as "RA V4"); "can I change it to 9?" heard as "...to non?" 3.
 
 **Offline policies** that lean on Whisper for these (the transcripts of both are on hand; each is words wrong / turns exact for all 252, and for the recorded 12):
 
