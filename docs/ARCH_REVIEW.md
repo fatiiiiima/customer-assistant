@@ -2969,3 +2969,44 @@ With the same conversation and voice at every level (caller c1) the median of it
 uv run python scripts/load_test.py --url ws://127.0.0.1:8777/voice --mode handsfree --mix --voice say:Samantha,say:Daniel,say:Karen --levels 1 2 4 8 --repeat 2 --out logs/load_test_handsfree_sync.json
 ```
 Per-turn logs of these runs: `logs/load_test_handsfree_sync.json`, `..._high.json`, `..._staggered.json` (git-ignored).
+
+## 99. The cluster: two workers behind the router, with the live settings; and how 100 to 200 callers would be tested (3 Nov, the owner: "so wait we did the tests without using the workers setup?", then "yes do that and then tell me how we would test 100 to 200 callers")
+
+**What section 98 had and had not covered.** One worker, memory for the call state, no router, no autoscaler, the call cap off. This section runs the workers setup of the architecture walkthrough: `scripts/run_cluster.py` starts PostgreSQL (pgserver, the shared call state and the worker registry), several workers and the router. The launcher knew only the older stack (OpenVINO, Ollama, a local server; `--prefix`, tap mode), so it gained `--backend bedrock` (the way the live calls run: `--agent --quality full --hands-free --backend bedrock_nemotron`, the cloud switch and the decision backend set) and `--set KEY=VALUE` (repeatable: the settings of section 95 for every worker). `load_test.py` now notes which worker took each call and prints the split. Tests: `tests/unit/test_run_cluster.py` (3 added; `python -m pytest`: 1,830 passed, 68 skipped).
+
+**The run (MEASURED).** 2 workers (ports 8785 and 8786; the old workers on 8765 and 8766 were left alone), 16 places each, the call cap on (the default), the live settings of section 95 with the Qwen3 recogniser, all on this laptop, the router handing out the calls (`/assign`), the callers as in section 98.
+
+| callers, all together, through the router | turns | first sound median | p90 | worst | over 2 s | hearing median | calls per worker |
+|---|---|---|---|---|---|---|---|
+| 8 | 50 | 0.94 | 1.53 | 2.46 | 4% | 0.24 | 4 and 4 |
+| 8 (second run) | 49 | 0.76 | 1.61 | 2.49 | 4% | 0.22 | 2 and 6 |
+| 16 | 97 | 2.38 | 8.48 | 10.79 | 56% | 0.80 | 10 and 6 |
+
+(One worker, section 98: 8 callers 0.94 / 1.80; 16 callers 2.94 / 8.44.) 0 failed calls, 0 silent turns.
+
+* **The router works as designed.** Both workers were seen with 16 places; calls went to both. The splits of 2 and 6, and 10 and 6, come from a burst of simultaneous callers against a registry that is up to 2 s stale (the second run started a moment after the first; the router counts what it handed out, but the workers' own reports still showed the earlier calls), not from a fault.
+* **The call cap worked.** After the 16-caller run the router's view showed worker 1 with `max` 12 of a ceiling of 16 and an answer p90 of 1,354 ms and 1,261 ms for the two workers: the measured cap (`voice.admission`, target 1,000 ms) had lowered itself, as section 19 describes. No caller was turned away in these runs, because no more than 10 reached one worker at once.
+* **Two workers did not move the knee.** 16 callers were as slow with two workers as with one (median 2.4 against 2.9 s, p90 8.5 s against 8.4 s). The shared services were the limit, as section 98 found: CPU at 100% on the 12-core laptop, hearing 0.8 s from the one recogniser, and 69 `ReadTimeout` warnings from the one voice server across the two workers. Workers share nothing that would make the limit lower.
+* **Shared state across workers works.** A call begun on worker 1 (a search for the Land Cruiser, answered), ended by the caller's goodbye, was carried on from worker 2 with the same call id: its first line was "Sorry, we got cut off for a moment. I'm back: where were we?" and "How many owners has it had?" was answered about the Land Cruiser ("it's had one owner"). That also checks section 94 (an ended call is open again) across workers. The stock was imported from the website's data.js into PostgreSQL (the cluster's database), not the 74-car file of the live calls.
+* **Not run:** the autoscaler (it is a Kubernetes object; `deploy/k8s/voice.yaml`), `scripts/failover_test.py` (a worker killed in the middle of a call; written for this cluster), 3 or more workers.
+
+### How 100 to 200 callers would be tested
+
+The aim: hold the median first sound near today's 0.9 to 1.1 s (p90 under 2 s) with 0 callers turned away outside a surge, and find which part gives out first. Not possible on this laptop: it was out of CPU at 12 to 16 callers with everything on it, and the callers themselves cost CPU.
+
+1. **Before any hardware (a day).** Count what a turn costs: Bedrock requests, recognitions and voice sentences per turn (counters on the worker; today only estimated: about 2.5 requests, 4 recognitions and 6 s of speech). Run `capacity_probe.py` on each service. Put the measured speeds into `simulate_scale.py` (it uses typed-in targets) and read the predicted knee for 100 and 200.
+2. **One service at a time (each with its own load generator).**
+   * **Voice:** how many callers one Pocket server carries (it makes one sentence at a time, 0.14 times the audio length); then 2 and 4 copies behind one address.
+   * **Recogniser:** recognitions a second, early starts included, for one Qwen3 server and for a GPU Whisper (the manifest's `stt-server`, vLLM, batched); and the clip rate that gives a queue.
+   * **Model:** Bedrock's quota for the key (ask AWS for the figures first) and requests a second before it throttles; or the manifest's vLLM. 100 callers is about 17 requests a second, 200 about 33 (estimates).
+3. **The fleet, in steps (25, 50, 100, 150, 200 callers, each held for 10 minutes).** On a staging cluster, the nearest thing to the walkthrough: `deploy/k8s/voice.yaml` (workers 3 to 4 cores each, the router, the GPU services, PostgreSQL) plus a voice service with replicas, which the manifest does not have. Workers needed: 9 at 100, 18 at 200 (70% full).
+4. **The callers.** `load_test.py --gateway` already asks the router for a worker per call. For this size:
+   * run it from 2 to 4 separate machines of 50 callers each, with the clips made once (not `say` at the start of each run);
+   * a think time of 8 to 15 s between turns, as in a real call (`--stagger` only spaces the starts today; the all-at-once start is the worst case);
+   * the ramp of the walkthrough (40 to 200 over 3 minutes, then a surge of 140 callers in 30 s) and a drop back down;
+   * real recorded turns with room noise next to the clean voices.
+5. **What is recorded.** Per level: the caller-side first sound (median, p90, p99), the page's table steps from `turn_detail` (the breakdown of "reply words" included), calls turned away and 503 answers, heard-as-said, CPU a call on a worker, the recogniser's queue, the voice server's timeouts, Bedrock throttling (429) or the vLLM requests in flight, PostgreSQL connections (`pg_stat_activity`), the autoscaler's decisions and how long a new worker took (the design says 45 s), the worker `/metrics`.
+6. **Then the failures.** A one-hour soak at 100 callers (memory, connections); `failover_test.py` with a worker killed mid-call; a scale-down with calls in progress (the drain: no call may be cut); the surge from the minimum 8 workers (128 places): in the walkthrough's own model, 200 callers arriving within 45 s leave about 72 turned away until the new workers are ready.
+7. **Passing:** median at most about 1.1 s and p90 at most 2 s at 100 and 200 callers once the services are sized; no call cut by a scale-down; the call resumed on another worker; cost per call minute written down.
+
+What was fixed in this section is only the launcher and the report. Nothing about the fleet's capacity at 100 or 200 callers is measured here.

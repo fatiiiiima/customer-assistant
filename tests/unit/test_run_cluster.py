@@ -87,3 +87,35 @@ def test_a_dry_run_with_a_local_server_prints_the_plan(tmp_path):
     out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "local", "--site", str(tmp_path)],
                          capture_output=True, text=True, timeout=60).stdout
     assert "backend   local" in out and "local_server" in out and "VA__DIALOGUE__DECISION_BACKEND=local_server" in out and "dealer_core.modelserver" not in out
+
+
+def test_a_bedrock_worker_runs_as_the_owners_live_calls_do():
+    """ARCH_REVIEW section 99: hands-free, the full quality, Nemotron on Bedrock for the decisions and the replies, no prefix mode, the shared call state and a worker id."""
+    assert rc.pick_backend("bedrock", "arm64") == "bedrock"
+    cmd = rc.worker_cmd(1, "bedrock", "postgresql://db", Path("/s/site"), 8785, 16, None)
+    assert cmd[cmd.index("--backend") + 1] == "bedrock_nemotron" and "--hands-free" in cmd and "--prefix" not in cmd
+    assert cmd[cmd.index("--quality") + 1] == "full" and cmd[cmd.index("--port") + 1] == "8786" and cmd[cmd.index("--worker-id") + 1] == "w2"
+    assert cmd[cmd.index("--state-url") + 1] == "postgresql://db" and cmd[cmd.index("--max-calls") + 1] == "16"
+    assert rc.worker_cmd(0, "bedrock", "x", Path("/s"), 8785, 4, "prefix")[rc.worker_cmd(0, "bedrock", "x", Path("/s"), 8785, 4, "prefix").index("--quality") + 1] == "prefix"
+    env = rc.worker_env("bedrock", "postgresql://db", extra={"VA__VOICE__HOLD_REPLY": "true"})
+    assert env["VOICE_AGENT_ALLOW_CLOUD"] == "1" and env["VA__DIALOGUE__DECISION_BACKEND"] == "bedrock_nemotron" and env["VA__LLM__FALLBACKS"] == "[]"
+    assert env["VA__VOICE__HOLD_REPLY"] == "true" and env["DATABASE_URL"] == "postgresql://db"
+    assert "VOICE_AGENT_ALLOW_CLOUD" not in {k for k in rc.worker_env("ollama", "x") if k == "VOICE_AGENT_ALLOW_CLOUD" and k not in __import__("os").environ}   # only the Bedrock backend sets it
+
+
+def test_set_makes_environment_for_every_worker_and_refuses_a_bad_one():
+    import pytest
+
+    assert rc.parse_sets(["VA__VOICE__A=1", "B=x=y"]) == {"VA__VOICE__A": "1", "B": "x=y"} and rc.parse_sets(None) == {}
+    with pytest.raises(SystemExit):
+        rc.parse_sets(["nothing"])
+    with pytest.raises(SystemExit):
+        rc.parse_sets(["=1"])
+
+
+def test_a_dry_run_of_the_bedrock_cluster_shows_the_settings_and_starts_nothing(tmp_path):
+    (tmp_path / "data.js").write_text("// cars")
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "bedrock", "--workers", "2", "--site", str(tmp_path),
+                          "--set", "VA__VOICE__HOLD_REPLY=true"], capture_output=True, text=True, timeout=60).stdout
+    assert "backend   bedrock" in out and out.count("dealer_core.server") == 2 and "VA__VOICE__HOLD_REPLY=true" in out and "--hands-free" in out
+    assert "dealer_core.modelserver" not in out and "dealer_core.gateway" in out

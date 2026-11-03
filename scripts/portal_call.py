@@ -87,6 +87,8 @@ async def one_call_hf(url: str, clips: list[np.ndarray], car: str | None, tag: s
                         st_["you"].append((now, e["text"]))
                     elif e["turn"] == 0:
                         out["greeting"] = e["text"]
+                    else:
+                        out.setdefault("agent_lines", []).append(e["text"])
                 elif e["type"] == "busy":
                     out["status"] = "busy"
 

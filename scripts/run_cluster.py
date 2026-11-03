@@ -5,7 +5,9 @@ r"""The whole system on one machine, the way it runs in production across many: 
   Either, to check:     ... scripts/run_cluster.py --dry-run                      (prints what would start, starts nothing)
 
   database   PostgreSQL (pgserver, local; production: a managed PostgreSQL)      bookings, stock, call snapshots, worker registry
-  model      --backend openvino: python -m dealer_core.modelserver on :8001      one model, batched, for every worker (Intel GPU)
+  model      --backend bedrock:  Nemotron on Amazon Bedrock (dev only: the callers' words go to AWS; needs the key in .env) and the live settings of the owner's calls:
+                                 hands-free, --quality full; the rest with --set VA__VOICE__MODEL_ONLY=true ... (repeat it), the recogniser with --set VA__VOICE__STT_URL=...
+             --backend openvino: python -m dealer_core.modelserver on :8001      one model, batched, for every worker (Intel GPU)
              --backend ollama:   the Ollama app on :11434 (started by you)        Apple chips, or any machine without an Intel GPU
              (default auto: openvino on Intel / AMD processors, ollama otherwise; production: vLLM)
   workers    python -m dealer_core.server on :8765, :8766, ...                    each up to --calls-per-worker calls
@@ -59,24 +61,40 @@ def log_tail(path: Path, lines: int = 15) -> str:
 
 
 def pick_backend(choice: str, machine: str | None = None) -> str:
-    """openvino (the shared OpenVINO model server, for an Intel GPU), ollama (everything else, e.g. Apple chips) or local (an OpenAI-compatible server you started)."""
-    if choice in ("openvino", "ollama", "local"):
+    """openvino (the shared OpenVINO model server, for an Intel GPU), ollama (everything else, e.g. Apple chips), local (an OpenAI-compatible server you started) or bedrock
+    (Nemotron on Amazon Bedrock, the way the owner's live calls run: ARCH_REVIEW section 99)."""
+    if choice in ("openvino", "ollama", "local", "bedrock"):
         return choice
     m = (machine if machine is not None else platform.machine()).lower()
     return "openvino" if m in ("x86_64", "amd64", "x86", "i386", "i686") else "ollama"
 
 
 def worker_cmd(i: int, backend: str, db_url: str, site: Path, first_port: int, calls: int, quality: str | None) -> list[str]:
-    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", {"openvino": "openvino_server", "local": "local_server"}.get(backend, "ollama"),
-           "--port", str(first_port + i), "--max-calls", str(calls), "--state-url", db_url, "--worker-id", f"w{i + 1}", "--site", str(site)]
+    tail = ["--port", str(first_port + i), "--max-calls", str(calls), "--state-url", db_url, "--worker-id", f"w{i + 1}", "--site", str(site)]
+    if backend == "bedrock":                                              # as the owner's live calls: the model writes the reply, the microphone stays open
+        return [PY, "-m", "dealer_core.server", "--agent", "--quality", quality or "full", "--hands-free", "--backend", "bedrock_nemotron", *tail]
+    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", {"openvino": "openvino_server", "local": "local_server"}.get(backend, "ollama"), *tail]
     return cmd + (["--quality", quality] if quality else [])
 
 
 STT_PORT = 8002
 
 
-def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = "") -> dict[str, str]:
+def parse_sets(items: list[str] | None) -> dict[str, str]:
+    """--set KEY=VALUE (repeatable): environment for every worker (the VA__SECTION__KEY settings of config/default.yaml)."""
+    out = {}
+    for item in items or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise SystemExit(f"--set wants KEY=VALUE, not {item!r}")
+        out[key.strip()] = value
+    return out
+
+
+def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = "", extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {**os.environ, "DATABASE_URL": db_url}
+    if backend == "bedrock":
+        env.update({"VOICE_AGENT_ALLOW_CLOUD": "1", "VA__DIALOGUE__DECISION_BACKEND": "bedrock_nemotron", "VA__LLM__FALLBACKS": "[]"})
     if stt_url:
         env["VA__VOICE__STT_URL"] = stt_url                          # the workers then run no recognizer of their own (voice/stt.py RemoteWhisper)
     if backend == "ollama":
@@ -85,6 +103,7 @@ def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = 
         env["VA__DIALOGUE__DECISION_BACKEND"] = "local_server"
         if local_model:
             env["VA__LLM__BACKENDS__LOCAL_SERVER__MODEL"] = local_model     # the name the server lists
+    env.update(extra or {})
     return env
 
 
@@ -124,8 +143,10 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--calls-per-worker", type=int, default=16)
     ap.add_argument("--first-port", type=int, default=8765)
-    ap.add_argument("--backend", choices=["auto", "openvino", "ollama", "local"], default="auto",
-                    help="the model: openvino = the shared OpenVINO server (Intel GPU), ollama = the Ollama app; auto picks by processor")
+    ap.add_argument("--backend", choices=["auto", "openvino", "ollama", "local", "bedrock"], default="auto",
+                    help="the model: openvino = the shared OpenVINO server (Intel GPU), ollama = the Ollama app, bedrock = Nemotron on Amazon Bedrock (dev only), "
+                         "local = a server you started; auto picks by processor")
+    ap.add_argument("--set", action="append", metavar="KEY=VALUE", help="an environment setting for every worker, e.g. --set VA__VOICE__HOLD_REPLY=true (repeatable)")
     ap.add_argument("--model", default="Qwen3-4B-Instruct-2507-int4-ov-nocal", help="openvino only: the model folder under models/ov")
     ap.add_argument("--site", type=Path, default=Path(os.environ.get("SITE_DIR") or ROOT.parent / "bmw-portal" / "site"),
                     help="the website's site folder (its data.js holds the cars); default: bmw-portal next to this project")
@@ -135,6 +156,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="print what would start, start nothing")
     a = ap.parse_args()
     backend = pick_backend(a.backend)
+    extra = parse_sets(a.set)
 
     if not (a.site / "data.js").exists():
         print(f"no website at {a.site} (its data.js): pass --site <the website's site folder>", flush=True)
@@ -149,8 +171,9 @@ def main() -> int:
         if a.stt_server:
             print("recogniz  " + " ".join([PY, "-m", "dealer_core.sttserver", "--port", str(STT_PORT)]) + f"   (workers: VA__VOICE__STT_URL=http://127.0.0.1:{STT_PORT}/v1)")
         for i in range(a.workers):
-            extra = {"ollama": "VA__DIALOGUE__DECISION_BACKEND=ollama ", "local": "VA__DIALOGUE__DECISION_BACKEND=local_server "}.get(backend, "")
-            print(f"worker{i + 1}   {extra}" + " ".join(worker_cmd(i, backend, db, a.site, a.first_port, a.calls_per_worker, a.quality)))
+            shown = {"ollama": "VA__DIALOGUE__DECISION_BACKEND=ollama ", "local": "VA__DIALOGUE__DECISION_BACKEND=local_server ",
+                     "bedrock": "VOICE_AGENT_ALLOW_CLOUD=1 VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron "}.get(backend, "") + "".join(f"{k}={v} " for k, v in extra.items())
+            print(f"worker{i + 1}   {shown}" + " ".join(worker_cmd(i, backend, db, a.site, a.first_port, a.calls_per_worker, a.quality)))
         print("router    " + " ".join([PY, "-m", "dealer_core.gateway", "--state-url", db, "--port", "8760"]))
         return 0
 
@@ -216,7 +239,7 @@ def main() -> int:
             stt_url = f"http://127.0.0.1:{STT_PORT}/v1"
             print(f"recogniz  {stt_url}", flush=True)
         for i in range(a.workers):
-            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url, stt_url, local_model))
+            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url, stt_url, local_model, extra))
         print(f"starting {a.workers} workers (loading the speech models takes a minute or two)...", flush=True)
         started = 0
         for i in range(a.workers):

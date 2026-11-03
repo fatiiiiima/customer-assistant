@@ -51,9 +51,9 @@ async def staggered(url, origin, variant, i: int, stagger: float, mode: str = "t
             with urllib.request.urlopen(GATEWAY["url"].rstrip("/") + "/assign", timeout=5) as r:
                 return json.loads(r.read())["url"]
         url = await asyncio.to_thread(assign)
-    if mode == "handsfree":
-        return await one_call_hf(url, clips, None, f"c{i + 1}", origin, lines=lines)
-    return await one_call_tap(url, clips, None, f"c{i + 1}", origin, None)
+    res = await (one_call_hf(url, clips, None, f"c{i + 1}", origin, lines=lines) if mode == "handsfree" else one_call_tap(url, clips, None, f"c{i + 1}", origin, None))
+    res["worker_url"] = url                                  # which worker took this call (through the router: the one it assigned)
+    return res
 
 
 async def sample_machine(into: list) -> None:
@@ -110,6 +110,7 @@ async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: st
             "over_2s": round(sum(x > 2 for x in first) / len(first), 2) if first else None, "mic_close_median": round(st.median(closed), 2) if closed else None,
             "mic_closed_by_tap": taps, "cpu_mean": round(float(np.mean([c for c, _ in machine])), 0) if machine else None, "cpu_max": max((c for c, _ in machine), default=None), "ram_max": max((m for _, m in machine), default=None), "whole_reply_median": round(pct(whole, 50), 1), "whole_reply_p90": round(pct(whole, 90), 1), "greeting_s": round(st.median([r["greeting_s"] for r in ok]), 1) if ok else None, "wall_s": round(time.monotonic() - t0)}
     out_.update(steps)
+    out_["calls_per_worker"] = {u: sum(1 for r in ok if r.get("worker_url") == u) for u in sorted({r.get("worker_url") for r in ok})}
     out_["detail"] = [{"caller": r["tag"], **t} for r in ok for t in r["turns"]]       # every turn, for the log file
     return out_
 
@@ -146,6 +147,8 @@ async def main() -> int:
             print(f"    server steps (median s): silence {r['wait']}, turn check {r['check']}, hearing {r['hear']}, reply words {r['reply']} (decision {r['decision']}; model request sent at {r['model_sent']}, "
                   f"first text at {r['model_first_text']}, first words at {r['model_first_words']}; network est. {r['network_est']}), voice {r['voice']}; ready ahead {r['ahead_share']}, picked by the code {r['by_code_share']}; "
                   f"heard exactly as said {r['heard_as_said']}", flush=True)
+        if len(r.get("calls_per_worker", {})) > 1:
+            print(f"    calls per worker: {r['calls_per_worker']}", flush=True)
         await asyncio.sleep(3)
     (ROOT / "logs").mkdir(exist_ok=True)
     out = Path(a.out) if a.out else ROOT / "logs" / ("load_test_handsfree.json" if a.mode == "handsfree" else "load_test.json")
