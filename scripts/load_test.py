@@ -56,13 +56,45 @@ async def staggered(url, origin, variant, i: int, stagger: float, mode: str = "t
     return res
 
 
-async def sample_machine(into: list) -> None:
+GROUPS = (("worker", ("dealer_core.server",)), ("recogniser (Qwen3, MLX)", ("qwen3_asr_server",)), ("recogniser (Parakeet, MLX)", ("parakeet_asr_server",)),
+          ("voice server (Pocket)", ("pocket_server",)), ("router", ("dealer_core.gateway",)), ("these callers (this script)", ("load_test.py",)))
+
+
+def group_of(cmdline: list[str]) -> str | None:
+    """Which part of the system a process is, from its command line (None: not one of ours)."""
+    text = " ".join(cmdline or [])
+    for name, marks in GROUPS:
+        if any(m in text for m in marks):
+            return name
+    return None
+
+
+async def sample_machine(into: list, by_process: dict | None = None) -> None:
     import psutil
 
     psutil.cpu_percent()
+    watched: dict[int, tuple[str, psutil.Process]] = {}
     while True:
         await asyncio.sleep(2)
         into.append((psutil.cpu_percent(), psutil.virtual_memory().percent))
+        if by_process is None:
+            continue
+        for p in psutil.process_iter(["pid", "cmdline"]):                       # the processes of ours, found afresh (workers start and stop)
+            g = group_of(p.info["cmdline"])
+            if g and p.info["pid"] not in watched:
+                watched[p.info["pid"]] = (g, p)
+                try:
+                    p.cpu_percent(None)
+                except psutil.Error:
+                    pass
+        now: dict[str, float] = {}
+        for pid, (g, p) in list(watched.items()):
+            try:
+                now[g] = now.get(g, 0.0) + p.cpu_percent(None) / 100.0                 # in cores: 1.0 = one core fully busy
+            except psutil.Error:
+                watched.pop(pid, None)
+        for g, cores in now.items():
+            by_process.setdefault(g, []).append(cores)
 
 
 def _words(text) -> list[str]:
@@ -90,10 +122,11 @@ def server_steps(turns: list[dict]) -> dict:
     return out
 
 
-async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: str = "tap") -> dict:
+async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: str = "tap", profile: bool = False) -> dict:
     t0 = time.monotonic()
     machine: list = []
-    sampler = asyncio.create_task(sample_machine(machine))
+    cores: dict[str, list[float]] = {}
+    sampler = asyncio.create_task(sample_machine(machine, cores if profile else None))
     res = await asyncio.gather(*[staggered(url, origin, scripts[i % len(scripts)], i, stagger, mode) for i in range(n)], return_exceptions=True)
     sampler.cancel()
     failed = [r for r in res if isinstance(r, Exception)]
@@ -110,6 +143,8 @@ async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: st
             "over_2s": round(sum(x > 2 for x in first) / len(first), 2) if first else None, "mic_close_median": round(st.median(closed), 2) if closed else None,
             "mic_closed_by_tap": taps, "cpu_mean": round(float(np.mean([c for c, _ in machine])), 0) if machine else None, "cpu_max": max((c for c, _ in machine), default=None), "ram_max": max((m for _, m in machine), default=None), "whole_reply_median": round(pct(whole, 50), 1), "whole_reply_p90": round(pct(whole, 90), 1), "greeting_s": round(st.median([r["greeting_s"] for r in ok]), 1) if ok else None, "wall_s": round(time.monotonic() - t0)}
     out_.update(steps)
+    if profile:
+        out_["cpu_cores_by_process"] = {g: {"mean": round(float(np.mean(v)), 2), "max": round(max(v), 2)} for g, v in sorted(cores.items())}
     out_["calls_per_worker"] = {u: sum(1 for r in ok if r.get("worker_url") == u) for u in sorted({r.get("worker_url") for r in ok})}
     out_["detail"] = [{"caller": r["tag"], **t} for r in ok for t in r["turns"]]       # every turn, for the log file
     return out_
@@ -124,6 +159,7 @@ async def main() -> int:
     ap.add_argument("--voice", default="amy", help="the callers' voice; several, comma separated, are shared out among the callers. say:Samantha uses the Mac's own voices (say:Samantha,say:Daniel,say:Karen)")
     ap.add_argument("--mode", choices=["tap", "handsfree"], default="tap", help="tap = tap-to-talk (as before); handsfree = the microphone stays open and the server decides when a turn is over (how the page is used hands-free)")
     ap.add_argument("--repeat", type=int, default=1, help="each level this many times")
+    ap.add_argument("--profile", action="store_true", help="also report the CPU each of our processes used (the worker, the recogniser, the voice server, these callers), in cores: which part runs out first")
     ap.add_argument("--out", default="", help="where to write the per-turn log (default logs/load_test.json, or logs/load_test_handsfree.json)")
     ap.add_argument("--mix", action="store_true", help="five different conversations (longer questions, comparisons, a negotiation question) instead of one")
     ap.add_argument("--stagger", type=float, default=0.0, help="seconds between caller starts")
@@ -138,7 +174,7 @@ async def main() -> int:
         scripts.append((caller_audio(lines, voices[k % len(voices)]), lines))
     rows = []
     for n, rep in [(n, r_) for n in a.levels for r_ in range(a.repeat)]:
-        r = await level(a.url, a.origin, scripts, n, a.stagger, a.mode)
+        r = await level(a.url, a.origin, scripts, n, a.stagger, a.mode, a.profile)
         r["repeat"] = rep + 1
         rows.append(r)
         print(f"{n} caller(s): {r['turns']} turns, {r['failed_calls']} failed calls, {r['silent_turns']} silent; first sound median {r['first_sound_median']} s, p90 {r['p90']} s, worst {r['worst']} s, "
@@ -147,6 +183,8 @@ async def main() -> int:
             print(f"    server steps (median s): silence {r['wait']}, turn check {r['check']}, hearing {r['hear']}, reply words {r['reply']} (decision {r['decision']}; model request sent at {r['model_sent']}, "
                   f"first text at {r['model_first_text']}, first words at {r['model_first_words']}; network est. {r['network_est']}), voice {r['voice']}; ready ahead {r['ahead_share']}, picked by the code {r['by_code_share']}; "
                   f"heard exactly as said {r['heard_as_said']}", flush=True)
+        if r.get("cpu_cores_by_process"):
+            print("    CPU by process, in cores (mean / max; this machine has " + str(__import__("os").cpu_count()) + "): " + "; ".join(f"{g} {v['mean']} / {v['max']}" for g, v in r["cpu_cores_by_process"].items()), flush=True)
         if len(r.get("calls_per_worker", {})) > 1:
             print(f"    calls per worker: {r['calls_per_worker']}", flush=True)
         await asyncio.sleep(3)

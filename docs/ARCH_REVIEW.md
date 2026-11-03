@@ -3010,3 +3010,47 @@ The aim: hold the median first sound near today's 0.9 to 1.1 s (p90 under 2 s) w
 7. **Passing:** median at most about 1.1 s and p90 at most 2 s at 100 and 200 callers once the services are sized; no call cut by a scale-down; the call resumed on another worker; cost per call minute written down.
 
 What was fixed in this section is only the launcher and the report. Nothing about the fleet's capacity at 100 or 200 callers is measured here.
+
+## 100. Where the CPU went at 8 and 16 callers (3 Nov, the owner: "over 8 fails because of the limitations of this laptop yeah? not because of the code or logic or structure?")
+
+Section 98 measured the whole machine's CPU, not which process used it. `load_test.py --profile` now samples each of our processes every 2 s (in cores; this laptop has 12) and prints the mean and the maximum. The same single worker, live settings, call cap off, five conversations in three voices, all callers starting together. MEASURED (`logs/load_test_profile.json`).
+
+| | 8 callers | 16 callers |
+|---|---|---|
+| first sound median / p90 (caller side) | 1.05 / 2.2 s | **2.77 / 8.4 s** |
+| hearing (server median) | 0.30 s | **0.96 s** |
+| heard exactly as said | 75% | **44%** |
+| whole machine CPU, mean / max | 35% / 98% | 58% / 100% |
+| **worker** (cores, mean / max) | 1.59 / 8.5 | **3.55 / 8.75** |
+| voice server, Pocket (cores) | 0.68 / 1.77 | 0.90 / 1.77 |
+| recogniser, Qwen3 (cores of CPU; its model runs on the GPU) | 0.17 / 0.88 | 0.47 / 1.0 |
+| the callers (this script) | 0.06 / 0.7 | 0.10 / 0.58 |
+
+* **The worker is the biggest user of CPU, and it is in line with the design.** About 0.2 core a call on average (3.55 cores for 16 calls). `deploy/k8s/voice.yaml` budgets 3 to 4 cores per worker of 16 calls. Nothing in the worker uses more than the design assumed.
+* **But a burst needs about twice the manifest's limit.** With 16 callers all speaking at the same instant the worker peaked at 8.75 cores; the manifest's limit is 4. Real traffic is not that synchronised (16 callers 5 s apart held a 1.0 s median in section 98), but a surge of calls beginning together would be throttled in Kubernetes and show up as a tail. UNKNOWN until measured under the real limit.
+* **The load generator is not the cause.** 0.1 core. It does not skew the results.
+* **The two shared servers do not grow with the callers.** The Qwen3 server makes one recognition at a time (its CPU shows about one core at the maximum: the lock, not the GPU) and the Pocket server one sentence at a time; hearing went from 0.30 to 0.96 s and heard-as-said from 75% to 44% as clips queued past the worker's 3 s limit. On this laptop each has one copy; in the design they are services to replicate.
+* **Not measured:** the GPU (the Qwen3 server runs there), the CPU the system itself used (the processes of ours add to about 5 cores of the 7 the machine reported at 16 callers), how much of the worker's CPU is the early start and the extra replies written ahead (section 95), which cost more per turn than the design assumed.
+
+Reading: the 16-caller limit is this laptop's CPU, shared with single-copy servers, not a fault in the worker or the architecture. The worker's cost per call agrees with the manifest. The test could not show the router, the autoscaler or more than one copy of a shared server at scale.
+
+## 101. What one copy of each shared service carries, and what 100 and 200 callers would need (3 Nov, the owner: "start with the per-service capacity tests on this laptop (voice server, recogniser, Bedrock)")
+
+`scripts/service_capacity.py` (tests: `tests/unit/test_service_capacity.py`, 9, against fake local servers): N clients ask again the moment they are answered, so a service is held at N requests at once for 12 to 15 s a level; per level the requests answered, errors, requests a second, the wait for the first byte (first text for the model) and for the whole answer. From the busiest level that answered everything, the callers one copy carries are worked out with the autoscaler's planning rule (a copy kept at 70% of what it can do, `deploy/k8s/voice.yaml`) and the rhythm of the recorded calls. Each service was run alone, the laptop otherwise quiet, one copy each, the Mac as in the live calls. MEASURED; the per-turn figures are assumptions, listed below.
+
+| one copy of | what it did | wait at 1 / 4 / 16 at once | callers one copy carries | copies for 100 | for 200 |
+|---|---|---|---|---|---|
+| **voice server** (Pocket "eve", CPU, one sentence at a time) | 2.26 sentences a second = **7.0 s of speech a second** whatever the number asking | first sound 0.07 s / 1.4 s / **7.1 s** | **12** (6 s of speech a turn); 7 if a turn is three sentences as long as the test's | **9** | **17** |
+| **recogniser, Qwen3-ASR** (MLX on the GPU, the worker's hot-words sent, one clip at a time) | 6.0 clips a second | 0.15 s / 0.66 s / **2.7 s** (3 connections reset at 16) | **21** (3 clips a turn); 63 (1 a turn) | **5** (or 2) | **10** (or 4) |
+| **recogniser, Parakeet** (MLX, no hot-words) | 23 clips a second | 0.045 s / 0.18 s / 0.69 s (3 resets at 16) | **80** (3 clips a turn); 240 (1 a turn) | 2 (or 1) | 3 (or 1) |
+| **the model, Nemotron on Bedrock** (HTTP/1.1, one key) | **59.6 requests a second at 48 in flight, no limit reached**, no refusals | first text 0.54 s at 1, 4, 16 and 48 at once (p90 0.6 to 0.7 s) | 250 or more (2.5 requests a turn) | the one key | the one key |
+
+* **The voice server is the first to run out, by far.** It is exactly serial: 2.1 to 2.3 sentences a second at 1, 2, 4, 8 and 16 at once, so the wait is the number waiting times 0.4 s. One copy keeps a first sound under 0.5 s for about 12 callers, and past that every caller waits behind the others. This is the 16-caller limit of section 98. 9 copies for 100 callers and 17 for 200 is a lot more than section 99's estimate (6 to 8 and 12 to 16) because that assumed 0.85 s of CPU per turn; measured, it is 0.86 s of the server's time per turn but the server cannot overlap two turns, and the 70% rule leaves the other 30% idle. The server used about 0.9 core on average and 1.8 at the peak (section 100): a copy is about 2 cores, so 100 callers is about 18 cores of voice and 200 about 34.
+* **One Qwen3 recogniser copy, 21 callers**, with a wait of 1.3 s at 8 at once and resets at 16: keep it to 4 at once (p90 0.77 s). Parakeet is four times faster and has no names. The GPU Whisper of the manifest (batched) is not measured here: these are the Mac's one-at-a-time servers.
+* **The model is not the limit.** From 1 to 48 in flight the first text stayed at 0.54 s median (p90 0.64) and the rate rose in step; no throttling (no 429) up to 60 requests a second from one client. 100 callers ask for about 17 requests a second (about 10 in flight) and 200 about 33 (about 20 in flight): both inside what was tested. The key's own quota for sustained use is not known.
+
+**A finding on the way: over HTTP/2, Bedrock drops requests when two or more share the connection.** The worker's Bedrock backend uses HTTP/2 (section 75: one connection, no new connection after a pause). In the capacity test, with the same client: 1 request at a time for 70 s, **114 requests, 0 errors**; 2 at once, 3% `RemoteProtocolError: Server disconnected`; 4 to 16 at once, 12%; 32 at once, 23%; first text also slower (0.68 s at 2, 0.93 s at 32). The same load over HTTP/1.1: **0 errors at 1 to 48 at once, and faster**. So the drops need concurrent streams on one connection, not a long-lived one. In the worker at 8 callers (the recorder on) the turn notes showed **no model error in 58 turns**, so it is not visible there: the engine asks the model again after a reply fails (`ReplyWriter` tries twice), the extra requests written ahead hide a lost one, and a worker's requests are less bunched than 4 to 16 threads asking back to back. UNKNOWN at 16 callers and more; a reason to read section 75's trade again (HTTP/2 saves 0.3 s after a pause) with a worker's real concurrency, and to try HTTP/1.1 with the connection kept warm, or HTTP/2 with a limit of streams per connection. Not changed.
+
+**The assumptions behind "callers carried", to be replaced by counts:** a turn every 15 s (the recorded calls); 6 s of speech a turn (3 Nov: 5.1 s at the median, 6.4 on average); 3 recogniser clips a turn (the early start's 2 readings plus the final: from the replay of the 10:01 call, 169 early starts for 79 turns); 2.5 model requests a turn (a guess); the utilisation target 70%. The request counts per turn (section 99's step 1) are still to be taken from the worker.
+
+**Reading for 100 and 200 callers.** The model is fine. The recogniser needs a handful of copies of the Mac's one-at-a-time kind, or one batched GPU server. The voice server needs 9 and 17 copies as built (one sentence at a time), so it is the part to rework or replicate first: copies behind one address, or one copy inside each worker (what the manifest assumes). The workers themselves, from section 100, need 3 to 4 cores for 16 calls: 9 and 18 workers.

@@ -115,3 +115,21 @@ def test_load_test_has_the_hands_free_options():
 
     src = Path(load_test.__file__).read_text()
     assert '"--mode"' in src and '"--repeat"' in src and "one_call_hf" in src and "server_steps" in src
+
+
+def test_a_process_is_told_apart_by_its_command_line():
+    from load_test import group_of
+
+    assert group_of(["python", "-m", "dealer_core.server", "--agent", "--port", "8777"]) == "worker"
+    assert group_of(["python", "scripts/qwen3_asr_server.py", "--port", "8011"]) == "recogniser (Qwen3, MLX)"
+    assert group_of(["python", "scripts/parakeet_asr_server.py"]) == "recogniser (Parakeet, MLX)"
+    assert group_of([".venv/bin/python", "scripts/pocket_server.py"]) == "voice server (Pocket)"
+    assert group_of(["python", "-m", "dealer_core.gateway", "--port", "8760"]) == "router"
+    assert group_of(["python", "scripts/load_test.py", "--levels", "8"]) == "these callers (this script)"
+    assert group_of(["python", "something_else.py"]) is None and group_of([]) is None
+
+
+def test_the_profile_option_exists():
+    import load_test
+
+    assert '"--profile"' in Path(load_test.__file__).read_text()
