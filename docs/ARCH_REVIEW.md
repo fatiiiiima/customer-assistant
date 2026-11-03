@@ -2932,3 +2932,40 @@ Two more columns say **when the model call started** against the moment the word
 **Not done.** Spoken forms ("C R V", "rav four", "Maccan") are not added: a hot-word is the written form, the recogniser decides how it sounds, and the agent's own matcher already finds a car by a close spelling ("range rover sprot", "bentyga").
 
 **Tests** (`tests/unit/test_hotword_forms.py`, 41; two older tests updated for the new cap and "BMW"; `python -m pytest`: 1,821 passed, 68 skipped): 29 models and 7 makes written properly; the Whisper hint unchanged; every make and model once; the cap covers the stock; a car marked sold is still in the hot-word vocabulary and not in the NLU's; the pipeline asks for it.
+
+## 98. More than one caller at a time: the wait is flat up to 8 callers, and the laptop runs out at 12 to 16 (3 Nov, the owner: "lets try doing with more than 1 callers to see if the latency doesnt change", then "we already have a workflow for multiple callers right?")
+
+**Method.** The existing workflow, extended a little: `scripts/load_test.py` drives synthetic callers through the real WebSocket door of a worker; it gained `--mode handsfree` (the microphone stays open and the server decides when a turn is over, as on the page), `--voice say:Samantha,say:Daniel,say:Karen` (the Mac's own voices, nothing to download), `--repeat`, and a log of every turn. The hands-free caller (`one_call_hf` in `scripts/portal_call.py`) measures from its own side (the last sample of speech sent to the first sound received) and keeps the server's `timing` and `turn_detail` messages, so the page's table steps, including section 96's breakdown, come out per turn. Tests: `tests/unit/test_load_driver.py` (6, against a fake server).
+A **second worker on port 8777** (the owner's own, on 8767, was not touched; stopped afterwards) with the live settings of section 95 less Parakeet: Qwen3 as the recogniser, `rules_decide`, `hold_reply`, `parallel`, `early_start_secs` 0.1, `opener_first`, Bedrock Nemotron; **the call cap that follows the measured replies (`voice.admission`) switched off** so every caller got in, `--max-calls 16`. Five different conversations (searches, a comparison, a booking with name and number) shared out among three voices; clean synthetic audio, so hearing is optimistic and the timing is real. The laptop also hosted the Qwen3 and Parakeet servers and the voice server.
+
+**Results** (MEASURED; the wait from the end of the caller's speech to the first sound, caller side, seconds; all callers start together unless "staggered 5 s"; 0 failed calls and 0 silent turns at every level):
+
+| callers | turns | first sound median | p90 | worst | over 2 s | hearing (server), median / p90 | CPU max | heard exactly as said |
+|---|---|---|---|---|---|---|---|---|
+| 1 (two runs) | 12 | 1.11 | 1.62 | 2.36 | 8% | 0.20 / 0.28 | 41% | 71%, 71% |
+| 2 (two runs) | 28 | 0.96 | 1.79 | 5.73 | 7% | 0.21 / 0.29 | 33% | 80%, 80% |
+| 4 (two runs) | 50 | 0.92 | 1.40 | 2.75 | 2% | 0.24 / 0.39 | 68% | 74%, 74% |
+| 8 (two runs) | 105 | 0.94 | 1.80 | 3.28 | 7% | 0.28 / 0.54 | 93% | 75%, 75% |
+| 12 | 71 | 1.18 | 2.24 | 9.02 | 15% | 0.38 / 1.39 | 100% | 76% |
+| **16 together** | 95 | **2.94** | **8.44** | 9.09 | **64%** | **0.93 / 2.27** | 100% | **51%** |
+| 8 staggered 5 s | 53 | 0.88 | 1.74 | 2.61 | 6% | 0.26 / 0.43 | 88% | 75% |
+| 16 staggered 5 s | 101 | 1.01 | 2.12 | 3.63 | 13% | 0.36 / 0.75 | 100% | 73% |
+
+With the same conversation and voice at every level (caller c1) the median of its turns is 1.11, 0.93, 0.97 and 1.15 s at 1, 2, 4 and 8 callers: flat within the run-to-run spread (single turns swing by 0.5 s and a Bedrock outlier gave 3.3 s once).
+
+**What it says.**
+* **Up to 8 callers the wait does not change** (median 0.9 to 1.1 s, p90 1.4 to 1.8 s). Hearing grows a little (median 0.20 to 0.28 s, p90 0.28 to 0.54 s): one recogniser answers one clip at a time.
+* **At 12 the tail goes** (p90 2.2 s, worst 9 s), and **16 together is past the knee** (median 2.9 s, 64% over 2 s): CPU at 100% on the laptop, hearing 0.9 s at the median, and **49% of turns not heard as said**. 16 callers one after another every 5 s is acceptable (median 1.0 s, p90 2.1 s).
+* **The model is not the limit here.** The model's first text came at about 0.4 to 0.57 s after the words at every level, 1 to 16 callers (Bedrock priority tier, one key). The requests per turn were not counted.
+* **The voice server is.** The worker log has 137 warnings from the Pocket voice server (port 8040: `ReadTimeout`), 4 during the 1 to 4 caller runs, then 21 to 35 a minute in the 8-caller second run, the 12 and 16 runs and the staggered 16 run. A timed-out sentence is said by the Kokoro fallback (the second voice server, 8020, was not running), a different voice, on the worker's own CPU, which adds to its load.
+* **A caller's first turn:** "Hello, do you have any Toyota SUVs?" was heard as "Hello." on some runs (a pause after the comma ended the turn): the first turn of those callers is not a measure (marked `overlap` or heard differently). Unrelated to the number of callers.
+
+**What it does not say.** One laptop that also runs the recognisers and the voice, so the knee (about 8 to 12 callers) is this machine's, not production's; clean synthetic voices; 16 callers is the highest level; Bedrock's own limits for a key were not reached or probed; the admission cap would have turned callers away at the higher levels (it is meant to: section 19 held the answer time by turning calls away, not by serving everyone slowly); the hearing figure at 16 callers comes from a recogniser that was queueing, and a faster server (a GPU) would not.
+
+**What would move the knee (INFERRED).** A second voice server (the voice is the first part to time out), the recogniser on a GPU or more than one copy (`voice.stt_copies` is for a local one), and the worker's own CPU (one worker process per 8 callers, as the cluster does: `run_cluster.py --workers 2` and `load_test.py --gateway`; not run).
+
+**Repeat it** (a worker with its own port; `--url` is its address):
+```
+uv run python scripts/load_test.py --url ws://127.0.0.1:8777/voice --mode handsfree --mix --voice say:Samantha,say:Daniel,say:Karen --levels 1 2 4 8 --repeat 2 --out logs/load_test_handsfree_sync.json
+```
+Per-turn logs of these runs: `logs/load_test_handsfree_sync.json`, `..._high.json`, `..._staggered.json` (git-ignored).

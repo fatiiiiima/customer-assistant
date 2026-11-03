@@ -30,6 +30,8 @@ FRAME = 320                                                # 20 ms of 16 kHz
 
 def caller_audio(lines: list[str], voice: str) -> list[np.ndarray]:
     """The caller's voice: a Piper voice name (default amy), or kokoro:<voice> on a machine that has only the Kokoro model (pick one other than the agent's)."""
+    if voice.startswith("say:"):                       # the Mac's own voices (Samantha, Daniel, Karen, Moira, Tessa, Fred, Rishi): nothing to download, clean audio
+        return [_say(t, voice.split(":", 1)[1]) for t in lines]
     if voice.startswith("kokoro:"):
         from dealer_core.voice.kokoro_tts import KokoroOV
 
@@ -39,6 +41,97 @@ def caller_audio(lines: list[str], voice: str) -> list[np.ndarray]:
 
         tts = PiperSherpa(ROOT / "models", voice)
     return [(np.clip(soxr.resample(tts.synthesize(t), tts.sample_rate, 16000), -1, 1) * 32767).astype(np.int16) for t in lines]
+
+
+def _say(text: str, voice: str) -> np.ndarray:
+    import subprocess
+    import tempfile
+    import wave
+
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(["say", "-v", voice, "-o", f"{d}/a.aiff", text], check=True)
+        subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", f"{d}/a.aiff", f"{d}/a.wav"], check=True)
+        with wave.open(f"{d}/a.wav", "rb") as w:
+            x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").copy()
+    loud = np.where(np.abs(x) > 400)[0]                  # the voice's own tail of silence is cut, so the clip ends where the speech ends (the wait is measured from there)
+    return x[max(0, loud[0] - 1600):loud[-1] + 800] if len(loud) else x
+
+
+async def one_call_hf(url: str, clips: list[np.ndarray], car: str | None, tag: str, origin: str, call_id: str = "", lines: list[str] | None = None, wait_s: float = 20.0) -> dict:
+    """Hands-free, the way you talk to it on the page: the microphone stays open and the server decides when a turn is over. Per turn, from the CALLER's side: the time from the
+    last sample of speech sent to the first sound that comes back (`silence_s`) and to the end of the reply (`reply_s`), what the server heard (`heard`), and the server's own
+    `timing` and `turn_detail` messages for the turn (the latency table's steps, ARCH_REVIEW sections 88 and 96)."""
+    out = {"tag": tag, "turns": [], "audio_s": 0.0, "status": "ok", "greeting": "", "greeting_s": 0.0}
+    async with websockets.connect(url, max_size=None, origin=origin) as ws:
+        await ws.send(json.dumps({"type": "hello", "car": car, "call_id": call_id}))
+        st_ = {"rate": 22050, "first_audio": 0.0, "last_audio": 0.0, "t_end": 0.0, "timing": [], "detail": [], "you": []}
+
+        async def reader() -> None:
+            async for m in ws:
+                now = time.monotonic()
+                if isinstance(m, bytes):
+                    if st_["t_end"] and not st_["first_audio"] and now > st_["t_end"]:
+                        st_["first_audio"] = now                                   # the first sound after the end of THIS speech
+                    st_["last_audio"] = now
+                    out["audio_s"] += len(m) / 2 / st_["rate"]
+                    continue
+                e = json.loads(m)
+                if e["type"] == "ready":
+                    st_["rate"] = e["sample_rate"]
+                elif e["type"] == "timing":
+                    st_["timing"].append((now, e))
+                elif e["type"] == "turn_detail":
+                    st_["detail"].append((now, e))
+                elif e["type"] == "line":
+                    if e["who"] == "you":
+                        st_["you"].append((now, e["text"]))
+                    elif e["turn"] == 0:
+                        out["greeting"] = e["text"]
+                elif e["type"] == "busy":
+                    out["status"] = "busy"
+
+        task = asyncio.create_task(reader())
+        silence = np.zeros(FRAME, dtype=np.int16).tobytes()
+
+        async def pace(chunk: bytes) -> None:
+            await ws.send(chunk)
+            await asyncio.sleep(0.02)
+
+        try:
+            for _ in range(250):                              # the opening line: up to 5 s of quiet, or until it has finished
+                await pace(silence)
+                if out["audio_s"] > 0.5 and time.monotonic() - st_["last_audio"] > 1.2:
+                    break
+            out["greeting_s"] = round(out["audio_s"], 1)
+            for i, clip in enumerate(clips):
+                st_["t_end"], st_["first_audio"] = 0.0, 0.0
+                n_t, n_d, n_y = len(st_["timing"]), len(st_["detail"]), len(st_["you"])
+                for k in range(0, len(clip), FRAME):
+                    part = clip[k:k + FRAME]
+                    await pace((part if len(part) == FRAME else np.pad(part, (0, FRAME - len(part)))).tobytes())
+                t_end = st_["t_end"] = time.monotonic()
+                overlap = t_end - st_["last_audio"] < 0.3                           # sound was still coming back as the caller finished: the wait cannot be told
+                for _ in range(int(wait_s / 0.02)):           # up to wait_s for the first sound
+                    await pace(silence)
+                    if st_["first_audio"]:
+                        break
+                for _ in range(1500):                         # then until the reply has finished (1.2 s of no sound)
+                    if not st_["first_audio"] or time.monotonic() - st_["last_audio"] > 1.2:
+                        break
+                    await pace(silence)
+                timing = [e for _, e in st_["timing"][n_t:]][:1]
+                detail = [e for _, e in st_["detail"][n_d:]][:1]
+                heard = [t for _, t in st_["you"][n_y:]][:1]
+                out["turns"].append({"clip": i, "said": lines[i] if lines else "", "heard": heard[0] if heard else None,
+                                     "silence_s": round(st_["first_audio"] - t_end, 3) if st_["first_audio"] and not overlap else None,
+                                     "reply_s": round(st_["last_audio"] - t_end, 3) if st_["first_audio"] and not overlap else None, "overlap": overlap,
+                                     "closed_s": None, "mic_closed_by": "server", "server": timing[0] if timing else None, "detail": detail[0] if detail else None})
+        except websockets.ConnectionClosed:
+            out["status"] = out["status"] if out["status"] != "ok" else "closed"
+        await asyncio.sleep(1)
+        await ws.close()
+        task.cancel()
+    return out
 
 
 async def one_call(url: str, clips: list[np.ndarray], car: str | None, tag: str, quiet: bool, origin: str, barge: bool = False) -> dict:
