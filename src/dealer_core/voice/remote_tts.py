@@ -19,6 +19,8 @@ from collections.abc import Iterator
 import numpy as np
 from loguru import logger
 
+from ..shared import usage
+
 from .tts import pronounce
 
 
@@ -99,9 +101,11 @@ class StreamingVoice:
             if hit is not None:
                 self._cache.move_to_end(key)
         if hit is not None:
+            usage.add("tts.cache_hit")
             yield hit
             return
         got: list[np.ndarray] = []
+        usage.add("tts.request")
         try:
             for chunk in self._remote(key):
                 got.append(chunk)
@@ -109,13 +113,17 @@ class StreamingVoice:
         except Exception as e:
             if got:                                                   # cut in the middle of the sentence: what was said stands
                 logger.warning(f"voice server stopped mid-sentence ({type(e).__name__})")
+                usage.add("tts.cut")
+                usage.add("tts.audio_s", sum(len(c) for c in got) / self.sample_rate)
                 return
             self.fallbacks += 1
+            usage.add("tts.fallback")
             logger.warning(f"voice server {self.base} failed ({type(e).__name__}): {self.fallback.name} says this sentence")
             yield from self.fallback.stream(text)
             return
         self.served += 1
         if got:
+            usage.add("tts.audio_s", sum(len(c) for c in got) / self.sample_rate)
             self._keep(key, np.concatenate(got))
 
     def synthesize(self, text: str, speed: float = 1.0) -> np.ndarray:

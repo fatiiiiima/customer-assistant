@@ -28,6 +28,8 @@ import concurrent.futures
 import re
 from collections.abc import Callable
 
+from ..shared import usage
+
 
 def same_words(a: str, b: str) -> bool:
     """The same words, whatever the punctuation and case ("Do you have a Santa Fe?" and "do you have a Santa Fe")."""
@@ -68,6 +70,7 @@ class Speculation:
         self._drop_reply()
         gen, self.valid, self.started = self._gen, False, self.started + 1
         self._early_origin = early
+        usage.add("spec.start_early" if early else "spec.start_hold")
         self._at_version = self.version()
         self._decision = concurrent.futures.Future() if self.decide else None
         self._reply = concurrent.futures.Future() if self.prepare else None
@@ -95,6 +98,7 @@ class Speculation:
                     worth = False
                 if not worth:                                     # a half sentence: recognised, nothing more is spent on it
                     self.skipped += 1
+                    usage.add("spec.skipped")
                     if self.on_event:
                         self.on_event("early_skipped", f"the words so far {got!r} do not read as finished: no decision and no reply were started")
                     if reply is not None:
@@ -141,6 +145,7 @@ class Speculation:
         self._drop_reply()
         if self._text is not None:
             self.dropped += 1
+            usage.add("spec.dropped")
             if self.on_event:
                 self.on_event("early_dropped", "the caller spoke again: the early recognition is thrown away")
         self._gen += 1
@@ -208,4 +213,5 @@ class Speculation:
                     handle.cancel()
             return None
         self.reply_used += 1
+        usage.add("spec.reply_used")
         return r

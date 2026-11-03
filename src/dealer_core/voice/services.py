@@ -14,6 +14,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
 
+from ..shared import usage
 from .prompts import CONTACT
 from .stt import SAMPLE_RATE, WhisperOpenVino, is_degenerate
 from .tts import PiperSherpa
@@ -188,7 +189,9 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         early = await self.speculation.transcript() if self.speculation is not None else None
         if early is not None:                    # recognised while Smart Turn waited, from this same audio: nothing left to do
             text, self.last_ms = early, 0.0
+            usage.add("stt.final_from_early")
         else:
+            usage.add("stt.final")
             text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
         if self.on_trace:

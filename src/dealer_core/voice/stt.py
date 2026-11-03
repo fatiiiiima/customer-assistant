@@ -17,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ..shared import usage
+
 SAMPLE_RATE = 16000
 MAX_TOKENS_PER_SEC = 12      # Whisper writes ~3-6 tokens per second of speech (digits said one by one are the most); more than this is a loop, not speech
 MIN_TOKENS = 24
@@ -161,6 +163,8 @@ class RemoteWhisper:
                 data["hotwords"] = ", ".join(sent)
         elif prompt or self.default_prompt:
             data["prompt"] = prompt or self.default_prompt
+        usage.add("stt.request")
+        usage.add("stt.audio_s", max(0, len(wav) - 44) / 2 / SAMPLE_RATE)
         try:
             r = self.client.post(f"{self.base}/audio/transcriptions", data=data, files={"file": ("turn.wav", wav, "audio/wav")}, timeout=self.timeout_s)
             r.raise_for_status()
@@ -171,6 +175,7 @@ class RemoteWhisper:
             return text
         except Exception:
             self.errors += 1
+            usage.add("stt.error")
             if raise_errors:
                 raise
             return ""

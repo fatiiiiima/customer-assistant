@@ -16,6 +16,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_output import BOT_VAD_STOP_FALLBACK_SECS
 
 from ..dialogue.machine import DialogueEngine
+from ..shared import usage
 from .services import _INVENTED, SPEAK_UP, echoes_agent, too_quiet_to_trust
 
 
@@ -410,6 +411,9 @@ class DealerBrain(FrameProcessor):
                 self.turn_log.append({"first_sentence_ms": first_ms, "engine_ms": (time.perf_counter() - t0) * 1000, "intent": d.intent,
                                       "via": d.via.split(":")[0], "model_written": bool(d.draft), "risk": d.risk, "ended": result.ended, "fallback": "FALLBACK" in d.note,
                                       "note": d.note})            # the note holds reasons and flags only: no transcript, no phone number
+                usage.add("turn.answered")
+                usage.add("turn.sentences", len(said))
+                usage.add("turn.reply_words", sum(len(x.split()) for x in said))
                 logger.debug(f"brain first sentence {first_ms:.0f} ms, intent {d.intent}, via {self.turn_log[-1]['via']}")
                 if result.ended:                                    # the caller said goodbye: no "are you still there?" after it
                     self._cancel_quiet()

@@ -97,6 +97,53 @@ async def sample_machine(into: list, by_process: dict | None = None) -> None:
             by_process.setdefault(g, []).append(cores)
 
 
+def http_usage_url(ws_url: str) -> str:
+    """ws://host:port/voice -> http://host:port/usage (the worker's counters, shared/usage.py)."""
+    return ws_url.replace("wss://", "https://").replace("ws://", "http://").rsplit("/", 1)[0] + "/usage"
+
+
+async def worker_urls(url: str, gateway: str) -> list[str]:
+    """The workers that will take the calls: the one given, or every one the router lists."""
+    if not gateway:
+        return [url]
+
+    def fetch():
+        import urllib.request
+
+        with urllib.request.urlopen(gateway.rstrip("/") + "/workers", timeout=5) as r:
+            return [w["url"] for w in json.loads(r.read()).get("workers", [])]
+    try:
+        return await asyncio.to_thread(fetch)
+    except Exception:  # noqa: BLE001 - the counts are a bonus: the run still goes ahead
+        return []
+
+
+async def fetch_usage(urls: list[str]) -> dict[str, float]:
+    """The counters of all the workers added up (empty when one cannot be read)."""
+    def one(u: str) -> dict[str, float]:
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(http_usage_url(u), timeout=5) as r:
+                return json.loads(r.read()).get("counts", {})
+        except Exception:  # noqa: BLE001
+            return {}
+    total: dict[str, float] = {}
+    for counts in await asyncio.gather(*[asyncio.to_thread(one, u) for u in urls]):
+        for k, v in counts.items():
+            total[k] = total.get(k, 0.0) + v
+    return total
+
+
+def usage_line(per_turn: dict[str, float], turns: float) -> str:
+    g = per_turn.get
+    return (f"per turn ({turns:.0f} answered): model replies {g('model.stream', 0)} (stopped before their end {g('model.stream_cut', 0)}), other model calls {g('model.post', 0)}, "
+            f"model errors {g('model.error', 0)}, about {g('model.input_chars', 0) / 4:.0f} input tokens; recogniser clips {g('stt.request', 0)} ({g('spec.start_early', 0)} early starts, "
+            f"{g('spec.start_hold', 0)} held, {g('spec.skipped', 0)} skipped, {g('stt.final', 0)} full readings, {g('stt.final_from_early', 0)} taken from an early one), {g('stt.audio_s', 0)} s of audio; "
+            f"voice sentences {g('tts.request', 0)} (+{g('tts.cache_hit', 0)} from the cache, {g('tts.fallback', 0)} by the fallback voice), {g('tts.audio_s', 0)} s of speech; "
+            f"{g('turn.sentences', 0)} sentences and {g('turn.reply_words', 0)} words said")
+
+
 def _words(text) -> list[str]:
     import re
 
@@ -122,13 +169,18 @@ def server_steps(turns: list[dict]) -> dict:
     return out
 
 
-async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: str = "tap", profile: bool = False) -> dict:
+async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: str = "tap", profile: bool = False, usage_urls: list[str] | None = None) -> dict:
     t0 = time.monotonic()
     machine: list = []
     cores: dict[str, list[float]] = {}
     sampler = asyncio.create_task(sample_machine(machine, cores if profile else None))
+    before = await fetch_usage(usage_urls) if usage_urls else {}
     res = await asyncio.gather(*[staggered(url, origin, scripts[i % len(scripts)], i, stagger, mode) for i in range(n)], return_exceptions=True)
     sampler.cancel()
+    after_counts = {}
+    if usage_urls:
+        await asyncio.sleep(1.5)                                  # the last replies finish their work
+        after_counts = await fetch_usage(usage_urls)
     failed = [r for r in res if isinstance(r, Exception)]
     ok = [r for r in res if not isinstance(r, Exception)]
     first = [t["silence_s"] for r in ok for t in r["turns"] if t["silence_s"] is not None]
@@ -143,6 +195,12 @@ async def level(url: str, origin: str, scripts, n: int, stagger: float, mode: st
             "over_2s": round(sum(x > 2 for x in first) / len(first), 2) if first else None, "mic_close_median": round(st.median(closed), 2) if closed else None,
             "mic_closed_by_tap": taps, "cpu_mean": round(float(np.mean([c for c, _ in machine])), 0) if machine else None, "cpu_max": max((c for c, _ in machine), default=None), "ram_max": max((m for _, m in machine), default=None), "whole_reply_median": round(pct(whole, 50), 1), "whole_reply_p90": round(pct(whole, 90), 1), "greeting_s": round(st.median([r["greeting_s"] for r in ok]), 1) if ok else None, "wall_s": round(time.monotonic() - t0)}
     out_.update(steps)
+    if usage_urls and after_counts:
+        from dealer_core.shared import usage as _usage
+
+        counts = _usage.delta(before, after_counts)
+        out_["usage_total"], out_["usage_per_turn"] = counts, _usage.per_turn(counts)
+        out_["usage_turns"] = counts.get("turn.answered", 0.0)
     if profile:
         out_["cpu_cores_by_process"] = {g: {"mean": round(float(np.mean(v)), 2), "max": round(max(v), 2)} for g, v in sorted(cores.items())}
     out_["calls_per_worker"] = {u: sum(1 for r in ok if r.get("worker_url") == u) for u in sorted({r.get("worker_url") for r in ok})}
@@ -172,9 +230,10 @@ async def main() -> int:
     for k in range(max(len(sets), len(voices))):                       # script k is spoken in voice k (shared out when there are several voices)
         lines = sets[k % len(sets)]
         scripts.append((caller_audio(lines, voices[k % len(voices)]), lines))
+    urls = await worker_urls(a.url, a.gateway)
     rows = []
     for n, rep in [(n, r_) for n in a.levels for r_ in range(a.repeat)]:
-        r = await level(a.url, a.origin, scripts, n, a.stagger, a.mode, a.profile)
+        r = await level(a.url, a.origin, scripts, n, a.stagger, a.mode, a.profile, urls)
         r["repeat"] = rep + 1
         rows.append(r)
         print(f"{n} caller(s): {r['turns']} turns, {r['failed_calls']} failed calls, {r['silent_turns']} silent; first sound median {r['first_sound_median']} s, p90 {r['p90']} s, worst {r['worst']} s, "
@@ -183,6 +242,8 @@ async def main() -> int:
             print(f"    server steps (median s): silence {r['wait']}, turn check {r['check']}, hearing {r['hear']}, reply words {r['reply']} (decision {r['decision']}; model request sent at {r['model_sent']}, "
                   f"first text at {r['model_first_text']}, first words at {r['model_first_words']}; network est. {r['network_est']}), voice {r['voice']}; ready ahead {r['ahead_share']}, picked by the code {r['by_code_share']}; "
                   f"heard exactly as said {r['heard_as_said']}", flush=True)
+        if r.get("usage_per_turn"):
+            print("    " + usage_line(r["usage_per_turn"], r["usage_turns"]), flush=True)
         if r.get("cpu_cores_by_process"):
             print("    CPU by process, in cores (mean / max; this machine has " + str(__import__("os").cpu_count()) + "): " + "; ".join(f"{g} {v['mean']} / {v['max']}" for g, v in r["cpu_cores_by_process"].items()), flush=True)
         if len(r.get("calls_per_worker", {})) > 1:

@@ -170,6 +170,13 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         body, kind = state.metrics.render()
         return Response(body, media_type=kind)
 
+    @api.get("/usage")
+    async def usage_counts() -> dict:
+        """The work this worker has asked of the shared services since it started (shared/usage.py): numbers only. scripts/load_test.py reads it before and after a run."""
+        from ..shared import usage
+
+        return {"counts": usage.snapshot(), "active_calls": state.active, "at": time.time()}
+
     @api.get("/health")
     async def health() -> dict:
         gov = getattr(state.app.engine, "governor", None)

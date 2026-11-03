@@ -27,6 +27,7 @@ from typing import Iterator
 
 from ..config import BackendCfg, LlmCfg
 from ..dialogue.states import Intent, State
+from ..shared import usage
 from . import prompts
 from .backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
 
@@ -110,15 +111,19 @@ class OpenAICompatBackend(NluBackend):
         return body
 
     def _post(self, body: dict, timeout: float) -> dict:
+        usage.add("model.post")
+        usage.add("model.input_chars", sum(len(m.get("content") or "") for m in body.get("messages", [])))
         try:
             r = self.client.post(f"{self.base}/chat/completions", json=body, timeout=timeout)
         except Exception as e:
+            usage.add("model.error")
             if "Timeout" in type(e).__name__:
                 raise BackendTimeout(f"{self.name} exceeded {timeout:.1f}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
         if r.status_code == 400 and body.get("continue_final_message"):
             raise _NoPrefill()
         if r.status_code >= 400:
+            usage.add("model.error")
             raise BackendError(f"{self.name} HTTP {r.status_code}: {r.text[:200]}")
         return r.json()
 
@@ -174,6 +179,9 @@ class OpenAICompatBackend(NluBackend):
     def _stream(self, body: dict, deadline_s: float | None) -> Iterator[str]:
         limit = deadline_s or self.cfg.timeout_s * 3
         started = time.perf_counter()
+        usage.add("model.stream")
+        usage.add("model.input_chars", sum(len(m.get("content") or "") for m in body.get("messages", [])))
+        finished = False
         try:
             with self.client.stream("POST", f"{self.base}/chat/completions", json=body, timeout=limit + 2) as r:
                 if r.status_code == 400 and body.get("continue_final_message"):
@@ -187,18 +195,27 @@ class OpenAICompatBackend(NluBackend):
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        finished = True
                         return
                     delta = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
+                finished = True                                       # the server ended the stream itself (some end with no "[DONE]" line)
         except _NoPrefill:
             raise
         except BackendError:
+            usage.add("model.error")
+            raise
+        except GeneratorExit:
             raise
         except Exception as e:
+            usage.add("model.error")
             if "Timeout" in type(e).__name__:
                 raise BackendTimeout(f"{self.name} produced nothing within {limit:.0f}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
+        finally:
+            if not finished:
+                usage.add("model.stream_cut")                       # closed before its end: stopped by the caller, or failed
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         yield from self.lead_in_stream(prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences), f"CONTEXT: {context}\nCALLER: {question}",

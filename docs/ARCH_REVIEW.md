@@ -3054,3 +3054,46 @@ Reading: the 16-caller limit is this laptop's CPU, shared with single-copy serve
 **The assumptions behind "callers carried", to be replaced by counts:** a turn every 15 s (the recorded calls); 6 s of speech a turn (3 Nov: 5.1 s at the median, 6.4 on average); 3 recogniser clips a turn (the early start's 2 readings plus the final: from the replay of the 10:01 call, 169 early starts for 79 turns); 2.5 model requests a turn (a guess); the utilisation target 70%. The request counts per turn (section 99's step 1) are still to be taken from the worker.
 
 **Reading for 100 and 200 callers.** The model is fine. The recogniser needs a handful of copies of the Mac's one-at-a-time kind, or one batched GPU server. The voice server needs 9 and 17 copies as built (one sentence at a time), so it is the part to rework or replicate first: copies behind one address, or one copy inside each worker (what the manifest assumes). The workers themselves, from section 100, need 3 to 4 cores for 16 calls: 9 and 18 workers.
+
+## 102. What one turn really costs the shared services (3 Nov, the owner: "do it", counting instead of assuming)
+
+Section 101 worked out the callers one copy carries from assumed per-turn costs. This section counts them. **Counters** (`shared/usage.py`, numbers only; added at the clients: the model's `openai_compat`, the recogniser's `RemoteWhisper` and the speech service, the voice's `StreamingVoice`, the early start's `Speculation`, and the brain's turn) are shown by each worker at `GET /usage`; `scripts/load_test.py` reads them before and after each level, from every worker (it asks the router who they are), and divides by the turns the worker answered. Tests: `tests/unit/test_usage_counters.py` (9: the counters, what each client counts, the endpoint, the averages). MEASURED: one worker, the live settings of section 95 (`rules_decide`, `hold_reply`, `parallel`, the early start at 0.1 s, the acknowledgement first), the call cap off, five conversations in three Mac voices, Qwen3 as the recogniser, Pocket as the voice, Bedrock as the model.
+
+**Per turn answered:**
+
+| | 1 caller (8 turns) | 4 callers (28) | 8 callers (58) | 16 callers (101) |
+|---|---|---|---|---|
+| model replies streamed | 1.5 | 1.36 | 1.24 | 1.51 |
+| ...of which stopped before their end (written ahead, not used) | | 0.14 | 0.09 | |
+| other model calls (decisions) | 0.25 | 0.18 | 0.16 | 0.56 |
+| **model requests in all** | **1.75** | **1.54** | **1.40** | **2.07** |
+| model errors | 0 | 0 | 0 | 0.02 (about 1% of the requests) |
+| input tokens to the model | 1,620 | 1,500 | 1,320 | 1,640 |
+| **recogniser clips** | **2.1** | **2.5** | **2.5** | **2.85** |
+| ...early starts / held / skipped by the gate | 1.1 / 0.1 / 0.1 | 1.5 / 0.1 / 0.2 | 1.4 / 0.1 / 0.2 | 1.6 / 0.1 / 0.3 |
+| seconds of audio sent to the recogniser | 5.4 | 7.7 | 7.3 | 8.2 |
+| **voice sentences asked of the server** | **1.6** | **1.9** | **1.5** | **2.1** |
+| ...sentences from the phrase cache instead | 0.9 | 1.1 | 1.5 | 1.2 |
+| ...sentences said by the fallback voice (the server failed) | 0 | 0.21 (11%) | 0.38 (25%) | **1.43 (69%)** |
+| **seconds of speech the voice server made** | **5.4** | **5.8** | **4.8** | 2.1 |
+| sentences said / words said | 2.4 / 21 | 2.7 / 22 | 2.7 / 23 | 2.6 / 22 |
+
+* **The assumptions of section 101 were close, a little high on the model.** The recogniser is asked for **2.5 to 2.85 clips a turn** (assumed 3): 1.4 to 1.6 early starts, 0.9 to 1.1 full readings, 0.1 held, and the gate skipped 0.1 to 0.3 (a half sentence recognised and nothing more); about 7 s of audio a turn in all. The model gets **1.4 to 1.55 requests a turn** under moderate load (assumed 2.5), 2.1 at 16 callers when the turns are slow and a decision is needed more often; and the replies written ahead and not used are only 0.09 to 0.14 a turn, about 7 to 10% of the replies. The voice server makes **5.4 to 5.8 s of speech a turn** (assumed 6) in about 1.5 to 1.9 sentences; the phrase cache said about 1 to 1.5 more sentences a turn (the acknowledgement among them).
+* **The fallback voice is the quiet finding.** When the Pocket server does not answer within `first_timeout_s` (2 s) the Kokoro voice says the sentence. That was 0 sentences at 1 caller, **11% at 4, 25% at 8 and 69% at 16**. So at 8 callers, where the wait looked flat in sections 98 and 99, a quarter of the sentences were in another voice and the worker's CPU made them. The wait stayed flat partly because the fallback rescued it.
+* **Over HTTP/2 the worker loses almost nothing.** The model errors that the capacity test of section 101 saw at 12% (4 to 16 requests at once on one connection) were 0 in the worker at 1, 4 and 8 callers and 0.02 a turn (about 1% of the requests) at 16. A worker's requests are spread and short; the test's were back to back. Not a reason to change the setting today; a reason to watch `model.error` at 16 callers and more.
+* The opening line and the quiet-spell prompts are in the voice's counts (about 0.2 sentences a turn over a call of 7 turns); the figures are per turn answered.
+
+**The callers one copy carries, with the measured costs** (section 101's tests of one copy, the 70% rule, a turn every 15 s):
+
+| one copy of | per turn | callers per copy | copies for 100 | for 200 |
+|---|---|---|---|---|
+| voice server (Pocket, 7.0 s of speech a second) | 5.5 s of speech | **13** | **8** | **16** |
+| recogniser, Qwen3 (6.0 clips a second) | 2.7 clips | **23** | **5** | **9** |
+| recogniser, Parakeet (23 clips a second) | 2.7 clips | **89** | **2** | **3** |
+| the model on Bedrock (59.6 requests a second reached, over HTTP/1.1) | 1.6 requests | 390 or more | the one key | the one key |
+
+At 100 callers that is about 100 / 15 x 1.6 = 11 model requests a second and 18 recogniser clips a second; at 200, 21 and 36. The voice server remains the first to run out, as built; one copy of Qwen3 carries 23 callers (the Mac's one-at-a-time kind), so 100 callers needs 5 of them or one batched GPU server.
+
+**`scripts/service_capacity.py` now uses these measured numbers as its defaults** (1.8 sentences or 5.5 s of speech, 2.7 clips, 1.6 requests a turn). Still assumed: a turn every 15 s (the recorded calls), the 70% target (the autoscaler's), and that real callers behave like these synthetic ones (clean audio: the recogniser's clips are not noisier, the turns not longer).
+
+**Next, as planned:** put these speeds and per-turn costs into `scripts/simulate_scale.py` in place of its typed-in targets, and read the predicted knee for 100 and 200 callers.

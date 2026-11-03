@@ -206,8 +206,8 @@ def main() -> int:
     ap.add_argument("--levels", type=int, nargs="+", help="requests at once (default: voice 1 2 4 8 16; recogniser 1 2 4 8 16; model 1 2 4 8 16 32)")
     ap.add_argument("--seconds", type=float, default=0.0, help="how long each level runs (default: voice 15, recogniser 15, model 12)")
     ap.add_argument("--turn-every", type=float, default=15.0, help="seconds between one caller's turns (the recorded calls: about 15)")
-    ap.add_argument("--per-turn", type=float, default=0.0, help="requests one turn makes of this service (default: voice 3, recogniser 3, model 2.5)")
-    ap.add_argument("--audio-per-turn", type=float, default=6.0, help="voice: seconds of speech one reply holds (the 3 Nov calls: 5.1 s at the median, 6.4 on average)")
+    ap.add_argument("--per-turn", type=float, default=0.0, help="requests one turn makes of this service (measured, section 102: voice 1.8, recogniser 2.7, model 1.6)")
+    ap.add_argument("--audio-per-turn", type=float, default=5.5, help="voice: seconds of speech the voice server makes for one turn (the worker's counters, 3 Nov: 5.4 to 5.8 s)")
     ap.add_argument("--caller-voices", default="say:Samantha,say:Daniel,say:Karen", help="recogniser: the voices that speak the clips")
     ap.add_argument("--dry-run", action="store_true", help="say what would be sent and how many requests, send nothing")
     ap.add_argument("--out", default="", help="write the rows as JSON (default logs/service_capacity_<what>.json)")
@@ -215,7 +215,7 @@ def main() -> int:
 
     levels = a.levels or ([1, 2, 4, 8, 16, 32] if a.what == "model" else [1, 2, 4, 8, 16])
     seconds = a.seconds or (12.0 if a.what == "model" else 15.0)
-    per_turn = a.per_turn or {"voice": 3.0, "recogniser": 3.0, "model": 2.5}[a.what]
+    per_turn = a.per_turn or {"voice": 1.8, "recogniser": 2.7, "model": 1.6}[a.what]
 
     if a.what == "model":
         from dealer_core.config import load_config
