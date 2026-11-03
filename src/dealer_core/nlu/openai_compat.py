@@ -80,6 +80,16 @@ class OpenAICompatBackend(NluBackend):
             return False
         return True
 
+    def ping_ms(self) -> float | None:
+        """The network round trip to the server, in milliseconds: a request with no key, answered at the edge, on the connection the calls use (ARCH_REVIEW section 96: about 0.2 s
+        to Bedrock from Dubai, 1 ms to a server on this machine). None on a failure. Never raises."""
+        try:
+            t = time.perf_counter()
+            self.client.get(f"{self.base}/models", headers={"Authorization": ""}, timeout=3.0)
+            return (time.perf_counter() - t) * 1000
+        except Exception:  # noqa: BLE001 - a diagnostic
+            return None
+
     # -- internals ---------------------------------------------------------------------------
     def _body(self, system: str, user: str, max_tokens: int, temperature: float | None, prefill: str = "", schema: dict | None = None,
               stream: bool = False) -> dict:

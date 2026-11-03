@@ -60,6 +60,10 @@ class TurnDebug:
     about: str = ""                    # what the call is about after this turn (Session.focus)
     focus: str = ""                    # how the caller's words were interpreted (focus.decide), for the trace
     draft: str = ""                    # EXPERIMENT: the model-written full reply that replaced the template (draft mode)
+    lookup_ms: float | None = None     # the tool (the lookup) took this long (the latency table's breakdown of "reply words", ARCH_REVIEW section 96)
+    first_say_ms: float | None = None  # from the start of the turn to the first sentence handed to the voice
+    writer_steps: dict | None = None   # the model call that wrote the reply, in seconds from the start of the turn (negative = started before the words arrived): sent, token, first
+    trip_ms: float | None = None       # the network round trip to the model, as last measured (an estimate: a request answered at the edge)
     reply_ahead: bool | None = None    # voice.parallel: was the reply for the decided lookup already being written when the decision came (None = the parallel turn was not used)
 
 

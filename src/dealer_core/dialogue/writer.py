@@ -714,13 +714,17 @@ class ReplyWriter:
             now = release(sentence)
             if now and not self.last_stream["first_ms"]:
                 self.last_stream["first_ms"] = (time.perf_counter() - t0) * 1000
+                self.last_stream["t_first"] = time.perf_counter()                  # the first words that may be spoken
             return now
 
         def pieces():
             """The model's text as it comes. With a first-sentence deadline, waiting for the first usable sentence is given up after that long."""
             source = self.backend.lead_in_stream(self.system, user, max_tokens, temperature, deadline)
+            self.last_stream["t_sent"] = time.perf_counter()                       # the request goes out as the first piece is asked for (the latency table's breakdown, section 96)
             if not self.first_deadline_s or mo:
-                yield from source
+                for piece in source:
+                    self.last_stream.setdefault("t_token", time.perf_counter())      # the model's first text arrived
+                    yield piece
                 return
             reader = _Pieces(source)
             try:
@@ -734,6 +738,7 @@ class ReplyWriter:
                         return
                     if isinstance(item, Exception):
                         raise item
+                    self.last_stream.setdefault("t_token", time.perf_counter())
                     yield item
             finally:
                 reader.stop.set()

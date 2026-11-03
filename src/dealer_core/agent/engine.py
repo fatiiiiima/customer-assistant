@@ -405,6 +405,9 @@ class AgentEngine:
         self.silent_fallback = True
         self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
         self.parallel = False                            # with model_only: replies for the likely lookups are written while the decision is made (see _speculate)
+        self.measure_trip = False                        # the latency table's "network" figure: one request with no key per turn, in the background (voice.trip_ping; ARCH_REVIEW section 96)
+        self.trip_ms: float | None = None
+        self._trips: list[float] = []
         self.opener_first = False                        # with model_only: a short acknowledgement the code picks is said at once while the model writes (see _opener; ARCH_REVIEW section 95)
         self.hold_reply = False                          # with model_only: while Smart Turn holds a pause, the reply for the decided lookup is already being written (see prepare_reply; ARCH_REVIEW section 92)
         self.rules_decide = False                        # with model_only: the code picks the lookup when its own rules are certain (no model call for the decision); the model still decides the rest and writes every reply
@@ -515,6 +518,14 @@ class AgentEngine:
             self.governor.record_probe(ms)
         return ms
 
+    def _ping_trip(self) -> None:
+        """Measure the network round trip to the model (background): the median of the last five, kept for the latency table."""
+        ping = getattr(getattr(self.reply_writer, "backend", None), "ping_ms", None)
+        ms = ping() if ping is not None else None
+        if ms is not None:
+            self._trips = (self._trips + [ms])[-5:]
+            self.trip_ms = sorted(self._trips)[len(self._trips) // 2]
+
     def prepare_reply(self, s: Session, text: str, decision: dict | None) -> "_Spec | None":
         """voice.hold_reply (with model_only; ARCH_REVIEW section 92): the decision for `text` is known before the turn has ended (made while Smart Turn held a pause, or the code's
         own rules when voice.rules_decide), so the reply for it is written now, on a copy of the call, with the writer's own input. The turn that follows takes it if it names the
@@ -568,6 +579,8 @@ class AgentEngine:
         `uncertain`: the words came from a very quiet segment (room noise can be recognised as words): they may not end the call.
         `reply_ahead`: a future holding the reply already being written for the decision made during the hold (see `prepare_reply`)."""
         t0 = time.perf_counter()
+        if self.measure_trip:
+            threading.Thread(target=self._ping_trip, daemon=True).start()
         self._prefetch_turn.pop(id(s), None)                     # the caller spoke: prefetches still queued for this call are not sent
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
@@ -714,7 +727,9 @@ class AgentEngine:
                     sp.cancel()
             dbg.note = (dbg.note + "; " if dbg.note else "") + (f"parallel: decision at {dbg.nlu_ms:.0f} ms; replies written ahead for {', '.join(specs)}; "
                                                                  + (f"{key} was used" if ahead else f"none for {key}, so its reply is written now"))
+        t_lookup = time.perf_counter()
         result = self._run(s, tool, args if isinstance(args, dict) else {}, tool_text, dbg)
+        dbg.lookup_ms = (time.perf_counter() - t_lookup) * 1000
         if decision.get("also") and s.car:
             result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
         if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
@@ -774,6 +789,7 @@ class AgentEngine:
             t_write = time.perf_counter()
             if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
                 spoken.append(lead)
+                dbg.first_say_ms = dbg.first_say_ms or (time.perf_counter() - t0) * 1000
                 yield lead
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
@@ -801,9 +817,13 @@ class AgentEngine:
                         if early is not None and not spoken:
                             dbg.note = (dbg.note + "; " if dbg.note else "") + f"parallel: first words at {(time.perf_counter() - t0) * 1000:.0f} ms"
                         spoken.append(sentence)
+                        dbg.first_say_ms = dbg.first_say_ms or (time.perf_counter() - t0) * 1000
                         yield sentence
                 info = early.info if early is not None else self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
+                if info.get("t_sent") is not None:                      # the model call, against the start of this turn (negative: written ahead, before the words arrived)
+                    dbg.writer_steps = {k: round(info[f"t_{k}"] - t0, 4) for k in ("sent", "token", "first") if info.get(f"t_{k}") is not None}
+                    dbg.trip_ms = self.trip_ms
                 if info.get("would_stop"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: said anyway; the checks would have stopped: " + " | ".join(info["would_stop"])
                 if info.get("stopped"):

@@ -9,6 +9,9 @@
                sent when the agent's turn is decided. `decision` is the model's choice of action (inside `reply`); `ahead` says whether the reply for that action was already
                being written when the decision came (the parallel turn: a hit saves about 0.7 s); None when the parallel turn is not on; `by_code` says the code's rules picked the
                action (voice.rules_decide), so no model call was made for the decision. The page joins the two by `turn`.
+               `steps` (when the model wrote the reply; ARCH_REVIEW section 96) breaks "reply words" down, in seconds from the start of the turn (the moment the words reached the agent):
+               decision, lookup (the tool), sent (the model request went out; negative = written ahead, during the hold), token (the model's first text arrived), first (the first
+               words that may be spoken), spoken (the first sentence handed to the voice), trip (the network round trip to the model, an estimate from a request with no key).
 """
 from __future__ import annotations
 
@@ -29,5 +32,10 @@ def timing_message(total: float, parts: dict, check: float, turn: int) -> dict |
 
 def detail_message(result, turn: int) -> dict:
     d = result.debug
-    return {"type": "turn_detail", "turn": turn, "decision": _s(d.nlu_ms / 1000) if d.nlu_ms else None, "ahead": d.reply_ahead, "tool": d.intent or None,
-            "by_code": d.via.endswith(":rules"), "words": len(result.reply.split())}
+    msg = {"type": "turn_detail", "turn": turn, "decision": _s(d.nlu_ms / 1000) if d.nlu_ms else None, "ahead": d.reply_ahead, "tool": d.intent or None,
+           "by_code": d.via.endswith(":rules"), "words": len(result.reply.split())}
+    if d.writer_steps:                                  # the breakdown of "reply words" (section 96), all in seconds from the start of the turn
+        msg["steps"] = {"decision": _s(d.nlu_ms / 1000) if d.nlu_ms else 0.0, "lookup": _s(d.lookup_ms / 1000) if d.lookup_ms is not None else None,
+                        "sent": _s(d.writer_steps.get("sent")), "token": _s(d.writer_steps.get("token")), "first": _s(d.writer_steps.get("first")),
+                        "spoken": _s(d.first_say_ms / 1000) if d.first_say_ms is not None else None, "trip": _s(d.trip_ms / 1000) if d.trip_ms is not None else None}
+    return msg

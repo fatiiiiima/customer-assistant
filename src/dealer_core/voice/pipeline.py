@@ -179,6 +179,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
         app.engine.parallel = cfg.voice.model_only and cfg.voice.parallel
         app.engine.hold_reply = cfg.voice.model_only and cfg.voice.hold_reply
         app.engine.opener_first = cfg.voice.model_only and cfg.voice.opener_first
+        app.engine.measure_trip = cfg.voice.trip_ping
         app.engine.rules_decide = cfg.voice.model_only and cfg.voice.rules_decide
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for

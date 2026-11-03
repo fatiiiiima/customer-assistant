@@ -91,6 +91,10 @@ class BackendChain:
         """The active backend's connection, opened ahead of a call's first request (see NluBackend.warm_connection)."""
         return bool(getattr(self.backends[self.active], "warm_connection", lambda: False)())
 
+    def ping_ms(self) -> float | None:
+        """The active backend's network round trip (see OpenAICompatBackend.ping_ms); None for a backend that cannot say."""
+        return getattr(self.backends[self.active], "ping_ms", lambda: None)()
+
     def _call(self, fn: Callable[[NluBackend], object]):
         last: Exception | None = None
         for i in range(self.active, len(self.backends)):

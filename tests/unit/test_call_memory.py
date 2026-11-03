@@ -77,3 +77,4 @@ def test_the_page_forgets_the_call_with_the_tab_and_has_no_time_limit():
     src = js.read_text()
     assert 'sessionStorage.getItem("wzLastCall")' in src and 'sessionStorage.setItem("wzLastCall"' in src
     assert "localStorage.getItem(\"wzLastCall\")" not in src and "KEEP_MS" not in src
+    assert "within 15 minutes" not in src and "until you close this tab" in src                  # what the visitor is told after a quiet spell

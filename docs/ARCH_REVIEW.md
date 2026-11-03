@@ -2887,3 +2887,32 @@ So with the check on, **only about a third of the turns that start early will us
 VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__HOLD_REPLY=true VA__VOICE__PARALLEL=true VA__VOICE__EARLY_START_SECS=0.1 VA__VOICE__OPENER_FIRST=true VA__VOICE__STT_URL=http://127.0.0.1:8012/v1 VA__VOICE__STT_REMOTE_MODEL=parakeet VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
 ```
 To compare the two apart: run once with `EARLY_START_SECS` removed (opener only) and once with `OPENER_FIRST` removed (early start only). Read the call with `scripts/call_latency.py` and the recorder's `early_match` / `early_mismatch` / `early_skipped` notes.
+
+## 96. "Reply words" taken apart on the page (3 Nov, the owner: "add to the table on the frontend the breakdown for each call, the reply word part, in addition to the current table")
+
+A second table under the first, one row per reply the model wrote, with the **"reply words" step split into its parts**. Built and tested; the page was checked in the browser pane with sample rows (desktop; no console errors); **not yet seen with a real call**.
+
+**The parts, in the order they happen** (seconds; each is clipped to the stretch between "your words reached the agent" and "the first sentence went to the voice", so the parts of a row add up to its "reply words"):
+
+| column | what it is | measured how |
+|---|---|---|
+| decision | the model (or the code's rules) choosing the action | `nlu_ms`, as before |
+| lookup | the code running the tool | timed around `_run` (new) |
+| preparing | the code building the writer's input and sending the request | from the end of the lookup to the request going out (new) |
+| network (est.) | the trip to the model and back | a request with no key, answered at the edge, on the same connection, once a turn in the background; the median of the last five (new) |
+| model getting ready | the model's queue and reading the question, until its first text | from the request going out to the first text, less the network (new) |
+| first words | the model writing its first clause | from its first text to the first words that may be spoken (new) |
+| code checks | the code checking those words before handing them to the voice | the rest up to the first sentence (new) |
+| reply words | the whole step | the turn clock, as in the first table |
+
+Two more columns say **when the model call started** against the moment the words reached the agent (**negative = written ahead during the hold**, the "ready ahead" hits) and **when its first words were ready**. For a reply written ahead, most parts are 0 because the work happened before the words arrived; the model's part that is left shows what the turn still waited for. When the code says an acknowledgement first (`voice.opener_first`), the parts end at the acknowledgement and the last column shows when the model's own words came.
+
+**How.**
+* `dialogue/writer.py`: `stream()` stamps `t_sent` (the request goes out as the first piece is asked for), `t_token` (the first text from the model) and `t_first` (the first words that may be spoken) in `last_stream`. They are per thread, so a reply written ahead on its own thread carries its own.
+* `agent/engine.py`: the lookup time, the first sentence's time and the model call's stamps against the start of the turn go into `TurnDebug` (`lookup_ms`, `first_say_ms`, `writer_steps`, `trip_ms`).
+* `nlu/openai_compat.py`, `nlu/chain.py`: `ping_ms()`, a request with no key to the models route (the key is never sent: a test checks the header is empty). `voice.trip_ping` (default on; `VA__VOICE__TRIP_PING=false` stops it) is **one extra tiny request per turn**, answered at the edge, in the background; Bedrock sees a 401, no model work.
+* `server/latency.py`: `turn_detail` carries `steps`. `bmw-portal/site/voice.js` (the website repository, `local-demo` branch, **uncommitted there**) draws the table; the box is wider (1,060 px), and the new table scrolls sideways on a phone.
+
+**What it can and cannot say.** The network figure is the round trip of a request answered at the edge (about 0.2 s to Bedrock from Dubai, section 75), not the trip of the model request itself, so "model getting ready" is the model request's time to first text less that figure: it holds Bedrock's queue and the prefill, and any difference between the two paths. A turn whose first ping has not come back shows 0 for the network and the time is in "model getting ready". The split between the queue and the prefill is not visible from outside.
+
+**Tests** (`tests/unit/test_reply_breakdown.py`, 6; `python -m pytest`: 1,780 passed, 68 skipped): the writer's stamps (the model's 0.2 s to its first text is seen) and the lookup and first-sentence times; a reply written ahead shows a negative start and negative first words; the message carries the steps in seconds; the ping sends no key, is a request to the models route and returns None on a failure; the engine keeps the median of five; the setting switches the per-turn ping; the page has the table.
