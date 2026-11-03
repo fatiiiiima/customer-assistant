@@ -3097,3 +3097,50 @@ At 100 callers that is about 100 / 15 x 1.6 = 11 model requests a second and 18 
 **`scripts/service_capacity.py` now uses these measured numbers as its defaults** (1.8 sentences or 5.5 s of speech, 2.7 clips, 1.6 requests a turn). Still assumed: a turn every 15 s (the recorded calls), the 70% target (the autoscaler's), and that real callers behave like these synthetic ones (clean audio: the recogniser's clips are not noisier, the turns not longer).
 
 **Next, as planned:** put these speeds and per-turn costs into `scripts/simulate_scale.py` in place of its typed-in targets, and read the predicted knee for 100 and 200 callers.
+
+## 103. 100 and 200 callers, simulated with the measured stack (3 Nov, the owner: "lets do the load test now for 100 - 200 callers?")
+
+**A real run cannot happen on this laptop** (it ran out at 12 to 16 callers, sections 98 to 100) and needs machines this session cannot rent. What can run now, with no hardware and no spend, is the scale simulation (`scripts/simulate_scale.py`, the real router, quality governor and call cap against stand-in servers), after it was given what was measured. Not a measurement of 100 or 200 callers: a prediction, calibrated against what was.
+
+**What was added to the simulation** (`sim/scale.py`; defaults leave every older scenario unchanged, tests in `tests/unit/test_sim_scale.py`, 15):
+* **`Serial`**: a server whose every copy does one request at a time, a request going to the copy that is free soonest. This is how the Qwen3 recogniser and the Pocket voice server behave (section 101: the wait is the number ahead times the service time). The recogniser is asked for 2.7 clips a turn, 1.7 of them early readings while the caller is still talking; the voice server for 5.5 s of speech a turn (0.17 s for the first clause, 0.62 s for the rest). A first sentence not started within 2 s is given to the fallback voice (the worker's CPU) and its speech is not made.
+* The model's reply written ahead (3 turns in 4, 0.22 s early), and the share of turns that need a model decision (1 in 5): section 102.
+* `measured_hardware(...)`, `measured_scenarios()` and `simulate_scale.py --measured`.
+
+**Calibration against the laptop's runs (section 98):**
+
+| | simulated | measured |
+|---|---|---|
+| 8 callers, the load test's rhythm (a turn every 11 to 12 s) | answer p50 0.96, p90 1.76 s, 6% over 2 s | median 0.94 to 1.05, p90 1.5 to 2.2 s, 4 to 11% over 2 s |
+| 16 callers, same rhythm | p50 1.61, p90 2.88 s, 34% over 2 s, **fallback voice 10%** | median 2.4 to 2.9, **p90 8.4 s**, 55 to 64% over 2 s, **fallback voice 69%** |
+
+The simulation **matches at 8 callers and under-predicts how badly the machine fails at 16** (it has no CPU coupling between the worker and the servers on one machine, no bursts of callers in step, and the Mac's GPU shared with the model). So its answers close to saturation are optimistic; its utilisation figures, and any scenario kept near 60% of a server's capacity, are the part to rely on.
+
+**Results** (answer = end of the caller's speech to the answer itself; protection on = the measured call cap, shedding and the 1.2 s decision deadline; the callers ramp up over 90 s and a turn comes about every 15 s; measured after 2 minutes of 10; the model server 64 requests at once, measured linear to 48; workers up to the manifest's 72):
+
+| scenario | answer p50 / p90 | over 2 s | voice server busy | recogniser busy | fallback voice | workers (max) |
+|---|---|---|---|---|---|---|
+| 100 callers, **1 voice server, 1 Qwen3 (as built)** | 36.9 / 38.5 s | 100% | 97% | 103% | 36% | 10 |
+| 100 callers, 4 voice, 2 Qwen3 | 10.9 / 11.9 s | 100% | 75% | 97% | 0 | 13 |
+| **100 callers, 8 voice, 5 Qwen3 (sized)** | **0.57 / 1.08 s** | **0%** | 61% | 62% | 0 | 14 |
+| 100 callers, 8 voice, 2 Parakeet | 0.41 / 0.95 s | 0% | 61% | 40% | 0 | 14 |
+| 200 callers, 8 voice, 5 Qwen3 (half of what it needs) | 5.7 / 6.5 s | 100% | 91% | 94% | 0 | 30 |
+| **200 callers, 16 voice, 9 Qwen3 (sized)** | **0.54 / 1.06 s** | **0%** | 59% | 67% | 0 | 28 |
+| 200 callers, 16 voice, 3 Parakeet | 0.40 / 0.93 s | 0% | 60% | 52% | 0 | 28 |
+| 200 callers, 20 voice, 9 Qwen3, a surge to 300 at 5 minutes | 0.87 / 2.43 s | 19% | 53% | 75% | 0 | 39 |
+
+(With protection off the answers are the same to within 0.05 s except for the surge, where 2% instead of 6% of callers are turned away and 25% of answers pass 2 s; the sizing, not the protection, decides these runs.)
+
+**What it says.**
+* **100 callers: 8 voice server copies and 5 Qwen3 copies (or 2 Parakeet) hold a median under 0.6 s and a p90 near 1.0 s.** A recogniser at 97% busy (2 Qwen3 copies) or a voice server past 90% turns the answer into seconds: the failure is a cliff, not a slope, and it is the recogniser and voice utilisation that mark it. As built (one of each) the run is hopeless, which is what the laptop showed.
+* **200 callers: 16 voice copies and 9 Qwen3 copies (or 3 Parakeet) hold the same.** Half of that does not.
+* **The model is not what limits** (64 slots, never short in these runs), as measured in section 101.
+* **A surge is the weak spot.** With a margin (20 voice, 9 Qwen3) and a surge from 200 to 300 callers at 5 minutes, p90 rises to 2.4 s and 6% of callers are turned away until new workers have started (45 s), as the walkthrough shows.
+* **The autoscaler runs more workers than the arithmetic** (14 at 100 callers, 28 at 200, against 9 and 18): with protection on the measured call cap falls below 16 as soon as the answers pass its 1 s target, so more workers are asked for. Cores for those workers: 3 to 4 each (section 100).
+* The call cap, shedding and the deadline are the production profile's mechanisms; the test mode that the measurements used (the model writes every reply, no code level) has none of them. The simulation applies them to the measured stack, so this is the production design run on the measured speeds, not a test of the test mode.
+
+**Not covered:** real audio, real networks, GPU batching on a real recogniser (the Mac's one-at-a-time Qwen3 is what was measured), bursts of callers in step, the early start's cost on a real GPU, Bedrock's own limits beyond 60 requests a second, the autoscaler's Kubernetes behaviour, and the voice server's copies sitting behind one address (a load balancer in front of 8 or 16 copies has not been built or measured).
+
+**To run it:** `uv run python scripts/simulate_scale.py --measured` (about 40 s; add `--only "200 callers"` to pick rows).
+
+**What the real run needs, and who provides it** (section 99's step 3): machines (about 18 cores of worker per 100 callers, the voice copies at about 2 cores each, a recogniser on a GPU or as many Mac-style servers as above; separate machines for the callers), a Linux recogniser server for Qwen3-ASR or Parakeet (the two here are Mac-only), the voice servers behind one address, and Bedrock's quota for the key. None of that exists yet and none can be rented from here.
