@@ -65,7 +65,7 @@ def attach_stock_hotwords(stt_engine, inventory, in_play=None) -> None:
     """A recogniser set to take hot-words (voice.stt_hotwords_field) is given the stock's make and model names, read from the inventory at each turn so a car added to the stock is heard.
     `in_play` (optional): () -> the makes the call is about; they and their models go first, so a stock bigger than the cut still has them."""
     if getattr(stt_engine, "hotwords_field", False):
-        stt_engine.hotword_source = lambda: hotword_names(inventory.vocabulary(), in_play() if in_play else (), stt_engine.hotwords_max)
+        stt_engine.hotword_source = lambda: hotword_names(getattr(inventory, "hotword_vocabulary", inventory.vocabulary)(), in_play() if in_play else (), stt_engine.hotwords_max)
 
 
 def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = None) -> VoiceParts:

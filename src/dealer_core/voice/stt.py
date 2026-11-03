@@ -115,7 +115,7 @@ def wav_bytes(pcm16: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
-HOTWORDS_SENT = 100                             # the most names sent as the model's hot-word list (voice.stt_hotwords_max). Was 45: with a 95-name stock Toyota and its models were cut off (section 91). Each 50 names cost about 50 ms
+HOTWORDS_SENT = 200                             # the most names sent as the model's hot-word list (voice.stt_hotwords_max). Was 45: with a 95-name stock Toyota and its models were cut off (section 91). Each 50 names cost about 50 ms
 
 
 class RemoteWhisper:

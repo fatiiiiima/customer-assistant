@@ -218,7 +218,7 @@ class VoiceCfg(_Strict):
     history_lines: int = 6                       # lines of the conversation the model is shown for a reply (the text chat keeps 10)
     reply_max_words: int = 30
     reply_max_tokens: int = 110
-    stt_hotwords_max: int = 100                   # with stt_hotwords_field: the most car names sent to the recogniser each turn (the makes in play first). 100 sends all of a 95-name stock; each 50 names cost about 50 ms
+    stt_hotwords_max: int = 200                   # with stt_hotwords_field: the most car names sent to the recogniser each turn (the makes in play first). 200 sends every make and model of a stock twice the size of today's 95 names; names cost about 1 ms each, and only the names that exist are sent
     first_clause_words: int = 6                   # the reply's first spoken piece may end at a comma once it has this many words (6 = as before; 3 starts speech on "I've got ten Toyotas," instead of waiting for a longer clause)
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
