@@ -330,3 +330,17 @@ class WorkerRegistry:
         """The live worker with the most free room (none if all are full). A worker that is draining (shutting down) is never picked."""
         free = [w for w in self.workers() if not w.get("draining") and w.get("active", 0) < w.get("max", 0)]
         return max(free, key=lambda w: (w["max"] - w["active"], -w["active"])) if free else None
+
+
+def reopen(session) -> bool:
+    """A visitor came back to a call that had ENDED (the agent said goodbye, was asked for a person, or hung up after a quiet spell): the conversation is kept, whole, but the
+    call is open again. Restored as it was, `ended` made every later turn answer "Goodbye." and nothing else. Returns True when it was ended."""
+    from ..dialogue.states import State
+
+    if not session.ended:
+        return False
+    session.ended, session.handoff = False, None
+    if session.state is State.GOODBYE:
+        session.state = State.ANSWERING if (session.car or session.shown) else State.INTEREST
+    return True
+

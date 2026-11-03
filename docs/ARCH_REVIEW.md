@@ -2842,3 +2842,20 @@ No setting wins on both: a lower bar catches the quiet caller's "Enough." and th
 **Other things in the same calls.** (a) Recognition took about 1.8 s on 35 clips of noise or very low speech and came back empty: the Qwen3 server with the stock names writes the list of names for a clip with no speech (sections 84 and 86), the worker drops it, and the server does one at a time, so a real turn behind it waits. Parakeet (port 8012) does not do this. (b) In the 10:09 call the model's decision timed out once (`BackendTimeout`, 1.2 s) and the first words took 3.8 s.
 
 **Run command until the hold is measured again:** section 92's with `VA__VOICE__SMART_TEXT_CHECK` and `VA__VOICE__FAST_HOLD` removed; `HOLD_REPLY` and `RULES_DECIDE` stay.
+
+## 94. A call is remembered until the browser closes, and a call that ended opens again (3 Nov, the owner: "when the bot ends the call, it remembers the entire [conversation] until they close the browser, and not only 15 mins")
+
+The first live calls with the section 93 fixes measured a **median wait of 1.19 s** (the owner's reading of the page's table; the recorder's notes were not read for this section).
+
+**Two things limited the memory to 15 minutes, and a third made it useless after a goodbye.**
+* **The page** (`bmw-portal/site/voice.js`, `local-demo` branch, not this repository, uncommitted): the call id was kept in `localStorage` and used only if under `KEEP_MS` = 15 minutes old. Now it is in `sessionStorage` with no time limit: the browser clears it when the tab is closed, a reload keeps it, and a new tab starts a new conversation. (`localStorage` would outlive the browser, which is not what was asked.)
+* **The server:** `voice.calls_kept_secs` was 900 s from the last turn. Now 86,400 s (a day). The server cannot see a browser close; a day is the ceiling for a tab left open, and the setting stays settable.
+* **A call that had ended came back dead.** A goodbye, a hand-off or the hang-up after a quiet spell is saved with `ended: true` and the state "goodbye". Restored as it was, every later turn answered "Goodbye." (`session already ended`). `shared/state.reopen()` now reopens the call when the visitor returns (`server/app.py`, on resume): `ended` and the hand-off are cleared, the state goes from goodbye to answering (a car or a list is in play) or interest, and **nothing else is touched**: the history, the car, the cars shown, a booking in progress, the haggling counts. "Welcome back. Where were we?" still plays if the visitor says nothing.
+
+**Not changed, and worth knowing.**
+* **A call is still cut at 15 minutes** (`max_call_secs`, 900 s, `server/app.py`). That is a different limit from the memory. The visitor reconnects and carries on, now with the conversation. Raise it only if long calls should not be cut.
+* **What the agent can see of the conversation is still short:** the session keeps the last 16 lines (`Session.history`, the older ones counted in `forgotten`) and the reply writer is shown the last 6 (`voice.history_lines`). The facts that matter outlast that (the car, the list, the booking, the filters). "The entire conversation" word for word is not kept; say so if it should be.
+* A server restart empties the in-process store (the Redis or PostgreSQL stores keep calls across restarts), so a restart means a fresh conversation.
+* The list read out so far (`Session.excluded`, section 93) is not in the saved snapshot, so after a reconnect "go through the list" starts the list again. Small, not changed.
+
+**Tests** (`tests/unit/test_call_memory.py`, 6; `python -m pytest`: 1,758 passed, 68 skipped): the server default is a day and still settable; the store is given that time; a call ended by "bye" is restored, reopened with its history, car and list intact and then answers a new question instead of "Goodbye."; a call with no car goes to interest and one that did not end is left alone; a booking in progress survives; the page uses `sessionStorage` and has no time limit. The page script was checked to parse; it was **not run in a browser** (the browser pane could not open the local server).

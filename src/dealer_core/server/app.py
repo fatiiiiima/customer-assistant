@@ -24,6 +24,7 @@ from pipecat.workers.runner import WorkerRunner
 from ..app import App
 from ..config import Config
 from ..dialogue.states import State
+from ..shared.state import reopen
 from ..voice.micgate import MicGate
 from ..voice.pipeline import STT_RATE, VoiceParts, build_pipeline
 from ..voice.status import StatusLine, TurnClock
@@ -357,6 +358,8 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     clock.trace = getattr(brain, "trace", None)                  # the call recorder (VA_DUMP_AUDIO_DIR): when the clock saw each stop, words and sound
     def prepare() -> bool:                                    # database reads, in a thread: the event loop keeps every other call's audio moving
         resumed_ = bool(resumable and state.calls.load(call_id, brain.session, app.service))
+        if resumed_:
+            reopen(brain.session)                                          # the visitor came back after the agent ended the call: the conversation is kept, the call is open again
         if not resumed_:
             brain.session.known_bookings = site_bookings(hello, app, tz)     # "what have I booked?", "cancel my test drive": the ones already on the site
         car = hello.get("car")

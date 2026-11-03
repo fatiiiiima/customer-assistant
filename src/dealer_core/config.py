@@ -273,7 +273,7 @@ class VoiceCfg(_Strict):
     greet_if_quiet_secs: float = 3.0              # voice server: the caller speaks first; the greeting is said only after this much quiet at the start (owner, 30 Oct). 0 = greet at once
     still_there_secs: float = 8.0                 # voice server: after the agent has finished, this much quiet gets "Hello? Are you still there?". 0 = never
     hang_up_secs: float = 7.0                     # ...and this much more ends the call, after "I'll end the call here...". The call can be carried on for calls_kept_secs. 0 = never
-    calls_kept_secs: float = 900.0                # a call is remembered this long after its last turn: the visitor who comes back carries on where they were (owner, 30 Oct)
+    calls_kept_secs: float = 86400.0              # a call is remembered this long after its last turn: the visitor who comes back carries on where they were, until they close the browser (the page forgets the call then). Was 900 (15 minutes); a day is the ceiling for a browser left open (owner, 3 Nov)
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
