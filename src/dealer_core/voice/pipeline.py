@@ -177,6 +177,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     if hasattr(app.engine, "one_call"):
         app.engine.one_call = cfg.voice.model_only and cfg.voice.one_call
         app.engine.parallel = cfg.voice.model_only and cfg.voice.parallel
+        app.engine.hold_reply = cfg.voice.model_only and cfg.voice.hold_reply
         app.engine.rules_decide = cfg.voice.model_only and cfg.voice.rules_decide
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
@@ -266,27 +267,37 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         [in_tap] if in_tap is not None else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
+        from .finished import reads_finished
 
         endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs,
                                      early_start_secs=vcfg.early_start_secs if vcfg.speculate else 0.0)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
         brain.end_check = lambda: endpointer.last_check_secs                                           # for the page's latency table (server/latency.py)
-        if vcfg.smart_peek if smart_peek is None else smart_peek:
+        use_peek = vcfg.smart_peek if smart_peek is None else smart_peek
+        if use_peek or vcfg.smart_text_check:
             from zoneinfo import ZoneInfo
 
             from .answers import is_complete_answer
+            from .services import clean_transcript
 
             tz = ZoneInfo(app.service.cfg.branches[0].timezone)
-            endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
-            endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
-                                                                   app.inventory.vocabulary(), app.service.clock(), tz)
+            if vcfg.smart_text_check:                         # the words also serve the speculation: cleaned the way it cleans them (a loop is no sentence)
+                endpointer.peek = lambda pcm: asyncio.to_thread(lambda: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000))
+                endpointer.reads_finished = reads_finished
+                endpointer.on_note = trace
+            else:
+                endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
+            if use_peek:
+                endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
+                                                                       app.inventory.vocabulary(), app.service.clock(), tz)
         if vcfg.speculate:                                    # recognise (and decide) during Smart Turn's hold; used if the caller has finished
             from .services import clean_transcript
             from .speculate import Speculation
 
             spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000),
                                (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
-                               lambda: len(brain.session.history))
+                               lambda: len(brain.session.history),
+                               (lambda text, decision: app.engine.prepare_reply(brain.session, text, decision)) if getattr(app.engine, "hold_reply", False) else None)
             endpointer.speculation = stt.speculation = brain.speculation = spec
             spec.on_event = trace
         stages.append(endpointer)

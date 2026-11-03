@@ -207,6 +207,10 @@ class DialogueCfg(_Strict):
     variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
 
 
+FAST_HOLD_FALLBACK_SECS = 0.4        # voice.fast_hold: the silence after which a turn Smart Turn calls unfinished ends anyway (default 0.6)
+FAST_HOLD_STOP_SECS = 0.15           # ...and the voice detector's own silence before Smart Turn looks (default 0.2)
+
+
 class VoiceCfg(_Strict):
     reply_deadline_ms: int = 4500                # model-written reply must be ready by then, else the standard wording is spoken
     first_sentence_deadline_ms: int = 1500       # ...and its FIRST usable sentence by this time (about twice the governor's budget): else the model is given up on and the code's own wording is spoken at once,
@@ -224,12 +228,15 @@ class VoiceCfg(_Strict):
                                                   # True = TEST MODE: only the model's own words are spoken, nothing in their place (27 Oct: a reply could end after its opener). Was True by default
     one_call: bool = False                        # with model_only: the model picks the action and writes the reply in ONE call, given the likely facts up front (ARCH_REVIEW section 64)
     rules_decide: bool = False                    # with model_only: the code picks the lookup when its own rules are certain, so the decision costs no model call; the model still decides every other turn and writes every reply (ARCH_REVIEW section 89)
+    hold_reply: bool = False                      # with model_only: while Smart Turn holds a pause (and when the words read as finished), the reply for the decided lookup is already being written, so the first words are ready when the turn ends. Costs one reply call per hold (ARCH_REVIEW section 92)
     parallel: bool = False                        # with model_only (and not one_call): while the model picks the action, the reply is already written for each likely lookup; the decision's pick is spoken (ARCH_REVIEW section 67)
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
     smart_fallback_secs: float = 0.6              # with smart_turn: silence after which the turn ends even if the model says "still going"
     smart_short_answer_secs: float = 0.0          # OFF. The length rule (an answer this short after a question counts as finished) cut 20 of 36 sentences in half instead of 4: "Toyota" and "Can I book..." are both short
+    smart_text_check: bool = False                # OFF. MEASURED 3 Nov (ARCH_REVIEW section 93): it ended "Can you tell me?" as a turn, because the recogniser writes a question mark on a fragment, and split the sentence in two. Leave it off. When Smart Turn says "still going", recognise the turn once and end it at once if the words read as a finished sentence (voice/finished.py); the words then serve the decision and reply. Saves the rest of the hold (0.3 to 0.6 s) on those turns; a caller who finishes a clause and carries on after the short silence is cut
+    fast_hold: bool = False                       # OFF. MEASURED 3 Nov (section 93): a 0.4 s fallback (and even 0.5 s) split a caller whose pauses inside a sentence are 0.5 to 0.6 s long; 0.6 s kept it whole. The shorter hold in one switch: smart_fallback_secs 0.4 (was 0.6) and smart_stop_secs 0.15 (was 0.2), whichever is longer is lowered to those. Turns end 0.05 s sooner and held turns 0.2 s sooner; cuts a sentence at a pause of 0.15 s that is not its end
     smart_peek: bool = False                      # OFF until real recordings show a gain (synthetic voices: no benefit, +3 cut sentences in 36). When Smart Turn hesitates, check the WORDS: a complete answer to the agent's last question ends the turn at once
     vad_start_secs: float = 0.1                   # speech must last this long to start a turn (0.2 lost one-word answers such as "Toyota")
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
@@ -283,6 +290,14 @@ class VoiceCfg(_Strict):
     stt_hotwords_field: bool = False              # with stt_url: send the stock's make and model names as a `hotwords` field (the model's own hot-word list) and NO `prompt`. For Qwen3-ASR
                                                   # (scripts/qwen3_asr_server.py), which does better with hot-words than with the hint's sentences (ARCH_REVIEW section 81); a Whisper server wants the hint
     stt_timeout_s: float = 3.0                   # a remote transcription slower than this counts as "not heard" (the caller is asked again)
+
+    @model_validator(mode="after")
+    def _fast_hold(self) -> "VoiceCfg":
+        """voice.fast_hold: the shorter hold in one switch (only ever shortens: a value already lower is kept)."""
+        if self.fast_hold:
+            self.smart_fallback_secs = min(self.smart_fallback_secs, FAST_HOLD_FALLBACK_SECS)
+            self.smart_stop_secs = min(self.smart_stop_secs, FAST_HOLD_STOP_SECS)
+        return self
 
 
 class Config(_Strict):

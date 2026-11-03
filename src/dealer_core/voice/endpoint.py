@@ -11,6 +11,10 @@ silence has passed), and swallows the "started speaking" that follows a held sto
 With a `speculation` (voice/speculate.py) a held stop also starts recognising the turn so far, and the model's decision, in the background:
 used as they are if the fallback silence ends the turn, dropped if the caller speaks again.
 
+TEXT CHECK (`reads_finished`, voice.smart_text_check): when Smart Turn says "still going", the turn so far is recognised once (the peek) and, if the words read as a finished sentence
+(voice/finished.py), the turn ends at once instead of waiting out the fallback silence. The words are handed to the speculation, so they are neither recognised a second time nor
+waited for: the decision and the reply start from them.
+
 EARLY START (`early_start_secs`): the same work also starts inside every turn, after that much real quiet (judged by loudness against the turn's own peak, not by the voice
 detector, which waits for its full stop time: 0.6 s in tap mode). If the caller speaks again it is dropped; if the turn then ends, it is used as it is, and the answer is
 that much sooner. The cost is the wasted work at every pause that was not the end.
@@ -45,6 +49,9 @@ class SmartEndpointer(FrameProcessor):
         self.asked_question = None                # () -> bool: did the agent's last turn end on a question? (set by the pipeline; used by the length rule only)
         self.peek = None                          # async (pcm16 bytes) -> the words so far (the speech recognizer, on the audio of this turn)
         self.is_answer = None                     # (text) -> bool: a complete answer to what the agent just asked?
+        self.reads_finished = None                # (text) -> bool: do the words read as a finished sentence? (voice/finished.py; voice.smart_text_check)
+        self.on_note = None                       # diagnostics only (the call recorder): (kind, text)
+        self.text_finished = 0                    # turns ended early because the words read as finished
         self._turn_audio = bytearray()            # the audio of the turn in progress, for the peek and the speculation
         self._pre_roll = bytearray()              # the last 0.5 s before speech was detected (the detector fires ~0.1 s into the first word)
         self.speculation = None                   # voice.speculate.Speculation: work started during a hold
@@ -107,15 +114,26 @@ class SmartEndpointer(FrameProcessor):
             self.last_stop = frame
             self._stop_seen = time.monotonic()
             state, _ = await self._analyzer.analyze_end_of_turn()
-            if state is not EndOfTurnState.COMPLETE and self.peek is not None and self.is_answer is not None and len(self._turn_audio) > 3200:
+            seeded = started = False                        # the words are known and were handed to the speculation (a start was made from them / the turn ends on it)
+            if state is not EndOfTurnState.COMPLETE and self.peek is not None and (self.is_answer is not None or self.reads_finished is not None) and len(self._turn_audio) > 3200:
                 self.peeked += 1
                 try:
-                    if self.is_answer(await self.peek(bytes(self._turn_audio))):
-                        state = EndOfTurnState.COMPLETE        # the words are a complete answer to the question just asked: nothing more to wait for
-                        self.short_answers += 1
+                    heard = await self.peek(bytes(self._turn_audio))
+                    why = ""
+                    if self.is_answer is not None and self.is_answer(heard):
+                        why, self.short_answers = "a complete answer to the question just asked", self.short_answers + 1
+                    elif self.reads_finished is not None and self.reads_finished(heard):
+                        why, self.text_finished = "the words read as a finished sentence", self.text_finished + 1
+                    if why:
+                        state = EndOfTurnState.COMPLETE        # nothing more to wait for
                         clear = getattr(self._analyzer, "clear", None)
                         if clear:
                             clear()
+                    if self.on_note:
+                        self.on_note("text_check", f"Smart Turn said still going; the words {heard!r}: " + (f"{why}, so the turn ends now" if why else "do not read as finished, so the hold stays"))
+                    if self.speculation is not None and heard:
+                        self.speculation.start(bytes(self._turn_audio), heard)         # the same words serve the speculation (kept if the hold runs out, dropped if the caller speaks)
+                        started, seeded = True, state is EndOfTurnState.COMPLETE
                 except Exception as e:
                     logger.debug(f"smart turn: peek failed ({type(e).__name__}); keeping the hold")
             if (state is not EndOfTurnState.COMPLETE and self.short_answer_secs > 0 and self.asked_question is not None and self._turn_speech <= self.short_answer_secs
@@ -126,8 +144,8 @@ class SmartEndpointer(FrameProcessor):
                 if clear:
                     clear()
             if state is EndOfTurnState.COMPLETE:
-                if self._early and self.speculation is not None:
-                    self.speculation.confirm()              # the quiet it was started in went on to the end: what was prepared applies
+                if (self._early or seeded) and self.speculation is not None:
+                    self.speculation.confirm()              # the quiet it was started in went on to the end (or the words were read as finished): what was prepared applies
                 self._reset_early()
                 self._turn_speech = 0.0
                 self._turn_audio.clear()
@@ -138,7 +156,7 @@ class SmartEndpointer(FrameProcessor):
                 self._holding = True
                 self._early = False                         # the hold below starts its own work
                 self.held += 1
-                if self.speculation is not None and len(self._turn_audio) > 3200:
+                if self.speculation is not None and len(self._turn_audio) > 3200 and not started:
                     self.speculation.start(bytes(self._turn_audio))       # most held turns were finished: have the answer's groundwork ready
                 logger.debug("smart turn: still going, holding the end of turn")
         elif isinstance(frame, InputAudioRawFrame):

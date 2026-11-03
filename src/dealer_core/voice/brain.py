@@ -354,6 +354,9 @@ class DealerBrain(FrameProcessor):
             sentences: asyncio.Queue = asyncio.Queue()
             early = self.speculation.decision_for(text) if self.speculation is not None else None
             extra = {"predecided": early} if early is not None else {}
+            written = self.speculation.reply_for(text) if self.speculation is not None else None
+            if written is not None:
+                extra["reply_ahead"] = written                    # the reply for that decision was already being written during the hold
             if self._quiet_below and level is not None and level < self._quiet_below and getattr(self.engine, "guards_quiet_turns", False):
                 extra["uncertain"] = True
 

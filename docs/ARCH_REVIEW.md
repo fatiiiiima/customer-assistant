@@ -2764,3 +2764,81 @@ VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:
 ```
 VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
 ```
+
+## 92. The shorter hold: the reply written while Smart Turn waits, the turn ended when the words read as finished, and the shorter settings (3 Nov, the owner: "build the Smart Turn hold changes: write the reply during the hold, a text completeness check on the early transcript, and the shorter hold settings, with tests")
+
+Built and tested; **not measured on a call** (UNKNOWN until the owner runs one). All three are off by default and change nothing until switched on. Why these three: in the 2 Nov 17:35 call the turns over 1.7 s were all held turns. "I'm looking for Hyundai." was held 0.89 s though the words are complete, and "This Santa Fe." 0.84 s. The decision and the reply only started after the hold.
+
+**1. `voice.hold_reply`** (`VA__VOICE__HOLD_REPLY=true`; only with `voice.model_only`). While Smart Turn holds a pause the speculation already recognised the turn and made the model's decision (`voice/speculate.py`). It now also writes the REPLY for that decision (`AgentEngine.prepare_reply`): the lookup is run on a copy of the call, the writer's own input is built from it, and the writer streams into a queue on its own thread, as the parallel turn's replies do. When the turn ends with no new speech, `handle_stream` takes it if the real turn names the same lookup and the writer's input is equal, so the first words are there as the turn ends. Otherwise it is stopped and the reply is written after the decision as before (a note says which: `hold: ...`).
+* **Kept and dropped as the decision is.** The caller speaking again, a new turn, a different transcript or a call that moved on all stop it (`Speculation._drop_reply`, `reply_for`).
+* **Only lookups that change nothing outside the call:** `get_car`, `search_cars`, `prepare_booking`, `check_slots`, `end_call`, `none`. Never a hand-off, a confirmed booking, a cancellation or a reschedule (a test per tool).
+* **With `voice.rules_decide`** the code-decided turns get their reply written during the hold too. There the reply used to wait for the words (0.35 to 0.55 s).
+* **Replaces the parallel turn's guesses on a held turn.** With a reply made from a known decision, the 2 to 4 replies the parallel turn writes for likely lookups are skipped (one reply call, not three).
+* **Changed on the way:** `predecide` skipped any turn the code's rules could route, which is right for production and wrong for the test mode without `rules_decide`, where the model decides those turns too. In the test mode it now makes that decision during the hold as well (a test).
+* **Cost:** one reply call for every hold that gets as far as a decision, used or not. A hold the caller resumes is a wasted call.
+
+**2. `voice.smart_text_check`** (`VA__VOICE__SMART_TEXT_CHECK=true`). When Smart Turn says "still going", the endpointer recognises the turn once (its existing peek) and ends the turn at once if the words read as a finished sentence (`voice/finished.py`, `reads_finished`):
+* ends with a full stop, question mark or exclamation mark, not a comma, a dash or "...";
+* the last word is not one that needs another (an article, a preposition, a conjunction, an auxiliary verb, a filler, a question word);
+* at least 3 words before a full stop, 2 before a question mark. A one-word answer after a question is still `answers.is_complete_answer`'s job (`voice.smart_peek`, unchanged).
+
+A rule, not a model: nothing to download, a few microseconds. **The words are not recognised twice:** the speculation takes them as they are (`Speculation.start(pcm, text)`), makes the decision and writes the reply from them, and the speech service takes them as the early recognition. Where the words do not read as finished the hold stays and the same words start the hold's speculation, so the check costs no second recognition either. A note `text_check` in the recorder says what was heard and what was decided.
+* **Expected (INFERRED):** the 17:35 call's two held turns end at about 0.1 to 0.2 s instead of 0.85 to 0.89 s, saving about 0.65 s on them.
+* **The risk is the one `smart_peek` was switched off for:** a caller who finishes a clause with a full stop in the recogniser's text, pauses for the detector's short silence and carries on ("I'm looking for a Toyota. ... Under 80,000.") has the turn ended on the first half. The recognisers punctuate a sentence's end more reliably than a pause in the middle, but this is untested on the owner's calls. The check is conservative where it can be (a word that can end a sentence but usually does not, such as "is", holds as before).
+* The check runs only when Smart Turn said "still going", so a turn Smart Turn ends itself is never touched.
+
+**3. `voice.fast_hold`** (`VA__VOICE__FAST_HOLD=true`). One switch for the shorter hold. It lowers `smart_fallback_secs` to 0.4 (from 0.6) and `smart_stop_secs` to 0.15 (from 0.2), and only ever lowers them (a value already shorter is kept). Every consumer of the settings gets them: the server, the command line, the offline scripts. Not changed: `tap_stop_secs` (tap mode: 0.2 s cut 4 to 5 sentences in 24 recordings on 27 Oct, section 32) and `early_start_secs`, which stays 0. Early start would start the decision and, with `hold_reply`, a reply on every 0.3 s pause up to three times a turn. Section 74 found concurrent calls slow the decision by 250 to 300 ms, so it is a separate experiment.
+* **Expected (INFERRED):** 0.05 s off every turn and 0.2 s off a held turn that runs to the fallback.
+* **The risk:** a pause of 0.15 s inside a sentence reaches Smart Turn. It says "still going" for most such pauses, but it is the same trade as the 0.35 s tap setting.
+
+**Tests** (`tests/unit/test_hold_changes.py`, 50; `python -m pytest`: 1,744 passed, 68 skipped; the linter is not installed in this environment, so lint was not run): the text check on 7 finished and 12 unfinished lines; the speculation writes the reply from the words and decision, has it ready before the decision is handed on, stops it when the caller speaks again (made, or still being made), when the words differ and when the call moved on, tolerates a failing hook and does not recognise known words again; the endpointer ends a turn on finished words and hands them over once, holds on unfinished ones with the same words, does not even peek when Smart Turn says complete, is unchanged without the hook, keeps the answer check apart, and keeps the hold when the peek fails; the engine uses the reply written during the hold with one decision call and one reply call, skips the parallel replies, stops a reply for another lookup, writes again when the prompt changed, never writes ahead a hand-off, confirmation, cancellation, reschedule or comparison, writes nothing for a failed decision, covers the code-decided turns with `rules_decide`, saves about a call's time (0.3 s decision + 0.3 s reply: under 0.2 s to collect), and is off by default and without the test mode; `fast_hold` is off by default, shortens both values and only ever shortens.
+
+**What to look at in the next call** (the page's table and the recorder): the `turn end` column on held turns (should fall from 0.8 to about 0.2 s), `reply words` on turns marked `ready ahead` (should be near 0), and the `text_check` notes: any turn ended on a first half is a cost of check 2. The `hold:` note in the turn's note says whether the reply written during the hold was used.
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__HOLD_REPLY=true VA__VOICE__SMART_TEXT_CHECK=true VA__VOICE__FAST_HOLD=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+`VA__VOICE__PARALLEL=true` can stay on: it still guesses replies for the turns where no decision was made during a hold. To compare, drop `HOLD_REPLY`, `SMART_TEXT_CHECK` and `FAST_HOLD` one at a time.
+
+## 93. The 3 Nov live calls: the shorter hold split sentences, "go through the list" repeated itself, and some stops in the middle of a reply (3 Nov, the owner: "when i pause in between words it takes them as separate questions; barge-in is not working properly; sometimes it stops talking midway; ... it asked me to keep listing, i said go thru the list and it just kept repeating itself")
+
+Read from the 10:01 and 10:09 calls of 3 Nov (`logs/audio_dump`, the recorder's notes), with the first call's audio replayed through the real voice detector and Smart Turn (scratch scripts, not kept) and `scripts/barge_replay.py`. The calls ran with `hold_reply`, `smart_text_check` and `fast_hold` all on (section 92).
+
+**1. Pauses split into separate questions: caused by section 92's `fast_hold` and `smart_text_check`.** Replayed on the same audio, the caller's sentence "Can you tell me what cars you have?" (a pause after "me"):
+
+| setting | turns the sentence became |
+|---|---|
+| the old hold (VAD 0.2 s, fallback 0.6 s) | **one:** "Can you tell me what cars you have?" |
+| `fast_hold` (0.15 s, 0.4 s) | two: "Can you tell me?" / "What car?" |
+| fallback 0.5 s | two: "Can you tell me?" / "...all the cars" |
+| old hold plus `smart_text_check` | two: "Can you tell me?" / "What cars you have?" |
+
+So this caller's pauses inside a sentence are 0.5 to 0.6 s, and 0.6 s is the shortest fallback that keeps them whole. The text check fails a different way: the recogniser (Qwen3) writes a question mark after a fragment, and "Can you tell me?" has a question mark, four words and ends on a pronoun, so it reads as finished. A rule on the words cannot tell a pause from an end here. Over the whole 7-minute call the shorter hold added 4 turns (94 to 98 turns with words) and the text check ended 5 turns early (95). **Both stay off by default and are not recommended for this caller; the config comments say so.** With the model-only test mode every such fragment is then answered as a question, because that mode skips the fragment checks. `hold_reply` does not change where a turn ends and was not a cause. It worked: "Did it have a previous owner." had its reply written during the hold and used (`hold: the reply for get_car AG-138 was written during the hold`).
+
+**2. "Go through the list" repeated the same three cars: a bug in the search, not the follow-up handling.** The call had 74 cars. "Go through the list" and "keep listing the cars, please" both ran `search_cars` with no filters and got the first three again. Cars already read out were left out only when the caller's words contained "other", "more", "else" or the like (`ex.wants_others`), and then only the last three shown, so a third request would have gone back to the first three. The model offered "shall I keep listing?" (the engine's own offer is "shall I go through the rest?") and the code did not know what it was agreeing to. Fixed in `agent/engine.py`:
+* `_continues_list`: the agent's last line offered to go on (the rest, keep listing, hear more about), the words are short and ask to go on (go through, keep listing, continue, carry on, go on, read them, the list, the rest), and name no make, filter or car. "Tell me more" and "the next one" do not count (a test; an existing test caught "tell me more").
+* The cars read out are kept for the whole run of the list (`Session.excluded`, which only the older engine used): each "go through the list" gives the next ones, and a new question starts the list again.
+* The facts say how many were read out and how many are left; at the end of the list the model is told "that was the whole list".
+* With `voice.rules_decide` the code picks this without a model call (`agent:rules`).
+* Tests: `tests/unit/test_list_paging.py` (8): new cars each time and none twice, with and without the model deciding; the code picks it with no decision call; the facts; the end of the list; a new question; only after an offer; and the "tell me more" cases. `python -m pytest`: 1,752 passed, 68 skipped.
+
+**3. Barge-in and stops in the middle of a reply: not caused by section 92, and mostly this room and voice.** Barge-in is untouched by the hold changes. In the 10:01 call:
+* 9 stops of the agent: 4 had no words recognised afterwards (at 0.020 to 0.059 loudest): those are sounds, not the caller, and each stopped the agent in the middle of a sentence. The other 5 were the caller (0.17 to 0.32 loudest, or words recognised over the agent).
+* 30 of 48 stretches of sound over the agent were not enough to stop it. 8 of them had real words ("What's the kilometers on this?" 0.28 s of the 0.3 s needed, "Enough.", "Can you tell me?", "Keep listing the cars, please."): this caller is quiet (median level 0.004 to 0.016 over the words, peaks 0.1 to 0.3).
+* The room has speech in it (the recogniser heard "Okay, listen. There's no choice." and "Six hundred fifty minus fifteen thousand." at levels 0.013 to 0.04, and over 40 stretches of noise).
+* Could not tell echo from room noise: the microphone's loudness follows the agent's voice at about the same strength in windows with no stop (median 0.33) as in the stops (0.20 to 0.52). UNKNOWN.
+
+The replay with other settings on the three calls (`voice.barge_in_level`, `voice.barge_in_min_speech_secs`; stops that were followed by words / by none):
+
+| level | min speech | real stops | stops with no words after |
+|---|---|---|---|
+| 0.01 (now) | 0.3 s | 9 | 5 (2 are the caller, read from the notes: the loud ones) |
+| 0.01 | 0.2 s | 12 | 7 |
+| 0.02 | 0.2 s | 10 | 4 |
+| 0.05 | 0.3 s | 6 | 2 |
+
+No setting wins on both: a lower bar catches the quiet caller's "Enough." and the next step down adds noise stops. Not changed; for the owner, with a headset (so the agent is not heard) first. A real fix is hearing the agent's own voice back out of the microphone (echo cancellation), which the browser does only with the right device.
+
+**Other things in the same calls.** (a) Recognition took about 1.8 s on 35 clips of noise or very low speech and came back empty: the Qwen3 server with the stock names writes the list of names for a clip with no speech (sections 84 and 86), the worker drops it, and the server does one at a time, so a real turn behind it waits. Parakeet (port 8012) does not do this. (b) In the 10:09 call the model's decision timed out once (`BackendTimeout`, 1.2 s) and the first words took 3.8 s.
+
+**Run command until the hold is measured again:** section 92's with `VA__VOICE__SMART_TEXT_CHECK` and `VA__VOICE__FAST_HOLD` removed; `HOLD_REPLY` and `RULES_DECIDE` stay.
