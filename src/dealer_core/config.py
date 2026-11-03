@@ -277,6 +277,9 @@ class VoiceCfg(_Strict):
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
+    early_start_gate: bool = True                 # with early_start_secs: the early work (the decision and the reply written ahead) is started only when the words so far read as a finished sentence or a complete answer; a half sentence is recognised and nothing more (ARCH_REVIEW section 95)
+    early_start_verify: bool = True               # with early_start_secs: the turn is still recognised in full after it ends, and the early work is used only if the words are the same (the early reading differed on about 1 turn in 4 with Whisper). False = the early words are used as they are, 0.06 to 0.1 s sooner
+    opener_first: bool = False                    # with model_only: a short acknowledgement the code picks ("Sure,", "Okay,", from the voice's cache) is said at once while the model writes, for list, count and car-fact answers; the model's own words follow, with its own "Sure," dropped (ARCH_REVIEW section 95)
     early_start_secs: float = 0.0                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
                                                   # voice detector waits 0.6 s, so this answers up to 0.4 s sooner; wasted work if the caller was only pausing (at most 3 times a turn). 0 = only when Smart Turn holds a pause
     speculate: bool = True                       # smart_turn: while it holds a pause as "still going", recognise the turn and make the model's decision in the

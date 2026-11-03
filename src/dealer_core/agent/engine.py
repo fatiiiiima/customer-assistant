@@ -405,6 +405,7 @@ class AgentEngine:
         self.silent_fallback = True
         self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
         self.parallel = False                            # with model_only: replies for the likely lookups are written while the decision is made (see _speculate)
+        self.opener_first = False                        # with model_only: a short acknowledgement the code picks is said at once while the model writes (see _opener; ARCH_REVIEW section 95)
         self.hold_reply = False                          # with model_only: while Smart Turn holds a pause, the reply for the decided lookup is already being written (see prepare_reply; ARCH_REVIEW section 92)
         self.rules_decide = False                        # with model_only: the code picks the lookup when its own rules are certain (no model call for the decision); the model still decides the rest and writes every reply
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
@@ -735,7 +736,7 @@ class AgentEngine:
         self.last_level = level
         speaks = (self.model_speaks or mo) and level == "full"
         quiet = speaks and not self._slow_writer()             # model_speaks: an acknowledgement only while the model is slow to its first sentence
-        opener, lead = ("", bridge) if bridge else ("" if quiet or mo else self._opener(s, tool, result["core"]), "")
+        opener, lead = ("", bridge) if bridge else ("" if (quiet or mo) and not (mo and self.opener_first) else self._opener(s, tool, result["core"], force=mo and self.opener_first), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
@@ -906,10 +907,10 @@ class AgentEngine:
         s.last_variant["bridge_turn"] = turn
         return line
 
-    def _opener(self, s: Session, tool: str, core: str) -> str:
+    def _opener(self, s: Session, tool: str, core: str, force: bool = False) -> str:
         """A short acknowledgement before a factual answer, when the answer does not already start with one. It is rendered in advance by
         the voice, so it plays the moment the turn ends while the rest of the reply is still being made."""
-        if not self.openers or s.ended or tool not in _FACT_TOOLS + ("get_car",) or not core or _HAS_OPENER.match(core):
+        if not (self.openers or force) or s.ended or tool not in _FACT_TOOLS + ("get_car",) or not core or _HAS_OPENER.match(core):
             return ""
         first = re.split(r"(?<=[.!?])\s", core, maxsplit=1)[0]
         negative = bool(_NEGATIVE.search(first))

@@ -34,7 +34,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 QUIET_FLOOR = 0.01          # a 20 ms frame below this loudness (0-1) is quiet whatever the turn's peak was
 QUIET_RATIO = 0.06          # ...and below this share of the turn's loudest frame (about 24 dB down: a soft last word is still louder)
-MAX_EARLY_STARTS = 3        # per turn: each one is a recognition run that is wasted if the caller was only pausing
+MAX_EARLY_STARTS = 6        # per turn: each one is a recognition run that is wasted if the caller was only pausing (the speculation's gate keeps the model calls for finished sentences)
 
 
 class SmartEndpointer(FrameProcessor):
@@ -89,7 +89,7 @@ class SmartEndpointer(FrameProcessor):
             self._early = True
             self._early_in_turn += 1
             self.early_starts += 1
-            self.speculation.start(bytes(self._turn_audio))
+            getattr(self.speculation, "start_early", self.speculation.start)(bytes(self._turn_audio))      # (a speculation without the gate has only `start`)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

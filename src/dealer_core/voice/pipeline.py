@@ -178,6 +178,7 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
         app.engine.one_call = cfg.voice.model_only and cfg.voice.one_call
         app.engine.parallel = cfg.voice.model_only and cfg.voice.parallel
         app.engine.hold_reply = cfg.voice.model_only and cfg.voice.hold_reply
+        app.engine.opener_first = cfg.voice.model_only and cfg.voice.opener_first
         app.engine.rules_decide = cfg.voice.model_only and cfg.voice.rules_decide
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
@@ -274,13 +275,15 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
         brain.end_check = lambda: endpointer.last_check_secs                                           # for the page's latency table (server/latency.py)
         use_peek = vcfg.smart_peek if smart_peek is None else smart_peek
+        from zoneinfo import ZoneInfo
+
+        from .answers import is_complete_answer
+        from .services import clean_transcript
+
+        tz = ZoneInfo(app.service.cfg.branches[0].timezone)
+        answer_check = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
+                                                       app.inventory.vocabulary(), app.service.clock(), tz)
         if use_peek or vcfg.smart_text_check:
-            from zoneinfo import ZoneInfo
-
-            from .answers import is_complete_answer
-            from .services import clean_transcript
-
-            tz = ZoneInfo(app.service.cfg.branches[0].timezone)
             if vcfg.smart_text_check:                         # the words also serve the speculation: cleaned the way it cleans them (a loop is no sentence)
                 endpointer.peek = lambda pcm: asyncio.to_thread(lambda: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000))
                 endpointer.reads_finished = reads_finished
@@ -288,8 +291,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
             else:
                 endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
             if use_peek:
-                endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
-                                                                       app.inventory.vocabulary(), app.service.clock(), tz)
+                endpointer.is_answer = answer_check
         if vcfg.speculate:                                    # recognise (and decide) during Smart Turn's hold; used if the caller has finished
             from .services import clean_transcript
             from .speculate import Speculation
@@ -300,6 +302,10 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                                (lambda text, decision: app.engine.prepare_reply(brain.session, text, decision)) if getattr(app.engine, "hold_reply", False) else None)
             endpointer.speculation = stt.speculation = brain.speculation = spec
             spec.on_event = trace
+            if vcfg.early_start_secs > 0:                     # work started inside the turn: only on words that read as finished, and checked against the full reading
+                spec.verify_early = vcfg.early_start_verify
+                if vcfg.early_start_gate:
+                    spec.gate = lambda text: reads_finished(text) or answer_check(text)
         stages.append(endpointer)
     stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
     if in_tap is not None:                                    # the recorder notes when the turn was decided over, so scripts/call_latency.py can tell the detector's wait from Whisper's

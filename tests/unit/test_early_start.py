@@ -81,12 +81,12 @@ def test_room_noise_after_a_quiet_voice_still_counts_as_quiet():
     assert [c[0] for c in calls if c[0] == "start"] == ["start"]
 
 
-def test_at_most_three_starts_in_a_turn():
+def test_at_most_six_starts_in_a_turn():
     frames = [started()]
-    for _ in range(6):
+    for _ in range(9):
         frames += [*words(4), *[quiet() for _ in range(12)]]
     ep, calls, _ = run(frames)
-    assert ep.early_starts == 3 and sum(1 for c in calls if c[0] == "start") == 3
+    assert ep.early_starts == 6 and sum(1 for c in calls if c[0] == "start") == 6
 
 
 def test_it_is_off_when_the_setting_is_zero():
