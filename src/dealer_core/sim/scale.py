@@ -512,12 +512,13 @@ def measured_hardware(name: str, voice_copies: int, stt_copies: int, stt_service
 
 
 def measured_scenarios(adaptive: bool = True) -> list[Scenario]:
-    """Calibration first: the 8 and 16 caller runs of section 98 (one worker, one recogniser, one voice server, the call cap off), then 100 and 200 callers."""
+    """Calibration first: the 8 and 16 caller runs of section 98 (one worker, one recogniser, one voice server, the call cap off), then 100 and 200 callers, then 1,000 (4 Nov)."""
     rhythm = {"think_s": (3.0, 6.0), "agent_speaks_s": (4.0, 9.0)}                     # a real caller: a turn about every 15 s
     as_tested = {"think_s": (0.2, 0.6), "agent_speaks_s": (4.0, 9.0)}                  # the load test's callers asked again at once: a turn every 11 or 12 s
     one = measured_hardware("1 worker, 1 voice server, 1 Qwen3", 1, 1)
     ramp100 = [(0, 25), (30, 50), (60, 80), (90, 100)]
     ramp200 = [(0, 50), (30, 100), (60, 150), (90, 200)]
+    ramp1000 = [(0, 250), (30, 500), (60, 750), (90, 1000)]
     return [
         Scenario("calibration: 8 callers, as the laptop", one, [(0, 8)], adaptive=False, min_workers=1, max_workers=1, duration_s=400, measure_from_s=60, **as_tested),
         Scenario("calibration: 16 callers, as the laptop", one, [(0, 16)], adaptive=False, min_workers=1, max_workers=1, duration_s=400, measure_from_s=60, **as_tested),
@@ -530,6 +531,9 @@ def measured_scenarios(adaptive: bool = True) -> list[Scenario]:
         Scenario("200 callers, 16 voice servers, 9 Qwen3 (sized)", measured_hardware("16 voice, 9 Qwen3", 16, 9), ramp200, adaptive=adaptive, min_workers=8, **rhythm),
         Scenario("200 callers, 16 voice servers, 3 Parakeet", measured_hardware("16 voice, 3 Parakeet", 16, 3, stt_service_ms=43.0), ramp200, adaptive=adaptive, min_workers=8, **rhythm),
         Scenario("200 callers, 20 voice servers, 9 Qwen3, a surge to 300 at 5 min", measured_hardware("20 voice, 9 Qwen3", 20, 9), ramp200 + [(300, 300), (420, 200)], adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("1000 callers, 80 voice servers, 45 Qwen3 (sized)", measured_hardware("80 voice, 45 Qwen3", 80, 45), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
+        Scenario("1000 callers, 80 voice servers, 15 Parakeet", measured_hardware("80 voice, 15 Parakeet", 80, 15, stt_service_ms=43.0), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
+        Scenario("1000 callers, 40 voice servers, 22 Qwen3 (half of what it needs)", measured_hardware("40 voice, 22 Qwen3", 40, 22), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
     ]
 
 

@@ -180,3 +180,27 @@ def test_recognition_is_one_at_a_time_and_two_callers_both_get_answers(server):
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert out == ["Yes, talk about the Macan."] * 3 and eng.overlap == 1
+
+
+# ------------------------------------------------------------------------------------------------ the kept prompt beginning (4 Nov, ARCH_REVIEW section 104)
+def test_when_the_fast_path_cannot_run_the_model_does_it_the_old_way_and_the_fast_path_stays_off(monkeypatch):
+    seen = []
+    fake_mlx(monkeypatch, seen)                                                      # no mlx.core here and a model with only `generate`: the fast path fails
+    asr = qs.Qwen3ASR()
+    assert asr.prefix_cache is True
+    assert asr.transcribe_float(tone(1.0), None, "en", ["Macan"]) == "Porsche."      # still answered, by generate
+    assert asr.prefix_cache is False and asr.cache_error                             # switched off, with the reason kept
+    assert seen[-1][2] == {"language": "English", "hotwords": ["Macan"]}
+    asr.transcribe_float(tone(1.0))
+    assert len(seen) == 2                                                            # later clips go straight to generate
+
+
+def test_the_fast_path_can_be_turned_off_and_long_audio_never_uses_it(monkeypatch):
+    seen = []
+    fake_mlx(monkeypatch, seen)
+    off = qs.Qwen3ASR(prefix_cache=False)
+    off.transcribe_float(tone(1.0))
+    assert off.cache_error == "" and len(seen) == 1                                  # never tried
+    long = qs.Qwen3ASR()
+    long.transcribe_float(tone(qs.MAX_CACHED_S + 1))
+    assert long.prefix_cache is True and long.cache_error == ""                      # too long for it: generate, and the fast path is left on for short clips

@@ -75,25 +75,90 @@ def read_wav(data: bytes) -> np.ndarray:
     return x
 
 
+MAX_CACHED_S = 30.0                    # longer audio goes the model's own way (it cuts it into pieces); a spoken turn is a few seconds
+MAX_NEW_TOKENS = 256                   # a turn is a sentence or two; the model's own limit is 8,192
+PREFIXES_KEPT = 8                      # prompt beginnings kept (different hints or hot-word lists)
+
+
 class Qwen3ASR:
-    """The MLX model behind a lock: one recognition at a time."""
+    """The MLX model behind a lock: one recognition at a time.
+
+    Reading the prompt is most of a short clip's time, and its first part (the system text with the hint or the hot-words) is the same for every clip. With `prefix_cache`
+    that part is read once per distinct text and each clip starts from a copy of what the model made of it (4 Nov, ARCH_REVIEW section 104: 165 ms a clip down to 102 ms on
+    this Mac's GPU, the same text on 8 of 8 clips). If anything in that path fails once, it is switched off and the model's own `generate` does the work as before."""
 
     name = "qwen3-asr-0.6b"
 
-    def __init__(self, repo: str = REPO) -> None:
+    def __init__(self, repo: str = REPO, prefix_cache: bool = True) -> None:
         from mlx_audio.stt import load
 
         self.model = load(repo)
         self.lock = threading.Lock()
+        self.prefix_cache = prefix_cache
+        self._prefixes: dict = {}                          # (system text, language) -> (tokens before the audio, [(keys, values) per layer])
+        self.cached_clips = 0                              # clips recognised from a kept prompt beginning (for the log and tests)
+        self.cache_error = ""                              # why the fast path switched itself off, if it did
 
     def transcribe_float(self, audio: np.ndarray, prompt: str | None = None, language: str | None = "en", hotwords: list[str] | None = None) -> str:
-        kw: dict = {"language": language_name(language)}
-        if prompt:
-            kw["system_prompt"] = prompt
-        if hotwords:
-            kw["hotwords"] = hotwords
+        audio = np.asarray(audio, dtype=np.float32)
         with self.lock:
-            return str(self.model.generate(np.asarray(audio, dtype=np.float32), **kw).text).strip()
+            if self.prefix_cache and 0 < len(audio) <= MAX_CACHED_S * RATE:
+                try:
+                    return self._with_kept_prefix(audio, prompt, language, hotwords)
+                except Exception as e:  # noqa: BLE001 - the fast path is an optimisation: say why once, then use the model's own way for good
+                    self.prefix_cache, self.cache_error = False, f"{type(e).__name__}: {e}"
+                    print(f"prefix cache switched off ({self.cache_error}); using the model's own generate", flush=True)
+            kw: dict = {"language": language_name(language)}
+            if prompt:
+                kw["system_prompt"] = prompt
+            if hotwords:
+                kw["hotwords"] = hotwords
+            return str(self.model.generate(audio, **kw).text).strip()
+
+    def _with_kept_prefix(self, audio: np.ndarray, prompt: str | None, language: str | None, hotwords: list[str] | None) -> str:
+        import mlx.core as mx
+        from mlx_audio.lm.models.cache import KVCache
+        from mlx_audio.stt.utils import merge_hotwords
+
+        m = self.model
+        system = merge_hotwords(prompt or None, hotwords)
+        lang = language_name(language)
+        layers = m.config.text_config.num_hidden_layers
+        feats, fmask, n_audio = m._preprocess_audio(audio)
+        ids = m._build_prompt(n_audio, lang, system)[0]
+        embeds = m._build_inputs_embeds(ids[None], m.get_audio_features(feats, fmask))[0]
+        pad = m._tokenizer.encode("<|audio_pad|>")[0]
+        start = ids.tolist().index(pad)                    # everything before the first audio position is the same for every clip with this text
+        key = (system, lang)
+        kept = self._prefixes.get(key)
+        if kept is None:
+            caches = [KVCache() for _ in range(layers)]
+            m.model(inputs_embeds=embeds[None, :start], cache=caches)
+            mx.eval([c.keys for c in caches] + [c.values for c in caches])
+            kept = (ids[:start].tolist(), [(c.keys[..., :start, :], c.values[..., :start, :]) for c in caches])
+            if len(self._prefixes) >= PREFIXES_KEPT:
+                self._prefixes.pop(next(iter(self._prefixes)))
+            self._prefixes[key] = kept
+        elif kept[0] != ids[:start].tolist():
+            raise RuntimeError("the prompt before the audio is not the same from clip to clip")
+        caches = []
+        for k, v in kept[1]:
+            c = KVCache()
+            c.state = (k + 0, v + 0)                       # a copy: the model writes into its cache as it goes
+            caches.append(c)
+        hidden = m.model(inputs_embeds=embeds[None, start:], cache=caches)[:, -1:, :]
+        logits = m.lm_head(hidden) if m.lm_head is not None else m.model.embed_tokens.as_linear(hidden)
+        y = mx.argmax(logits[:, -1, :], axis=-1)
+        stops = m._eos_token_ids()
+        out: list[int] = []
+        for _ in range(MAX_NEW_TOKENS):
+            token = int(y.item())
+            if token in stops:
+                break
+            out.append(token)
+            y = mx.argmax(m._forward_with_embeds(m.model.embed_tokens(y[:, None]), caches)[:, -1, :], axis=-1)
+        self.cached_clips += 1
+        return str(m._tokenizer.decode(out, skip_special_tokens=True)).strip()
 
 
 def make_handler(engine, model_name: str = "qwen3-asr"):
@@ -154,9 +219,10 @@ def main() -> int:
     ap.add_argument("--repo", default=REPO, help="the MLX weights on Hugging Face")
     ap.add_argument("--wav", type=Path, help="recognise this file and exit (a check, no server)")
     ap.add_argument("--prompt", help="with --wav: the hint")
+    ap.add_argument("--no-prefix-cache", action="store_true", help="read the whole prompt for every clip, as before 4 Nov (the model's own generate)")
     a = ap.parse_args()
     t0 = time.perf_counter()
-    engine = Qwen3ASR(a.repo)
+    engine = Qwen3ASR(a.repo, prefix_cache=not a.no_prefix_cache)
     engine.transcribe_float(np.zeros(RATE, dtype=np.float32))                  # compile and warm up, so the first caller does not pay for it
     print(f"loaded in {time.perf_counter() - t0:.1f} s", flush=True)
     if a.wav:

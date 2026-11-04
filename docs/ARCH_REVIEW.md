@@ -3144,3 +3144,92 @@ The simulation **matches at 8 callers and under-predicts how badly the machine f
 **To run it:** `uv run python scripts/simulate_scale.py --measured` (about 40 s; add `--only "200 callers"` to pick rows).
 
 **What the real run needs, and who provides it** (section 99's step 3): machines (about 18 cores of worker per 100 callers, the voice copies at about 2 cores each, a recogniser on a GPU or as many Mac-style servers as above; separate machines for the callers), a Linux recogniser server for Qwen3-ASR or Parakeet (the two here are Mac-only), the voice servers behind one address, and Bedrock's quota for the key. None of that exists yet and none can be rented from here.
+
+
+## 104. The voice and the recogniser on this Mac's GPU (4 Nov, the owner: "there's no way to test this from a cpu to a gpu? (on this mac) bc a gpu is what we'll switch to" and "try both then")
+
+Both were measured with scratch scripts, with every server idle, on the M3 Pro (12 cores: 6 performance, 6 efficiency). Nothing in the repo was changed.
+
+**Voice (Pocket-TTS "eve"), the 10 real sentences of section 101, PyTorch on the CPU against PyTorch on the Mac's GPU (MPS):**
+
+| | speech made per second of work | first chunk, median | first chunk, worst |
+|---|---|---|---|
+| CPU | 7.8 s | 35 ms | 43 ms |
+| GPU (MPS) | 4.4 s | 164 ms | 294 ms |
+
+The GPU is slower on every measure (the audio is the same: same loudness, valid). The same result as section 40's CoreML try. The reason: the model makes its sound a small piece at a time, one sentence at a time, and every piece is many tiny steps. A GPU is fast at big steps and loses time starting each small one. The package also only generates one sentence at a time (its state is fixed at batch size 1), so the one thing that makes a GPU pay, doing many sentences in one step, is not there to use. Keep the voice on the CPU here. On an NVIDIA card the same small-step problem exists (CUDA graphs reduce it) and a card is not expected to beat a CPU core by much for one stream; where it can win is several voices at once, which needs the model's generation loop changed to batch. That has not been done or measured.
+
+**Recogniser (Qwen3-ASR 0.6B, MLX, on the Mac's GPU), 8 real spoken clips (0.5 to 3.8 s, mean 2.2 s), the worker's 95 hot-words (about 330 prompt tokens), decoded one at a time against together in one batch:**
+
+| clips together | one at a time | together | gain |
+|---|---|---|---|
+| 1 | 0.130 s | 0.110 s | 1.18x |
+| 4 | 0.666 s | 0.555 s | 1.20x |
+| 8 | 1.352 s | 1.052 s | 1.29x |
+| 16 | 2.675 s | 2.180 s | 1.23x |
+
+Batching helps a little (1.2 to 1.3x) and the texts were the same on every clip. About 6 clips a second one at a time, about 7.5 together. The gain is small because most of a clip's time is reading its prompt (the audio plus the hot-word text), which is real computation that a batch does not share. Without the hot-words the same 8 clips take 0.50 s together (prompt 67 tokens), against 1.13 s with them.
+
+**The prefix cache, tried:** the part of the prompt before the audio (the system text with the hot-words) is the same for every clip, so its attention state was computed once and each clip started from a copy. Same 8 clips, one at a time:
+
+| | per clip | clips a second |
+|---|---|---|
+| hot-words, whole prompt every clip (what the server does now) | 165 ms | 6.1 |
+| hot-words, prefix reused | 102 ms | 9.8 |
+| no hot-words at all | 96 ms | 10.4 |
+
+The reused prefix gave the same text as the whole prompt on 8 of 8 clips and is 1.6x faster, close to having no hot-words. Without hot-words one of the 8 differs in wording (numbers spelled out); only three of the clips name a car (Porsche, Santa Fe, Land Cruiser), so this is not an accuracy test of make and model names. The prefix is built once per hot-word list, so a list that changes every call would lose the gain (today it is the whole stock list). Correction: an earlier version of this section said 1,240 prompt tokens, no batching gain and a 3x prefix gain. That run passed the hot-words as one string, so they were split into single letters. The numbers above are with the real list.
+
+**In the server (4 Nov):** `scripts/qwen3_asr_server.py` now keeps the beginning of the prompt (up to 8 distinct hint or hot-word texts) and starts each clip from a copy; `--no-prefix-cache` gives the old behaviour, and if the fast path fails once it switches itself off and the model's own `generate` takes over. Checked on 68 clips (60 spoken make and model questions in 3 voices, short answers, a phone number, silence and noise) with the worker's 95 hot-words: 195 ms a clip with it off, 129 ms with it on, and the text exactly the same on 66 of 68. The two that differ are silence and noise, where the model repeats the hot-word list back (both ways; the kept path stops at 256 new tokens, the old path at the end of the list). That repeat is an existing behaviour worth knowing: a clip with no speech in it costs a long answer. A server that is already running keeps the old code until it is restarted.
+
+**What this means for a GPU:**
+* The worker's own two small models are not a reason to use a GPU: the speech detector costs about 0.5% of a core per call and the turn model about 1% (measured, 4 Nov), against about 20% of a core per call for the whole worker. The rest is Python moving audio and messages. A GPU does not run that, so the worker stays on CPU cores (about 200 for 1000 calls).
+* A GPU helps the shared services. For the recogniser the prefix cache is worth about 1.6x here and batching across callers about 1.2 to 1.3x; a vLLM-style server does both. The ratios may carry over to an NVIDIA card and the absolute speeds will not.
+* Section 101's per-copy numbers for the recogniser stand (they were measured through the server).
+
+**Not covered:** the Parakeet recogniser on the GPU in batches (its server was not run), an NVIDIA card (none here), several voices decoded together, and the effect of the prefix cache on make and model accuracy over many clips.
+
+
+## 105. 1000 callers: what one machine can show, and what it cannot (4 Nov, the owner: "try redesigning to a gpu then, and then test 1000 callers")
+
+**No redesign of the worker for a GPU.** The worker's two small models cost little: the speech detector about 0.5% of a core per call and the turn model about 1% (microbenchmarks, project environment). The rest of a worker's cost is Python moving audio and messages, which a GPU does not run. The GPU change that pays is in the shared services: section 104 (prefix cache in the Qwen3 server, 1.6x; batching across callers 1.2 to 1.3x). Correction to what was said earlier today: the Mac has 12 cores (6 performance, 6 efficiency), not 6.
+
+**What was built:** `scripts/stub_services.py` (a stand-in recogniser, 130 ms, and a stand-in voice, first sound after 35 ms and then 7.8 times real time, neither limited to one request at a time) and `scripts/soak_test.py` (holds N callers connected through the router, with an optional quiet-line rate, and measures real conversations before and while they are connected). The model stayed real (Bedrock). Tests: `tests/unit/test_stub_services.py`. The stand-ins mean these runs say nothing about the real recogniser and voice; section 101 and 103 do that.
+
+**Run 1: 1000 connected calls with quiet lines (one 20 ms frame a second), 4 workers of up to 270 calls each, the router, PostgreSQL, the stand-ins, all on this Mac.**
+
+| | result |
+|---|---|
+| Calls held open at once | 1000 of 1000 (none refused, none dropped, all heard their greeting) |
+| Router answer (`/assign`) | median 1 ms, worst 23 ms |
+| Open the WebSocket to "ready" | median 62 ms, worst 219 ms |
+| Memory of the workers | 2.7 GB empty, about 6.2 GB with 1000 held (about 3.5 MB a call); 4.6 GB after they left (not given back) |
+| Worker processor while held | about 1.3 cores in all (about 0.13% of a core a call) |
+| Machine processor | busiest 35% of 12 cores |
+| 4 real conversations, wait to first sound, alone then with 1000 connected | median 0.48 s then 0.52 s; 90th percentile 1.22 s then 1.43 s; none over 2 s |
+
+So the router, the workers' connection handling and the database hold 1000 calls here, as long as the lines are quiet.
+
+**Run 2: the same with an open microphone (50 frames a second per call, silence).** This is what a real page sends all the time, and it is the cost that counts.
+
+| callers | workers (4) in cores | per call | driver | machine |
+|---|---|---|---|---|
+| 100 | 3.2 | 3.2% of a core | 0.18 | 41% |
+| 200 | 4.9 | 2.4% of a core | 0.40 | 57% |
+| 400, 4 real conversations on top | 4.6 | 1.2% of a core | 0.81 | 60% |
+
+At 400 the 4 real conversations went from a median of 0.45 s to 7.2 s (90th percentile 14.3 s). The processor was not full (60%): the cause is that each worker is one Python process, and 100 open microphones in one process is more than it can handle (the plan's 16 calls a worker is 6 times less). Workers also kept 11 to 17 GB after this overload (frames queued, memory not given back); not investigated whether any of it is a leak.
+
+**What this says about 1000 real callers.** A quiet open microphone costs about 2.5% of a core (runs 2), a call in constant conversation about 20% (section 100), so 1000 callers need roughly 25 cores (all quiet) to 200 cores (all talking constantly) of workers; a real mix is in between. Workers must be kept near 16 calls each (63 or more workers); a machine with 12 cores and 36 GB cannot hold that many processes, each about 0.6 GB with the speech models they load. The memory is not the limit (3.5 MB a call); the processor and the number of processes are.
+
+**Simulation extended to 1000** (`uv run python scripts/simulate_scale.py --measured --only "1000 callers"`; same method and caveats as section 103, 72 workers at most as in the deployment plan):
+
+| 1000 callers | first sound p50 | answer p90 | answers over 2 s | voice busy | recogniser busy |
+|---|---|---|---|---|---|
+| 80 voice servers, 45 Qwen3 | 0.49 s | 0.97 s | 0% | 57% | 64% |
+| 80 voice servers, 15 Parakeet | 0.37 s | 0.84 s | 0% | 57% | 50% |
+| 40 voice servers, 22 Qwen3 (half) | 8.3 s | 9.0 s | 100% | 76% | 89% | 
+
+What that is in machines: about 80 voice-server copies (about 160 cores), the recogniser as 45 Qwen3 copies or 15 Parakeet copies on Macs, or a GPU server that batches (sections 104 and 101), 72 workers, and Bedrock quota for about 100 requests a second (1000 callers, a turn about every 15 s, 1.4 to 1.55 model requests a turn, section 102). Half of that collapses.
+
+**Not covered:** real audio from 1000 callers, the real recogniser and voice under that load, workers at 16 calls each (63 processes), the router with 63 workers, Bedrock beyond 60 requests a second, and a run on rented machines. The routes to those are in section 99.
