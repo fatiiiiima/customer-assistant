@@ -119,3 +119,28 @@ def test_a_dry_run_of_the_bedrock_cluster_shows_the_settings_and_starts_nothing(
                           "--set", "VA__VOICE__HOLD_REPLY=true"], capture_output=True, text=True, timeout=60).stdout
     assert "backend   bedrock" in out and out.count("dealer_core.server") == 2 and "VA__VOICE__HOLD_REPLY=true" in out and "--hands-free" in out
     assert "dealer_core.modelserver" not in out and "dealer_core.gateway" in out
+
+
+def test_redis_holds_the_load_reports_and_call_snapshots_by_default_and_the_database_only_the_stock_and_bookings(tmp_path):
+    """5 Nov: the router's list of workers and the call snapshots in Redis (the default), bookings and stock in PostgreSQL."""
+    (tmp_path / "data.js").write_text("// cars")
+    cmd = rc.worker_cmd(0, "bedrock", "postgresql://db", Path("/s/site"), 8800, 16, None, "redis://127.0.0.1:6390/0")
+    assert cmd[cmd.index("--state-url") + 1] == "redis://127.0.0.1:6390/0"                                      # the workers report there
+    assert rc.worker_env("bedrock", "postgresql://db")["DATABASE_URL"] == "postgresql://db"                     # and the stock and bookings are still in the database
+    assert rc.worker_cmd(0, "bedrock", "postgresql://db", Path("/s/site"), 8800, 16, None)[cmd.index("--state-url") + 1] == "postgresql://db"     # no state address: the database
+    base = [sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "bedrock", "--workers", "2", "--site", str(tmp_path)]
+    default = subprocess.run(base, capture_output=True, text=True, timeout=60).stdout
+    assert default.count("--state-url redis://127.0.0.1:6390/0") == 3 and "redis-server" in default                # 2 workers and the router, and a local Redis is started
+    own = subprocess.run(base + ["--redis-url", "redis://cache:6379/0"], capture_output=True, text=True, timeout=60).stdout
+    assert own.count("--state-url redis://cache:6379/0") == 3 and "redis-server" not in own                       # one that exists is not started
+    old = subprocess.run(base + ["--no-redis"], capture_output=True, text=True, timeout=60).stdout
+    assert "redis://" not in old and "redis-server" not in old and old.count("--state-url") == 3                                           # back in the database
+
+
+def test_the_local_redis_keeps_its_data_on_disk_so_conversations_survive_a_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda name: "/opt/homebrew/bin/redis-server" if name == "redis-server" else None)
+    cmd = rc.redis_server_cmd(6391, tmp_path)
+    assert cmd[0].endswith("redis-server") and cmd[cmd.index("--port") + 1] == "6391" and cmd[cmd.index("--bind") + 1] == "127.0.0.1"
+    assert cmd[cmd.index("--appendonly") + 1] == "yes" and cmd[cmd.index("--appendfsync") + 1] == "everysec" and cmd[cmd.index("--dir") + 1] == str(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert rc.redis_server_cmd() is None

@@ -3262,3 +3262,43 @@ Run 1 shows the real things work together (a booking really completes) and run 2
 **Not covered:** more than 30 calls at once (the Mac's limit with the real services is about 8 to 12; with the stand-ins about 30 to 40), the real recogniser and voice under the 1000-person run, browsing against a deployed site (the local site server is a single small program and answered in about 3 to 5 ms), bookings under load with the real recogniser, and anything beyond one machine.
 
 **To run it:** `.venv/bin/python scripts/user_journeys.py --browse 970 --talk 20 --book 10 --ramp-secs 90 --duration-secs 240` with the cluster (`run_cluster.py`) and the site running.
+
+
+## 107. The workers' load reports and call snapshots in Redis (5 Nov, the boss: "better to have it in Redis instead of PostgreSQL")
+
+The code already had a Redis store (`RedisStore` in `shared/state.py`; the worker and the router take `--state-url redis://...`), so nothing in the workers or the router changed. What was missing was a way to run and deploy with it:
+* `scripts/run_cluster.py --redis` starts a local `redis-server` (port 6390, nothing saved to disk) and gives its address to every worker and the router as the state; `--redis-url redis://host:6379/0` uses one you have. Bookings and stock stay in PostgreSQL (`DATABASE_URL`). Without either flag nothing changes.
+* `deploy/k8s/voice.yaml`: workers and router read `STATE_URL` from its own key in the secret (`redis://redis.internal:6379/0`, a placeholder for a managed Redis); `DATABASE_URL` stays for bookings and stock.
+* `pyproject.toml`: `redis` in the cluster extra, `fakeredis` in the dev group (the Redis tests in `test_shared_state.py` ran for the first time here: 9 passed).
+* Redis was installed on this Mac with `brew install redis`.
+
+**Checked live** (3 workers, the router, the stand-in recogniser and voice, a short mixed run of 50 browsing and 4 talking people, all calls fine): each worker's report is a key `worker:<id>` that expires after 6 s and is renewed every 2 s; the router lists all three; deleting one key removes that worker from the router's list within 1 s and it comes back within 3 s; `/assign` answers in about 2 ms; a call with a call id leaves a key `call:<id>` of about 1 KB with a 24 hour expiry.
+
+**What it changes and what it does not.** (Superseded the same day by section 108: Redis is now the launcher's default.) The router never read the database per call (it reads the worker list every 0.5 s into memory), so the assign time is the same as with PostgreSQL. What moves is the write load of the workers' reports and call snapshots (a few dozen small writes a second at 500 calls) off the database that holds the bookings. The cost: a Redis to run, and snapshots are lost if Redis restarts without persistence (a returning visitor then starts a fresh conversation); turn on Redis's append-only file if a day of call memory must survive a restart. Not measured: Redis at 1000 or more calls, a managed Redis across machines, a Redis failover.
+
+`docs/voice_call_walkthrough.html` now names Redis for the worker list and call snapshots (it is uncommitted with the other report files).
+
+
+## 108. Redis as the default, conversations remembered, and the model deciding every turn (5 Nov, the boss)
+
+**Redis is now the default** for the workers' load reports and the call snapshots: `scripts/run_cluster.py` starts a local Redis unless `--no-redis` (back to PostgreSQL) or `--redis-url` (one you already have) is given, and the deployment file already points at one. The reason given: the database that holds the stock and bookings should not also hold what callers said. PostgreSQL now holds only stock and bookings. (Bookings still carry a caller's name and number; that stays in PostgreSQL.)
+
+**The conversation is remembered** for a day (`calls_kept_secs`) and now also across a restart of Redis: the local Redis keeps an append-only file in `data/redis` (written once a second; the folder is ignored by git). Checked with the real recogniser and voice and the model: a caller asked about Toyota SUVs and the Land Cruiser on one worker and hung up; coming back with the same call id on the other worker, "how much was that one again?" was answered "189,000 dirhams, white with 92,000 kilometres"; Redis was then stopped, the launcher started it again, and on the first worker "what colour was that one again?" was answered "white". Not done: Redis's own password and encryption for a managed Redis (use `rediss://` and an auth secret in the deployment); the local one listens on 127.0.0.1 only.
+
+**The engine as a model: what exists and what was measured.** Today the model already writes every reply (`model_only`). The code decides which look-up to run (cars, counts, a car's facts, booking steps) in about 4 of 5 turns (`rules_decide`), so the model's own decision is skipped. Switching that off (`VA__VOICE__RULES_DECIDE=false`) makes the model decide the look-up on every turn too. The booking, the stock look-ups themselves and the checks that stop an invented car or price are still code. Measured on the laptop, the live test settings, the real recogniser, voice and model (Bedrock), 4 callers together, two runs each, 26 turns each:
+
+| | the code picks the look-up (live) | the model picks it every turn |
+|---|---|---|
+| Wait to first sound, median | 0.79 s and 0.76 s | 1.28 s and 1.25 s |
+| 90th percentile | 1.57 s and 1.44 s | 2.00 s and 1.77 s |
+| Over 2 s | 4% and 0% | 12% and 8% |
+| Reply-words step | 0.25 s and 0.21 s | 0.39 s and 0.64 s |
+| Model decision | 0.004 s | 0.22 s |
+| Model requests per turn (replies plus other calls) | 1.8 and 1.9 | 2.8 and 3.3 |
+| Input tokens per turn | about 1,370 to 1,480 | about 2,130 to 2,560 |
+
+So letting the model decide everything costs about half a second at the median and about 60% more model input, and makes the model requests per turn about 60 to 70% higher. With 1 caller (6 turns each) the medians were 1.1 s and 1.37 s.
+
+**What it gains** (one call, six off-script questions, both settings): both answered a hybrid against diesel, instalments, washing the car and the capital of France. The model-decides setting answered the comparison "which is better for a family of five, the Land Cruiser or the RAV4?" (the code-decides setting heard only "The Land Cruiser or the Rav 4" there, an early cut in the recogniser, and then asked for repeats) and answered "Paris" for the last question where the code-decides setting said "I don't have that info". **Both settings invented policy:** "we can arrange instalments" and "we wash every car before delivery" are not in the stock or policy data. That is the writer's, not the decider's, and it is a risk for a dealership to look at (a hand-written list of what the dealership does and does not offer, in the writer's facts, would close it).
+
+**Not covered:** many callers with the model deciding (about 60 to 70% more model requests per turn than the 1000-caller sizing in section 105 assumed), whether the model's own decisions pick the wrong look-up more often than the rules (the six questions are not a measurement), and the model-decides setting with the real booking flow.

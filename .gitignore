@@ -14,6 +14,7 @@ recordings/
 
 # local PostgreSQL data (pgserver)
 data/pg_*/
+data/redis/
 
 # the local stock database (python -m dealer_core.inventory import ...)
 data/*.db

@@ -6,13 +6,16 @@
 #            up to 72 for an 800-caller spike; start at 36; CPU nodes (3-4 cores, 6-8 GB each)
 #   model    vLLM, 2+ GPU replicas (one can fail); requests are batched, ~10-20% of callers wait on it at any moment
 #   stt      Whisper on a GPU, batched for every worker (OpenAI transcription API); workers then run no recognizer of their own
-#   database managed PostgreSQL (bookings + call snapshots + worker registry)
+#   database managed PostgreSQL (bookings and stock)
+#   state    managed Redis (the workers' load reports that the router reads, and the call snapshots kept a day); no persistence needed, a lost snapshot only means a
+#            returning visitor starts a fresh conversation. The address in the secret below is a placeholder: use your managed Redis (scripts/run_cluster.py --redis runs the same on one machine)
 ---
 apiVersion: v1
 kind: Secret
 metadata: { name: voice-db }
 stringData:
   DATABASE_URL: postgresql://agmc:CHANGE-ME@postgres.internal:5432/agmc
+  STATE_URL: redis://redis.internal:6379/0
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -83,7 +86,7 @@ spec:
           image: agmc/voice:RELEASE_TAG
           env:
             - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
-            - { name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }
+            - { name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: STATE_URL } } }
             - { name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }
             - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
             - { name: VA__VOICE__STT_URL, value: "http://stt-server:8000/v1" }        # recognition on the GPU service, not in the worker
@@ -130,7 +133,7 @@ spec:
       containers:
         - name: router
           image: agmc/voice:RELEASE_TAG
-          env: [{ name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: DATABASE_URL } } }]
+          env: [{ name: STATE_URL, valueFrom: { secretKeyRef: { name: voice-db, key: STATE_URL } } }]
           command: ["python", "-m", "dealer_core.gateway", "--host", "0.0.0.0", "--port", "8760", "--origin", "https://www.agmc.ae"]
           ports: [{ containerPort: 8760 }]
           readinessProbe: { httpGet: { path: /health, port: 8760 } }
