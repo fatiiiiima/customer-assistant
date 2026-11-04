@@ -91,6 +91,8 @@ async def one_call_hf(url: str, clips: list[np.ndarray], car: str | None, tag: s
                         out.setdefault("agent_lines", []).append(e["text"])
                 elif e["type"] == "busy":
                     out["status"] = "busy"
+                elif e["type"] == "booking":
+                    out.setdefault("bookings", []).append(e)              # the server booked a test drive during this call
 
         task = asyncio.create_task(reader())
         silence = np.zeros(FRAME, dtype=np.int16).tobytes()

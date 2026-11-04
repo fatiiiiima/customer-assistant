@@ -3233,3 +3233,32 @@ At 400 the 4 real conversations went from a median of 0.45 s to 7.2 s (90th perc
 What that is in machines: about 80 voice-server copies (about 160 cores), the recogniser as 45 Qwen3 copies or 15 Parakeet copies on Macs, or a GPU server that batches (sections 104 and 101), 72 workers, and Bedrock quota for about 100 requests a second (1000 callers, a turn about every 15 s, 1.4 to 1.55 model requests a turn, section 102). Half of that collapses.
 
 **Not covered:** real audio from 1000 callers, the real recogniser and voice under that load, workers at 16 calls each (63 processes), the router with 63 workers, Bedrock beyond 60 requests a second, and a run on rented machines. The routes to those are in section 99.
+
+
+## 106. A script with different kinds of user at once (4 Nov, the boss: "make a python script with different task agents (browsing the webpage, talking to the agent, booking a test drive etc) * N and then run that python script")
+
+`scripts/user_journeys.py` runs three kinds of simulated person together: **browse** (opens the site's pages with a 2 to 8 s pause to read each, loading a page's own files on the first visit only, like a browser with an empty then warm cache), **talk** (calls the agent with one of the load test's conversations, hangs up, browses, calls again) and **book** (a call whose day, time, name and number are made fresh each time, the number always starting 05599, ending in a yes; counted as booked only when the server sends its booking message). Counts of each are set with `--browse --talk --book`. The report is per kind: page and file times and failures, calls completed, refused or failed, the wait from the end of the caller's words to the first sound, bookings made, the most calls open at once, and processor and memory of our processes. Tests: `tests/unit/test_user_journeys.py`. `scripts/portal_call.py` now also records a booking message from the server.
+
+**Why it is a better picture than a connection count.** On a real site most people only browse. 1000 people on the site is 1000 browsers and a few dozen calls open at the same moment, not 1000 calls.
+
+| | Run 1: real recogniser, voice and model | Run 2: stand-in recogniser and voice, real model |
+|---|---|---|
+| People | 308 (300 browsing, 4 talking, 4 booking) | 1000 (970 browsing, 20 talking, 10 booking) |
+| Time | 20 s to arrive, 180 s of use | 90 s to arrive, 240 s of use |
+| Page requests / failed | 11,578 / 0 (median 5 ms) | 56,147 / 0 (median 3 ms, 99th percentile 62 ms) |
+| Files requested / failed | 4,597 / 0 | 14,951 / 0 |
+| Calls completed / refused or failed | 19 / 0 | 110 / 0 |
+| Most calls open at once | 8 | 30 |
+| Wait to first sound, talk calls | median 1.00 s, 90th percentile 1.68 s, over 2 s 3% | median 0.44 s, 90th percentile 1.21 s, over 2 s 1.3% |
+| Wait to first sound, booking calls | median 0.87 s, 90th percentile 1.51 s, over 2 s 3% | median 0.44 s, 90th percentile 1.17 s, over 2 s 1.4% |
+| Test drives booked | 8 of 9 booking calls | 0 of 32 (the stand-in recogniser answers canned words, so no booking can complete) |
+| Machine processor, average | 27% of 12 cores | 41% of 12 cores |
+| Workers (3 or 4), memory | up to 3.6 GB | up to 6.1 GB |
+
+Run 1 shows the real things work together (a booking really completes) and run 2 shows the rest of the system holds a 1000-person site with 30 calls open at once. Run 2's waits are shorter than run 1's because the stand-ins answer faster than the real recogniser and voice; compare only within a run.
+
+**Found on the way:** a first version used the same name, number and time for every booking call and the server correctly refused all but the first as a duplicate ("You already have a test drive for this car"); the booking calls are now unique. Test drives booked by these runs are in the local cluster database (numbers starting 05599, plus a few earlier test numbers).
+
+**Not covered:** more than 30 calls at once (the Mac's limit with the real services is about 8 to 12; with the stand-ins about 30 to 40), the real recogniser and voice under the 1000-person run, browsing against a deployed site (the local site server is a single small program and answered in about 3 to 5 ms), bookings under load with the real recogniser, and anything beyond one machine.
+
+**To run it:** `.venv/bin/python scripts/user_journeys.py --browse 970 --talk 20 --book 10 --ramp-secs 90 --duration-secs 240` with the cluster (`run_cluster.py`) and the site running.

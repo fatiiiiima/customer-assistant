@@ -98,7 +98,7 @@ def processes() -> dict[str, tuple[float, float]]:
     out: dict[str, list[float]] = {}
     for p in psutil.process_iter(["cmdline"]):
         text = " ".join(p.info["cmdline"] or [])
-        g = group_of(p.info["cmdline"]) or ("stand-in services" if "stub_services" in text else "these callers (this script)" if "soak_test.py" in text
+        g = group_of(p.info["cmdline"]) or ("stand-in services" if "stub_services" in text else "these callers (this script)" if ("soak_test.py" in text or "user_journeys.py" in text)
                                             else "database (PostgreSQL)" if "postgres" in text.lower() and "pgserver" in text.lower() else None)
         if not g:
             continue
