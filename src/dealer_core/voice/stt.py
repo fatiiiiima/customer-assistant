@@ -17,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ..shared import usage
+
 SAMPLE_RATE = 16000
 MAX_TOKENS_PER_SEC = 12      # Whisper writes ~3-6 tokens per second of speech (digits said one by one are the most); more than this is a loop, not speech
 MIN_TOKENS = 24
@@ -27,11 +29,20 @@ def token_cap(audio_seconds: float) -> int:
     return min(440, max(MIN_TOKENS, int(audio_seconds * MAX_TOKENS_PER_SEC) + 16))      # Whisper's own ceiling is 448
 
 
-def is_degenerate(text: str, audio_seconds: float) -> bool:
-    """A transcript that is Whisper looping, not speech: one punctuation mark or letter repeated many times, or far more text than the audio can hold."""
+def is_degenerate(text: str, audio_seconds: float | None) -> bool:
+    """A transcript that is Whisper looping, not speech: one punctuation mark or letter repeated many times, or far more text than the audio can hold.
+    `audio_seconds` None = the length is not known: only the repeats count (2 Nov: with 0.0 any sentence over 65 characters was a "loop")."""
     if re.search(r"([^\w\s])\1{5,}", text) or re.search(r"(\w)\1{9,}", text):
         return True
-    return len(text) > 25 * max(audio_seconds, 1.0) + 40
+    return audio_seconds is not None and len(text) > 25 * max(audio_seconds, 1.0) + 40
+
+
+def is_word_list_echo(text: str, names: list[str]) -> bool:
+    """The recogniser wrote the hot-word list it was given instead of what was said (Qwen3-ASR does this for a clip with no speech in it, 2 Nov): four or more
+    pieces, nearly all of them names from the list. A caller naming two cars ("Camry, Yaris") is not one."""
+    known = {n.lower() for n in names}
+    pieces = [p.strip().lower() for p in re.split(r"[,.;]", text) if p.strip()]
+    return len(pieces) >= 4 and sum(p in known for p in pieces) / len(pieces) >= 0.8
 
 
 def hotword_terms(path: Path) -> list[str]:
@@ -106,6 +117,9 @@ def wav_bytes(pcm16: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
+HOTWORDS_SENT = 200                             # the most names sent as the model's hot-word list (voice.stt_hotwords_max). Was 45: with a 95-name stock Toyota and its models were cut off (section 91). Each 50 names cost about 50 ms
+
+
 class RemoteWhisper:
     """Recognition on a shared server with the OpenAI transcription API (`POST {url}/audio/transcriptions`): vLLM serving a Whisper model,
     speaches / faster-whisper-server, or any compatible server on the company's GPUs.
@@ -115,15 +129,22 @@ class RemoteWhisper:
     Same interface as WhisperOpenVino. A server error or timeout is "nothing heard": the caller is asked to say it again, the call goes on."""
 
     def __init__(self, url: str, model: str, timeout_s: float = 3.0, hotwords: list[str] | None = None, language: str = "en",
-                 max_parallel: int = 64, client=None) -> None:
+                 max_parallel: int = 64, client=None, hotwords_field: bool = False, hotwords_max: int = HOTWORDS_SENT) -> None:
         import httpx
 
         self.base = url.rstrip("/")
         self.model, self.timeout_s, self.language = model, timeout_s, language
         self.default_prompt = ", ".join((hotwords or [])[:60]) or None
+        # hotwords_field (voice.stt_hotwords_field): for a server that takes the car names as the model's hot-word list (scripts/qwen3_asr_server.py). The turn's `hotwords` field carries
+        # hotword_source() (the stock's names, read afresh each turn by the pipeline; else the configured list) and the hint is NOT sent: that model does worse with the hint's sentences.
+        self.hotwords_field, self.hotword_source = hotwords_field, None
+        self.hotwords_max = max(1, hotwords_max)
+        self.fixed_hotwords = [h for h in (hotwords or [])[:self.hotwords_max]]
+        self.ignores_prompt = hotwords_field                       # so a retry "with another hint" would be the same request (see services.EchoGuard)
         self.name = f"remote-whisper:{model}@{self.base}"
         self.client = client or httpx.Client(timeout=timeout_s, limits=httpx.Limits(max_connections=max_parallel, max_keepalive_connections=max_parallel))
         self.errors = 0
+        self.word_list_echoes = 0                                  # clips whose "words" were the hot-word list written back (dropped as no speech)
 
     def warm_up(self) -> None:
         """Fails start-up loudly if the server is not there (a worker that cannot hear must not take calls)."""
@@ -131,14 +152,30 @@ class RemoteWhisper:
 
     def _post(self, wav: bytes, prompt: str | None, raise_errors: bool = False) -> str:
         data = {"model": self.model, "language": self.language, "response_format": "json", "temperature": "0"}
-        if prompt or self.default_prompt:
+        sent: list[str] = []
+        if self.hotwords_field:
+            try:
+                names = (self.hotword_source() if self.hotword_source else None) or self.fixed_hotwords
+            except Exception:  # noqa: BLE001 - the stock could not be read: the configured list, never a failed turn
+                names = self.fixed_hotwords
+            if names:
+                sent = names[:self.hotwords_max]
+                data["hotwords"] = ", ".join(sent)
+        elif prompt or self.default_prompt:
             data["prompt"] = prompt or self.default_prompt
+        usage.add("stt.request")
+        usage.add("stt.audio_s", max(0, len(wav) - 44) / 2 / SAMPLE_RATE)
         try:
             r = self.client.post(f"{self.base}/audio/transcriptions", data=data, files={"file": ("turn.wav", wav, "audio/wav")}, timeout=self.timeout_s)
             r.raise_for_status()
-            return str(r.json().get("text", "")).strip()
+            text = str(r.json().get("text", "")).strip()
+            if sent and is_word_list_echo(text, sent):                      # no speech in the clip: it is not a turn
+                self.word_list_echoes += 1
+                return ""
+            return text
         except Exception:
             self.errors += 1
+            usage.add("stt.error")
             if raise_errors:
                 raise
             return ""

@@ -61,3 +61,54 @@ def test_without_a_playback_model_the_server_s_view_is_used():
     b = BargeIn(None)
     assert not any(feed(b, [VADUserStartedSpeakingFrame(start_secs=0.1)] + [audio(0.05)] * 20))
     assert any(feed(b, [BotStartedSpeakingFrame(), VADUserStartedSpeakingFrame(start_secs=0.1)] + [audio(0.05)] * 20))
+
+
+# ------------------------------------------------------------------------------------------------ late barge-in (LateBargeIn)
+def late_setup(level=0.2, caller_levels=(0.2,)):
+    """A brain that has answered "Any Toyotas?" and a page 1.5 s into playing that reply."""
+    import asyncio
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from dealer_core.voice.bargein import LateBargeIn
+    from dealer_core.voice.heard import Playback
+
+    from .test_barge_in_history import LIST, QUESTION, Engine, brain_for
+
+    b = brain_for(Engine())
+    asyncio.run(b._answer("Any Toyotas?"))
+    b._level_of, b._background_below, b._caller_levels = (lambda: level), 0.25, list(caller_levels)
+    now = [100.0]
+    pb = Playback(clock=lambda: now[0])
+    for s in (LIST, QUESTION):
+        pb.sentence(s)
+        pb.audio(4.0, at=100.0)
+    now[0] = 101.5
+    b.playback, late = pb, LateBargeIn(b, pb)
+    return b, pb, late, lambda text: late.observe(TranscriptionFrame(text, "caller", "t"))
+
+
+def test_a_short_word_said_over_the_agent_stops_it_when_its_words_arrive():
+    """30 Oct, the owner: "it hears me but it continues speaking the full response, my barge in response gets printed, and then it replies to that barge in".
+    In recorded hands-free calls 47 of 132 stretches of speech over the agent did not stop it; "Tomorrow.", "no", "Porsche." and "Test drive." among them."""
+    for said in ("Tomorrow.", "no", "Porsche.", "Do you have any BMWs?"):
+        b, pb, late, hear = late_setup()
+        assert hear(said), said
+        assert b.session.history[-1][1].endswith("(interrupted)") and "RAV4" not in b.session.history[-1][1]     # only what the caller heard is kept
+        assert not pb.playing() and late.interruptions == 1
+
+
+def test_a_yes_a_thank_you_the_room_or_the_agents_own_words_do_not_stop_it():
+    from .test_barge_in_history import QUESTION
+
+    for said in ("Yeah.", "okay", "Thank you.", "Mm-hmm.", "um", "Thanks for watching!", QUESTION):
+        _, pb, late, hear = late_setup()
+        assert not hear(said) and pb.playing() and late.interruptions == 0, said
+    _, pb, late, hear = late_setup(level=0.03)                                     # under a quarter of the caller's usual level: someone else in the room
+    assert not hear("I'm going to drive a little bit.")
+
+
+def test_nothing_to_stop_once_the_reply_has_finished_playing():
+    b, pb, _, hear = late_setup()
+    pb.clock = lambda: 120.0
+    assert not hear("Tomorrow.") and b.session.history[-1][1].endswith("?")

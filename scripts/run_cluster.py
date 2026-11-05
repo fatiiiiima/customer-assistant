@@ -5,11 +5,15 @@ r"""The whole system on one machine, the way it runs in production across many: 
   Either, to check:     ... scripts/run_cluster.py --dry-run                      (prints what would start, starts nothing)
 
   database   PostgreSQL (pgserver, local; production: a managed PostgreSQL)      bookings, stock, call snapshots, worker registry
-  model      --backend openvino: python -m dealer_core.modelserver on :8001      one model, batched, for every worker (Intel GPU)
+  model      --backend bedrock:  Nemotron on Amazon Bedrock (dev only: the callers' words go to AWS; needs the key in .env) and the live settings of the owner's calls:
+                                 hands-free, --quality full; the rest with --set VA__VOICE__MODEL_ONLY=true ... (repeat it), the recogniser with --set VA__VOICE__STT_URL=...
+             --backend openvino: python -m dealer_core.modelserver on :8001      one model, batched, for every worker (Intel GPU)
              --backend ollama:   the Ollama app on :11434 (started by you)        Apple chips, or any machine without an Intel GPU
              (default auto: openvino on Intel / AMD processors, ollama otherwise; production: vLLM)
   workers    python -m dealer_core.server on :8765, :8766, ...                    each up to --calls-per-worker calls
   router     python -m dealer_core.gateway on :8760                                pages ask it which worker to use
+  redis      the workers' load reports and the call snapshots (kept a day, on disk in data/redis), not in PostgreSQL, which holds only the stock and bookings (--no-redis: back in
+             PostgreSQL; --redis-url: a Redis you already have)
   recognizer (with --stt-server) python -m dealer_core.sttserver on :8002          ONE speech recognizer for every worker (they use VA__VOICE__STT_URL), like a GPU server in production
 
 Needs the `cluster` extra (uv sync ... --extra cluster: pgserver and the PostgreSQL driver). The website is looked for next to this project
@@ -59,24 +63,52 @@ def log_tail(path: Path, lines: int = 15) -> str:
 
 
 def pick_backend(choice: str, machine: str | None = None) -> str:
-    """openvino (the shared OpenVINO model server, for an Intel GPU), ollama (everything else, e.g. Apple chips) or local (an OpenAI-compatible server you started)."""
-    if choice in ("openvino", "ollama", "local"):
+    """openvino (the shared OpenVINO model server, for an Intel GPU), ollama (everything else, e.g. Apple chips), local (an OpenAI-compatible server you started) or bedrock
+    (Nemotron on Amazon Bedrock, the way the owner's live calls run: ARCH_REVIEW section 99)."""
+    if choice in ("openvino", "ollama", "local", "bedrock"):
         return choice
     m = (machine if machine is not None else platform.machine()).lower()
     return "openvino" if m in ("x86_64", "amd64", "x86", "i386", "i686") else "ollama"
 
 
-def worker_cmd(i: int, backend: str, db_url: str, site: Path, first_port: int, calls: int, quality: str | None) -> list[str]:
-    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", {"openvino": "openvino_server", "local": "local_server"}.get(backend, "ollama"),
-           "--port", str(first_port + i), "--max-calls", str(calls), "--state-url", db_url, "--worker-id", f"w{i + 1}", "--site", str(site)]
+def worker_cmd(i: int, backend: str, db_url: str, site: Path, first_port: int, calls: int, quality: str | None, state_url: str = "") -> list[str]:
+    """`state_url` is where the workers report their load and keep call snapshots (a redis:// address); empty: the database, as before. Bookings and stock stay in `db_url`."""
+    tail = ["--port", str(first_port + i), "--max-calls", str(calls), "--state-url", state_url or db_url, "--worker-id", f"w{i + 1}", "--site", str(site)]
+    if backend == "bedrock":                                              # as the owner's live calls: the model writes the reply, the microphone stays open
+        return [PY, "-m", "dealer_core.server", "--agent", "--quality", quality or "full", "--hands-free", "--backend", "bedrock_nemotron", *tail]
+    cmd = [PY, "-m", "dealer_core.server", "--agent", "--prefix", "--backend", {"openvino": "openvino_server", "local": "local_server"}.get(backend, "ollama"), *tail]
     return cmd + (["--quality", quality] if quality else [])
 
 
 STT_PORT = 8002
+REDIS_PORT = 6390
 
 
-def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = "") -> dict[str, str]:
+def redis_server_cmd(port: int = REDIS_PORT, data_dir: Path | None = None) -> list[str] | None:
+    """The command that starts a local Redis for the workers' load reports and the call snapshots (None if redis-server is not installed). It keeps an append-only file in
+    data/redis (written once a second), so the conversations it holds, kept a day, are still there after Redis or the machine restarts."""
+    import shutil
+
+    exe = shutil.which("redis-server")
+    folder = data_dir or ROOT / "data" / "redis"
+    return [exe, "--port", str(port), "--bind", "127.0.0.1", "--dir", str(folder), "--save", "", "--appendonly", "yes", "--appendfsync", "everysec", "--daemonize", "no"] if exe else None
+
+
+def parse_sets(items: list[str] | None) -> dict[str, str]:
+    """--set KEY=VALUE (repeatable): environment for every worker (the VA__SECTION__KEY settings of config/default.yaml)."""
+    out = {}
+    for item in items or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise SystemExit(f"--set wants KEY=VALUE, not {item!r}")
+        out[key.strip()] = value
+    return out
+
+
+def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = "", extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {**os.environ, "DATABASE_URL": db_url}
+    if backend == "bedrock":
+        env.update({"VOICE_AGENT_ALLOW_CLOUD": "1", "VA__DIALOGUE__DECISION_BACKEND": "bedrock_nemotron", "VA__LLM__FALLBACKS": "[]"})
     if stt_url:
         env["VA__VOICE__STT_URL"] = stt_url                          # the workers then run no recognizer of their own (voice/stt.py RemoteWhisper)
     if backend == "ollama":
@@ -85,6 +117,7 @@ def worker_env(backend: str, db_url: str, stt_url: str = "", local_model: str = 
         env["VA__DIALOGUE__DECISION_BACKEND"] = "local_server"
         if local_model:
             env["VA__LLM__BACKENDS__LOCAL_SERVER__MODEL"] = local_model     # the name the server lists
+    env.update(extra or {})
     return env
 
 
@@ -124,17 +157,23 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--calls-per-worker", type=int, default=16)
     ap.add_argument("--first-port", type=int, default=8765)
-    ap.add_argument("--backend", choices=["auto", "openvino", "ollama", "local"], default="auto",
-                    help="the model: openvino = the shared OpenVINO server (Intel GPU), ollama = the Ollama app; auto picks by processor")
+    ap.add_argument("--backend", choices=["auto", "openvino", "ollama", "local", "bedrock"], default="auto",
+                    help="the model: openvino = the shared OpenVINO server (Intel GPU), ollama = the Ollama app, bedrock = Nemotron on Amazon Bedrock (dev only), "
+                         "local = a server you started; auto picks by processor")
+    ap.add_argument("--set", action="append", metavar="KEY=VALUE", help="an environment setting for every worker, e.g. --set VA__VOICE__HOLD_REPLY=true (repeatable)")
     ap.add_argument("--model", default="Qwen3-4B-Instruct-2507-int4-ov-nocal", help="openvino only: the model folder under models/ov")
     ap.add_argument("--site", type=Path, default=Path(os.environ.get("SITE_DIR") or ROOT.parent / "bmw-portal" / "site"),
                     help="the website's site folder (its data.js holds the cars); default: bmw-portal next to this project")
     ap.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""), help="an existing PostgreSQL; default: start one locally")
+    ap.add_argument("--redis-url", default="", help="the workers' load reports (the router's list) and the call snapshots live in Redis, not in the database that holds the stock and bookings. "
+                                                    "Default: start a local redis-server (it keeps its data in data/redis); with this, one you already have (redis://host:6379/0)")
+    ap.add_argument("--no-redis", action="store_true", help="keep them in the database instead, as before 5 Nov")
     ap.add_argument("--quality", default=None)
     ap.add_argument("--stt-server", action="store_true", help="run one shared speech recognizer (dealer_core.sttserver) instead of one Whisper per worker")
     ap.add_argument("--dry-run", action="store_true", help="print what would start, start nothing")
     a = ap.parse_args()
     backend = pick_backend(a.backend)
+    extra = parse_sets(a.set)
 
     if not (a.site / "data.js").exists():
         print(f"no website at {a.site} (its data.js): pass --site <the website's site folder>", flush=True)
@@ -144,14 +183,20 @@ def main() -> int:
         db = a.database_url or "<a local PostgreSQL, started by pgserver>"
         print(f"backend   {backend}" + (f"  (Ollama at {OLLAMA}, model {ollama_model()})" if backend == "ollama" else f"  (an OpenAI-compatible server you start, at {LOCAL_SERVER})" if backend == "local" else ""))
         print(f"database  {db}")
+        state = "" if a.no_redis else a.redis_url or f"redis://127.0.0.1:{REDIS_PORT}/0"
+        if not a.no_redis and not a.redis_url:
+            print("redis     " + (" ".join(redis_server_cmd() or []) or "redis-server is not installed (brew install redis)"))
+        if state:
+            print(f"state     {state}   (the workers' load reports and call snapshots; bookings and stock stay in the database)")
         if backend == "openvino":
             print("model     " + " ".join([PY, "-m", "dealer_core.modelserver", "--model", a.model, "--port", "8001"]))
         if a.stt_server:
             print("recogniz  " + " ".join([PY, "-m", "dealer_core.sttserver", "--port", str(STT_PORT)]) + f"   (workers: VA__VOICE__STT_URL=http://127.0.0.1:{STT_PORT}/v1)")
         for i in range(a.workers):
-            extra = {"ollama": "VA__DIALOGUE__DECISION_BACKEND=ollama ", "local": "VA__DIALOGUE__DECISION_BACKEND=local_server "}.get(backend, "")
-            print(f"worker{i + 1}   {extra}" + " ".join(worker_cmd(i, backend, db, a.site, a.first_port, a.calls_per_worker, a.quality)))
-        print("router    " + " ".join([PY, "-m", "dealer_core.gateway", "--state-url", db, "--port", "8760"]))
+            shown = {"ollama": "VA__DIALOGUE__DECISION_BACKEND=ollama ", "local": "VA__DIALOGUE__DECISION_BACKEND=local_server ",
+                     "bedrock": "VOICE_AGENT_ALLOW_CLOUD=1 VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron "}.get(backend, "") + "".join(f"{k}={v} " for k, v in extra.items())
+            print(f"worker{i + 1}   {shown}" + " ".join(worker_cmd(i, backend, db, a.site, a.first_port, a.calls_per_worker, a.quality, state)))
+        print("router    " + " ".join([PY, "-m", "dealer_core.gateway", "--state-url", state or db, "--port", "8760"]))
         return 0
 
     if backend == "ollama":
@@ -197,6 +242,21 @@ def main() -> int:
             db_url = pgserver.get_server(str(ROOT / "data" / "pg_cluster"), cleanup_mode="stop").get_uri()
         print(f"database  {db_url}", flush=True)
         base_env = {**os.environ, "DATABASE_URL": db_url}
+        state_url = "" if a.no_redis else a.redis_url
+        if not a.no_redis and not state_url:
+            cmd = redis_server_cmd()
+            if cmd is None:
+                print("redis-server is not installed: brew install redis (or pass --redis-url for one you have, or --no-redis to keep the state in the database)", flush=True)
+                return 1
+            (ROOT / "data" / "redis").mkdir(parents=True, exist_ok=True)
+            launch("redis", cmd, base_env)
+            time.sleep(1)
+            if procs["redis"][2].poll() is not None:
+                print("redis did not start: see logs/cluster/redis.log\n" + log_tail(logs / "redis.log"), flush=True)
+                return 1
+            state_url = f"redis://127.0.0.1:{REDIS_PORT}/0"
+        if state_url:
+            print(f"state     {state_url}   (load reports and call snapshots; bookings and stock stay in the database)", flush=True)
 
         if backend == "openvino":
             launch("model", [PY, "-m", "dealer_core.modelserver", "--model", a.model, "--port", "8001"], base_env)
@@ -216,7 +276,7 @@ def main() -> int:
             stt_url = f"http://127.0.0.1:{STT_PORT}/v1"
             print(f"recogniz  {stt_url}", flush=True)
         for i in range(a.workers):
-            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality), worker_env(backend, db_url, stt_url, local_model))
+            launch(f"worker{i + 1}", worker_cmd(i, backend, db_url, a.site, a.first_port, a.calls_per_worker, a.quality, state_url), worker_env(backend, db_url, stt_url, local_model, extra))
         print(f"starting {a.workers} workers (loading the speech models takes a minute or two)...", flush=True)
         started = 0
         for i in range(a.workers):
@@ -230,7 +290,7 @@ def main() -> int:
             print("no worker started: fix the error above and run this again", flush=True)
             return 1
 
-        launch("router", [PY, "-m", "dealer_core.gateway", "--state-url", db_url, "--port", "8760"], base_env)
+        launch("router", [PY, "-m", "dealer_core.gateway", "--state-url", state_url or db_url, "--port", "8760"], base_env)
         if not wait_http("http://127.0.0.1:8760/health", 60, proc=procs["router"][2]):
             print("the router did not start: logs/cluster/router.log ends with:\n" + log_tail(logs / "router.log"), flush=True)
             return 1

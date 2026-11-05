@@ -38,6 +38,58 @@ def hotword_groups(path: Path) -> dict[str, list[str]]:
     return groups
 
 
+def stock_names(vocab: dict[str, list[str]] | None, limit: int | None = None) -> list[str]:
+    """The makes and models in stock as the recogniser should hear them: "Toyota", "Land Cruiser", "RAV4" (a model with a digit in it in capitals). No repeats."""
+    names = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
+    names = list(dict.fromkeys(names))
+    return names[:limit] if limit else names
+
+
+_ACRONYM_MAKES = frozenset({"bmw", "gmc", "mg", "byd", "ds"})
+
+
+def proper_make(make: str) -> str:
+    """A make as it is written: "BMW", "GMC", "MG", "Land Rover", "Toyota"."""
+    return make.upper() if make.lower() in _ACRONYM_MAKES else make.title()
+
+
+def _model_word(tok: str, has_digit: bool, short_all: bool) -> str:
+    if tok.isdigit() or re.fullmatch(r"\d+[a-z]", tok):             # 911, 320i
+        return tok
+    m = re.fullmatch(r"([a-z]+)(\d.*)", tok)                         # RAV4, X5, Q7, Mazda3, QX60
+    if m:
+        letters, rest = m.groups()
+        return (letters.upper() if len(letters) <= 3 else letters.title()) + rest
+    if tok.isalpha() and (short_all or (has_digit and len(tok) <= 3)):    # ZS, CR-V, ES 350, GLE 450, C 300
+        return tok.upper()
+    return tok.title()                                                # Land Cruiser, Santa Fe, Model Y, X-Trail
+
+
+def proper_model(model: str) -> str:
+    """A model as it is written: "CR-V", "RAV4", "Mazda3", "Model 3", "ES 350", "GLE 450", "320i", "X-Trail", "Santa Fe", "Rio"."""
+    model = model.strip().lower()
+    parts = [p for p in re.split(r"[ -]", model) if p.isalpha()]
+    short_all = bool(parts) and all(len(p) <= 2 for p in parts)
+    has_digit = any(c.isdigit() for c in model)
+    return " ".join("-".join(_model_word(t, has_digit, short_all) for t in part.split("-")) for part in model.split(" "))
+
+
+def cased_names(vocab: dict[str, list[str]] | None) -> list[str]:
+    """The makes and models as they are WRITTEN ("BMW", "CR-V", "Macan"): what the recogniser's hot-word list holds. (stock_names, the Whisper hint's, is unchanged.)"""
+    names = [x for mk, models in (vocab or {}).items() for x in (proper_make(mk), *[proper_model(m) for m in models])]
+    return list(dict.fromkeys(names))
+
+
+def hotword_names(vocab: dict[str, list[str]] | None, in_play=(), limit: int | None = None) -> list[str]:
+    """The names given to a recogniser as its hot-word list: the makes in play in the call (searched for, shown, in focus) with their models first, then the rest of the stock in its
+    order, cut at `limit`. With the old cut at the first 45 names of an alphabetical list, Toyota and its models were never sent for a 95-name stock (2 Nov: "Yaris" heard as "yachtist")."""
+    vocab = vocab or {}
+    first = [mk for mk in dict.fromkeys(str(m).lower() for m in in_play) if mk in vocab]
+    names = cased_names({mk: vocab[mk] for mk in first}) + cased_names(vocab)
+    names = list(dict.fromkeys(names))
+    return names[:limit] if limit else names
+
+
 def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], vocab: dict[str, list[str]] | None = None) -> str:
     q = last_question(last_agent).lower()
     if state is State.CONTACT:                    # digits when a number is asked for; no hint for a name (a list of names made Whisper write a list of names)
@@ -47,7 +99,7 @@ def stt_prompt(state: State, last_agent: str, groups: dict[str, list[str]], voca
     said = _recent(last_agent)
     if state is State.SLOT or _ASKS_WHEN.search(q):
         return DAY_TIME + said                    # "...tomorrow I can do 9 AM or 2 PM": a bare "two PM" is then heard as that
-    stock = [x for mk, models in (vocab or {}).items() for x in (mk.title(), *[m.title() if not any(ch.isdigit() for ch in m) else m.upper() for m in models])]
+    stock = stock_names(vocab)
     seen: set[str] = set()
     cars = [x for x in stock + groups.get("makes", [])[:25] + groups.get("models", [])[:25] if not (x.lower() in seen or seen.add(x.lower()))][:60]   # what we actually sell comes first            # no place names: Whisper then hears "Abu Dhabi" in "hello"
     return ", ".join(cars[:45] + ["white, black, grey, silver, red, blue", "the second one", "test drive", "tomorrow", "today"]) + said

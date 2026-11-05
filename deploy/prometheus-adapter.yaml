@@ -9,3 +9,10 @@ rules:
       resources: { overrides: { namespace: { resource: namespace } } }
       name: { as: voice_demand_ratio }
       metricsQuery: '(sum(voice_calls_active) + sum(voice_router_turned_away_30s or vector(0))) / clamp_min(sum(voice_call_cap), 1)'
+
+    # model_requests_per_replica = requests the model servers hold (running + queued), per server. The HPA on model-server (k8s/voice.yaml) keeps it near 64: the model
+    # server answers at full speed up to about that many requests at once (the simulation's `model_slots`) and everyone slows beyond it. Needs vLLM's /metrics scraped.
+    - seriesQuery: 'vllm:num_requests_running'
+      resources: { overrides: { namespace: { resource: namespace } } }
+      name: { as: model_requests_per_replica }
+      metricsQuery: '(sum(vllm:num_requests_running) + sum(vllm:num_requests_waiting)) / count(vllm:num_requests_running)'

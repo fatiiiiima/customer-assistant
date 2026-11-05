@@ -49,6 +49,10 @@ class NluBackend(ABC):
     def warm_up(self) -> None:
         """Optional: pre-compile grammars / load weights so the first real caller does not pay the cold-start cost."""
 
+    def warm_connection(self) -> bool:
+        """Optional, cheap, never raises: make sure a connection to a remote model is open before a call's first request. False when there is nothing to warm."""
+        return False
+
     def lead_in(self, system: str, user: str, max_tokens: int = 36, temperature: float | None = None, deadline_s: float | None = None) -> str:
         """Free text, a few words: the conversational lead-in for hybrid replies (verified by the caller before use)."""
         raise BackendError(f"{self.name} cannot write lead-ins")

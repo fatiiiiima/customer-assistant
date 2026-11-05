@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autoscaling walkthrough</title>
+<style>
+:root{--text-primary:#1f1e1d;--text-secondary:#5f5e5a;--surface-0:#faf9f5;--surface-1:#f1efe8;--border:rgba(31,30,29,.15);--border-strong:rgba(31,30,29,.3);--radius:8px}
+@media (prefers-color-scheme: dark){:root{--text-primary:#f1efe8;--text-secondary:#b4b2a9;--surface-0:#1f1e1d;--surface-1:#2c2c2a;--border:rgba(241,239,232,.15);--border-strong:rgba(241,239,232,.3)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-0);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.6}
+main{max-width:760px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;font-weight:500;margin:0 0 4px}
+h2{font-size:16px;font-weight:500;margin:28px 0 6px}
+.sub{font-size:14px;color:var(--text-secondary);margin:0 0 16px}
+button,select{font:inherit;font-size:14px;color:var(--text-primary);background:transparent;border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 12px;cursor:pointer}
+button:hover{background:var(--surface-1)}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.clk{font-variant-numeric:tabular-nums;font-size:14px;color:var(--text-secondary);min-width:52px}
+.cap{margin:12px 0 4px;padding:10px 12px;border-radius:var(--radius);background:var(--surface-1);font-size:14px;line-height:1.5;min-height:92px}
+.cap b{font-weight:500}.cap .k{color:var(--text-secondary)}
+svg{width:100%;height:auto;display:block;margin-top:8px}
+.nd rect{fill:var(--surface-1);stroke:var(--border-strong);stroke-width:.6}
+.nd.ext rect{stroke-dasharray:none}
+.nd.on rect{stroke:#1D9E75;stroke-width:2;fill:rgba(29,158,117,.14)}
+.nd.ext.on rect{stroke:#7F77DD;fill:rgba(127,119,221,.16)}
+.nd text{fill:var(--text-primary);font-size:12px}.nd text.s{fill:var(--text-secondary);font-size:10px}
+.grp{fill:none;stroke:var(--border-strong);stroke-width:.6;stroke-dasharray:4 3}
+.gl{fill:var(--text-secondary);font-size:10px}
+.lk{fill:none;stroke:var(--border-strong);stroke-width:1.1;marker-end:url(#ar)}
+.lk.on{stroke:#1D9E75;stroke-width:2.2;marker-end:url(#ag)}
+.lk.two{marker-start:url(#ar)}
+.lk.two.on{marker-start:url(#ag)}
+.lk.dash{stroke-dasharray:3 3}
+.lt{fill:var(--text-secondary);font-size:9px}
+.gantt{position:relative;margin-top:14px}
+.row{display:grid;grid-template-columns:128px 1fr;gap:8px;align-items:center;margin:3px 0;font-size:12px}
+.row .nm{color:var(--text-secondary);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk{position:relative;height:16px;background:var(--surface-1);border-radius:3px}
+.bx{position:absolute;top:0;height:100%;border-radius:3px;opacity:.28;min-width:2px}
+.bx.done{opacity:1}
+.cur{position:absolute;top:0;bottom:18px;width:1px;background:var(--text-primary);opacity:.7;pointer-events:none}
+.ax{display:grid;grid-template-columns:128px 1fr;gap:8px;font-size:11px;color:var(--text-secondary)}
+.ax div+div{position:relative;height:14px}.ax span{position:absolute;transform:translateX(-50%)}
+.key{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin-top:8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.s{background:var(--surface-1);border-radius:var(--radius);padding:8px 10px}
+.s b{display:block;font-size:18px;font-weight:500;font-variant-numeric:tabular-nums}
+.s span{font-size:12px;color:var(--text-secondary)}
+.tw{overflow-x:auto;margin-top:6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:640px}
+th,td{padding:6px 8px;text-align:left;vertical-align:top;border-bottom:0.5px solid var(--border)}
+th{font-weight:500;color:var(--text-secondary);font-size:12px}
+td.t{white-space:nowrap;font-variant-numeric:tabular-nums}
+ol.life{margin:6px 0 0;padding-left:20px;font-size:13.5px}ol.life li{margin:3px 0}
+.note{font-size:12px;color:var(--text-secondary);margin-top:16px}
+@media (max-width:560px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.row{grid-template-columns:92px 1fr}.ax{grid-template-columns:92px 1fr}}
+
+.stage{margin:10px 0 2px;padding:12px 14px;border-radius:var(--radius);background:var(--surface-1);font-size:14px;line-height:1.55;min-height:150px}
+.stage .h{font-weight:500;font-size:15px;margin-bottom:4px}
+.stage .fl{font-size:12.5px;color:var(--text-secondary);margin:2px 0 6px;font-variant-numeric:tabular-nums}
+.stage .fl b{color:var(--text-primary);font-weight:500}
+.how{font-size:12.5px;color:var(--text-secondary);margin-top:8px;line-height:1.5}.how b{color:var(--text-primary);font-weight:500}
+.bd circle{fill:var(--surface-0);stroke:var(--border-strong);stroke-width:1}.bd text{fill:var(--text-secondary);font-size:9px;font-weight:500}.bd.on circle{fill:#1D9E75;stroke:#1D9E75}.bd.on text{fill:#fff}.bd.warn.on circle{fill:#D85A30;stroke:#D85A30}
+.lt{paint-order:stroke;stroke:var(--surface-0);stroke-width:3px;stroke-linejoin:round}
+.dots{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:4px}
+.dots i{width:9px;height:9px;border-radius:50%;background:var(--border-strong);cursor:pointer;display:inline-block}
+.dots i.on{background:#1D9E75}
+.nd.sh rect{fill:none;stroke:var(--border);stroke-width:.6}
+.nd.warn.on rect{stroke:#D85A30;fill:rgba(216,90,48,.12)}
+.lk.dash{stroke-dasharray:3 3}
+.lk.warn.on{stroke:#D85A30;marker-end:url(#ao)}
+.lt.on{fill:var(--text-primary)}
+.ch{margin-top:10px}.ch svg{margin-top:2px}
+.axl{fill:var(--text-secondary);font-size:10px}
+.gridl{stroke:var(--border);stroke-width:.5}
+.pods{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:8px}
+.pod{aspect-ratio:1;border-radius:3px;background:var(--surface-1);border:0.5px solid var(--border)}
+.pod.st{background:#C98A12;opacity:.55;animation:pl 1.2s infinite}
+.pod.rd{background:#1D9E75}
+.pod.dr{background:#D85A30}
+@keyframes pl{50%{opacity:.25}}
+.log{font-size:12.5px;margin-top:8px;border-top:0.5px solid var(--border);padding-top:6px;min-height:120px}
+.log div{padding:1px 0;color:var(--text-secondary)}.log div:last-child{color:var(--text-primary)}
+.log .t{display:inline-block;width:54px;font-variant-numeric:tabular-nums;color:var(--text-secondary)}
+.now{font-size:13.5px;margin-top:8px;padding:8px 10px;border-radius:var(--radius);background:var(--surface-1);min-height:44px}
+main{max-width:820px}
+</style>
+</head>
+<body>
+<main>
+<h1>How the workers scale up and down</h1>
+<p class="sub">What sends what to where, step by step.</p>
+
+<h2>Who tells whom</h2>
+<div class="bar">
+<button onclick="prev()">Back</button>
+<button id="pp" onclick="toggle()">Pause</button>
+<button onclick="next()">Next</button>
+<span class="dots" id="dots"></span>
+</div>
+<div class="stage" id="stage"></div>
+<svg viewBox="0 0 800 440" role="img" aria-label="The router, the workers, Redis and the autoscaler, and what each sends to the others">
+<defs>
+<marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#888780"/></marker>
+<marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#1D9E75"/></marker>
+<marker id="ao" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#D85A30"/></marker>
+</defs>
+<rect class="grp" x="200" y="122" width="400" height="176" rx="10"/>
+<text class="gl" x="210" y="137">Workers: 8 to 72 pods, up to 16 calls each</text>
+<g id="links"></g>
+<g id="nodes"></g>
+<g id="badges"></g>
+</svg>
+<div class="key">
+<span><i class="sw" style="background:#1D9E75"></i>Active in this step</span>
+<span><i class="sw" style="background:#7F77DD"></i>A separate server, used by every worker</span>
+<span><i class="sw" style="background:#D85A30"></i>Scaling down</span>
+</div>
+<div class="how"><b>How to read the arrows.</b> The number on an arrow is the step in the list above. The arrowhead points to where the information goes. A <b>solid</b> arrow means the sender starts it: it sends, or it calls. A <b>dashed</b> arrow means the receiver asked for it: it reads or pulls. The words on the arrow say what travels. The number is the first step that uses the arrow: the report to Redis (3) is also part of steps 5, 11 and 12, and the Kubernetes arrow (10) is also used in step 12.</div>
+
+<h2>What each part does</h2>
+<div class="tw"><table>
+<thead><tr><th>Part</th><th>Sends</th><th>To</th><th>How often</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Caller's page</td><td>GET /assign</td><td>Router</td><td class="t">once per call</td><td>Asks for a worker with room; gets an address, or "busy" and falls back to text chat</td></tr>
+<tr><td>Caller's page</td><td>The call, as a WebSocket</td><td>The worker it was given</td><td class="t">the whole call</td><td>Audio goes straight to the worker, never through the router</td></tr>
+<tr><td>Worker</td><td>Its id, address, calls now, call cap, draining</td><td>Redis</td><td class="t">every 2 s, and when a call starts or ends</td><td>The entry expires after 6 s, so a dead worker drops out by itself</td></tr>
+<tr><td>Router</td><td>(reads) the whole worker list</td><td>from Redis</td><td class="t">every 0.5 s</td><td>Kept in memory, so an assignment never waits for Redis</td></tr>
+<tr><td>Worker</td><td>(looks up, then saves) the call's conversation under its call id</td><td>Redis</td><td class="t">on connect, then after every turn</td><td>Kept 24 hours. Any worker can resume a call, because the memory is in Redis, not in the worker. The router never looks at it</td></tr>
+<tr><td>Worker</td><td>Its own call cap, from its own reply times</td><td>Redis, in the report</td><td class="t">adjusted every 5 s</td><td>Slow answers (90th percentile over 1 s) cut the cap to 75%; fast ones raise it by one, up to 16</td></tr>
+<tr><td>Worker</td><td>The caller's audio, to get words</td><td>The recogniser: its own server, Qwen3-ASR or Parakeet on the Mac's GPU (plan, never run: Whisper on a cloud GPU)</td><td class="t">every turn</td><td>One clip at a time per copy: about 23 callers per Qwen3 copy, about 89 per Parakeet copy</td></tr>
+<tr><td>Worker</td><td>The question, to get a decision and a reply</td><td>The model: Nemotron on Amazon Bedrock, run by AWS (plan, never run: vLLM with Qwen3-14B on our own GPUs)</td><td class="t">every turn</td><td>If this worker's own requests to the model get slow, the quality governor steps down to code-written facts, or skips the model for a share of turns</td></tr>
+<tr><td>Worker</td><td>The text to say, to get speech</td><td>The voice: its own server, Pocket-TTS on the Mac's CPU (plan, never run: the voice inside each worker)</td><td class="t">every sentence</td><td>One sentence at a time per copy</td></tr>
+
+<tr><td>Prometheus</td><td>(asks for and reads) calls in progress, call cap, reply times; callers turned away in the last 30 s</td><td>from every worker and the router, on their /metrics pages</td><td class="t">every 15 s</td><td>Callers who were told "busy" are invisible to the workers, so the router counts them</td></tr>
+<tr><td>Metrics adapter</td><td>Demand ratio = (calls + turned away) / all caps</td><td>Autoscaler</td><td class="t">on request</td><td>One number for "how full are we, counting those we refused"</td></tr>
+<tr><td>Autoscaler</td><td>A new number of pods</td><td>Kubernetes</td><td class="t">every 15 s</td><td>Target ratio 0.7: add pods above it (at most double every 15 s, up to 72), remove below it (2 a minute, after 5 minutes, down to 8)</td></tr>
+<tr><td>Kubernetes</td><td>Start a pod, or stop one (SIGTERM)</td><td>Workers</td><td class="t">as asked</td><td>A stopping worker marks itself draining, finishes its calls (it waits up to 15 minutes; a call still going then is cut and carries on from Redis on another worker) and exits</td></tr>
+</tbody></table></div>
+<p class="note">From <code>deploy/k8s/voice.yaml</code>, <code>deploy/prometheus-adapter.yaml</code>, the router (<code>gateway/__main__.py</code>), the worker (<code>server/app.py</code>, <code>server/admission.py</code>, <code>agent/governor.py</code>) and the alerts in <code>deploy/alerts.yml</code>. The scaling rules here have not been run on a real cluster: the deployment file is untested end to end, and the simulation of section 103 of the architecture notes models the same rules against measured speeds.</p>
+</main>
+<script>
+const SVG = "http://www.w3.org/2000/svg";
+function mk(tag, attrs, parent) { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+
+// ---------------------------------------------------------------- the diagram
+// id, x, y, w, h, title, subtitle, kind (0 ours, 1 shared service, 2 stack of copies)
+const NODES = [
+  ["page", 10, 20, 110, 60, "Caller's page", "browser · WebSocket", 0],
+  ["router", 230, 20, 130, 60, "Router (2 copies)", "GET /assign · in memory", 0],
+  ["redis", 470, 20, 170, 60, "Redis", "worker list · call memory", 0],
+  ["worker", 215, 150, 360, 48, "Worker pod", "calls · speech detector · turn model · engine", 2],
+  ["cap", 215, 238, 170, 46, "Call cap", "p90 over 1 s: cap × 0.75", 0],
+  ["gov", 410, 238, 165, 46, "Quality governor", "model busy: shorter replies", 0],
+  ["model", 662, 146, 124, 40, "Model", "Bedrock · AWS runs it", 1],
+  ["stt", 662, 196, 124, 40, "Recogniser", "Qwen3 / Parakeet", 1],
+  ["tts", 662, 246, 124, 40, "Voice", "Pocket-TTS server", 1],
+  ["prom", 150, 350, 120, 56, "Prometheus", "scrapes /metrics", 0],
+  ["adapter", 330, 350, 120, 56, "Metrics adapter", "demand ratio", 0],
+  ["hpa", 510, 350, 120, 56, "Autoscaler (HPA)", "target 0.7 · 8 to 72", 0],
+  ["k8s", 690, 350, 100, 56, "Kubernetes", "starts / stops pods", 0]
+];
+// id, path, pull (dashed: the receiver asks for it), step number, badge x, y, [label lines: text, x, y, anchor], warn (orange in the scale-down step)
+const LINKS = [
+  ["l_ask", "M120,38 L230,38", 0, 1, 175, 38, [["asks for a worker", 175, 28, "middle"]]],
+  ["l_addr", "M230,62 L120,62", 0, 1, 175, 62, [["address, or busy", 175, 78, "middle"]]],
+  ["l_call", "M40,80 L40,174 L215,174", 0, 2, 40, 128, [["the call:", 48, 118, "start"], ["audio in,", 48, 128, "start"], ["speech out", 48, 138, "start"]]],
+  ["l_report", "M330,150 L330,110 L500,110 L500,80", 0, 3, 420, 110, [["reports its load, every 2 s", 420, 102, "middle"]]],
+  ["l_mem", "M560,142 L560,80", 0, 3, 560, 112, [["call memory:", 572, 100, "start"], ["looked up on connect,", 572, 110, "start"], ["saved every turn", 572, 120, "start"]]],
+  ["l_read", "M470,50 L360,50", 1, 4, 415, 50, [["reads the list", 415, 40, "middle"], ["every 0.5 s", 415, 69, "middle"]]],
+  ["l_cap", "M300,238 L300,198", 0, 5, 300, 218, [["new cap,", 308, 214, "start"], ["every 5 s", 308, 224, "start"]]],
+  ["l_gov", "M492,238 L492,198", 0, 6, 492, 218, [["quality level", 500, 218, "start"]]],
+  ["l_model", "M587,158 L662,162", 0, 6, 618, 160, [["question, reply", 618, 150, "middle"]]],
+  ["l_stt", "M587,174 L662,214", 0, 6, 618, 194, [["audio, words", 598, 177, "start"]]],
+  ["l_tts", "M587,190 L662,264", 0, 6, 618, 227, [["text, speech", 626, 252, "end"]]],
+  ["l_sw", "M400,298 L400,326 L210,326 L210,350", 1, 7, 305, 326, [["Prometheus asks /metrics", 410, 313, "start"], ["every 15 s: calls, cap, times", 410, 323, "start"]]],
+  ["l_sr", "M250,80 L250,104 L125,104 L125,378 L150,378", 1, 7, 125, 250, [["router /metrics", 117, 232, "end"], ["every 15 s", 117, 242, "end"]]],
+  ["l_p2a", "M270,378 L330,378", 1, 8, 300, 378, [["stored", 300, 360, "middle"], ["numbers", 300, 370, "middle"]]],
+  ["l_a2h", "M450,378 L510,378", 1, 9, 480, 378, [["demand", 480, 360, "middle"], ["ratio", 480, 370, "middle"]]],
+  ["l_h2k", "M630,378 L690,378", 0, 10, 660, 378, [["new pod", 660, 360, "middle"], ["count", 660, 370, "middle"]]],
+  ["l_k8s", "M730,350 L590,298", 0, 10, 665, 324, [["start or stop pods", 668, 307, "middle"]], 1]
+];
+const TWO = new Set(["l_call", "l_model", "l_stt", "l_tts", "l_mem"]);     // arrows that carry something both ways: arrowheads at both ends
+const linkEl = {}, nodeEl = {}, textEl = {}, badgeEl = {};
+LINKS.forEach(([id, d, pull, n, bx, by, labels, warn]) => {
+  linkEl[id] = mk("path", { d, class: "lk" + (pull ? " dash" : "") + (warn ? " warn" : "") + (TWO.has(id) ? " two" : ""), id }, document.getElementById("links"));
+  textEl[id] = labels.map(([text, x, y, anchor]) => { const e = mk("text", { x, y, class: "lt", "text-anchor": anchor }, document.getElementById("links")); e.textContent = text; return e; });
+  const g = mk("g", { class: "bd" }, document.getElementById("badges"));
+  mk("circle", { cx: bx, cy: by, r: 7.5 }, g);
+  mk("text", { x: bx, y: by + 3, "text-anchor": "middle" }, g).textContent = n;
+  badgeEl[id] = g;
+});
+NODES.forEach(([id, x, y, w, h, t, s, kind]) => {
+  const g = mk("g", { class: "nd" + (kind === 1 ? " ext" : "") }, document.getElementById("nodes"));
+  if (kind === 2) { mk("rect", { x: x + 10, y: y - 8, width: w, height: h, rx: 7, class: "sh" }, g); mk("rect", { x: x + 5, y: y - 4, width: w, height: h, rx: 7, class: "sh" }, g); }
+  mk("rect", { x, y, width: w, height: h, rx: 7 }, g);
+  mk("text", { x: x + 9, y: y + 18 }, g).textContent = t;
+  mk("text", { x: x + 9, y: y + 33, class: "s" }, g).textContent = s;
+  nodeEl[id] = g;
+});
+mk("text", { x: 565, y: 140, class: "gl", "text-anchor": "end" }, document.getElementById("links")).textContent = "× 8 to 72 copies";
+
+// every stage: title, from -> to, the text, nodes on, links on, (scaling down = orange nodes)
+const STAGES = [
+  { t: "1. A caller asks for a worker", fl: "<b>Page → Router</b>  GET /assign   ·   <b>Router → Page</b>  the address of one worker, or \"busy\"",
+    d: "Once per call. The router answers from a list it already holds in memory, so it never waits for a database. It draws two workers that have room, gives the call to the emptier one, and counts that call against the worker for 3 seconds so a burst does not all go to the same one. If every worker is full it answers 503 busy and the page offers text chat. How the address travels: when the caller taps the voice button, the page's code makes a plain web request to the router (GET /assign). The router replies with a small JSON message, {\"url\": \"wss://.../voice\", \"worker\": \"w7\"}, and the page reads the url and connects to it (step 2), sending its call id in its first message. What the caller sees: nothing of this. It takes a few milliseconds behind the voice button, then the usual start of a call (microphone permission the first time, then the greeting). If there is no room, a message appears in the chat: \"Voice is busy right now. You can keep chatting by typing.\" If the router cannot be reached: \"I can't reach the voice server. You can keep chatting by typing.\"",
+    nodes: ["page", "router"], links: ["l_ask", "l_addr"] },
+  { t: "2. The call goes straight to the worker", fl: "<b>Page ⇄ Worker</b>  WebSocket: the microphone's audio to the worker, the agent's speech back to the page",
+    d: "The page connects to the address it was given (through the ingress, to that one pod). Audio never passes through the router, so the router is never the bottleneck and can run as several copies. The page's first message carries its call id (used in step 3). The call stays on this worker for its whole length.",
+    nodes: ["page", "worker"], links: ["l_call"] },
+  { t: "3. The worker talks to Redis: its load, and each call's memory", fl: "<b>Worker → Redis</b>  id, address, calls now, call cap, draining   ·   every 2 s, and when a call starts or ends   ·   <b>Worker ⇄ Redis</b>  the call's saved conversation",
+    d: "Two things. First, the load report is stored with a 6 second expiry. A worker that crashes or is stopped stops renewing it, and drops out of the list by itself within 6 seconds, with nobody having to notice. Second, the call memory: when a call connects, the page's first message carries a call id, and the worker looks in Redis for a saved conversation under it (the router is not involved and never sees the id). If one exists, the worker loads it and carries on without greeting again; if not, it is a new call. After every finished turn the worker saves the conversation back, kept for 24 hours. That is why any worker can take over a call whose worker was stopped.",
+    nodes: ["worker", "redis"], links: ["l_report", "l_mem"] },
+  { t: "4. The router reads the list", fl: "<b>Redis → Router</b>  every worker's latest report   ·   every 0.5 s",
+    d: "The router copies the whole list into memory twice a second. That is why an assignment takes about a millisecond even with a thousand callers arriving: it never asks Redis during a call.",
+    nodes: ["redis", "router"], links: ["l_read"] },
+  { t: "5. Each worker sets its own cap", fl: "<b>Call cap → Worker</b>  a new number of calls it will take, reported in step 3",
+    d: "Every 5 seconds the worker looks at the 90th percentile of its recent answer times. Slower than 1 second: the cap drops to 75% (calls already running are never dropped, new ones go to other workers). Faster than 0.9 seconds while the cap is what limits it: the cap rises by one, up to 16. If a cut does not make replies faster, it is undone, because the slowness is somewhere else.",
+    nodes: ["worker", "cap", "redis"], links: ["l_cap", "l_report"] },
+  { t: "6. What a worker asks the three servers", fl: "<b>Worker ⇄ recogniser</b>  the caller's audio out, the words back   ·   <b>Worker ⇄ model</b>  the question out, the reply back   ·   <b>Worker ⇄ voice</b>  the text out, the speech back   ·   every turn",
+    d: "The model, the recogniser and the voice are three separate servers, each its own thing on its own machine or service, and none of them is inside a worker. Each one is used by every worker: a worker does not have a copy of its own. They are not one GPU service. As the system runs today: the model is Nemotron on Amazon Bedrock, which AWS runs (we cannot add servers to it, only stay within the request limits our account is given); the recogniser is Qwen3-ASR or Parakeet on the Mac's GPU, one clip at a time (about 23 or 89 callers per copy); the voice is Pocket-TTS on the Mac's CPU, one sentence at a time. In the deployment file (never run) the model and the recogniser would instead be vLLM (Qwen3-14B) and Whisper on cloud GPUs, and the voice would run inside each worker. Each arrow to these servers has a head at both ends: the worker sends a request and gets the answer back. The speech from the voice comes back to the worker, and the worker passes it to the caller's page over the call (step 2); it does not go from the voice straight to the page. The quality governor in each worker cannot see those servers. It watches how long the model takes to answer that worker's own requests: the time to a decision, and the time to the first sentence of a reply. If the first sentence takes longer than 0.7 seconds, turns step down: code says the facts at once and the model adds only a short follow-up. If decisions take longer than 0.45 seconds, a growing share of turns, up to 90%, skip the model and are answered by code. A small test request every 20 seconds shows when the model has recovered. An alert fires when more than 20% of turns over 5 minutes were answered by code. A slow network looks the same as a slow model.",
+    nodes: ["worker", "gov", "model", "stt", "tts"], links: ["l_gov", "l_model", "l_stt", "l_tts"] },
+  { t: "7. Prometheus collects the numbers", fl: "<b>Prometheus asks every worker and the router for /metrics, every 15 s</b>   ·   the answer: calls in progress, call cap, answer times; from the router, callers turned away in the last 30 s",
+    d: "Nothing is sent to Prometheus: it pulls. Every 15 seconds it makes a plain web request to each pod's /metrics page and stores what comes back with a timestamp. The workers and the router do not know it exists. The workers cannot see the callers they refused, because those never reached a worker. The router counts every \"busy\" it answers, and that count is what makes the autoscaler react before callers pile up.",
+    nodes: ["worker", "router", "prom"], links: ["l_sw", "l_sr"] },
+  { t: "8. One number: the demand ratio", fl: "<b>Prometheus → Metrics adapter</b>  (calls in progress + callers turned away in 30 s) ÷ (the sum of all call caps)",
+    d: "A ratio of 0.5 means half the calls the workers take right now are in use. A ratio of 1 or more means every worker is full and callers are being turned away. The caps shrink when replies get slow, so a slow worker makes the ratio rise even before it is full.",
+    nodes: ["prom", "adapter"], links: ["l_p2a"] },
+  { t: "9. The autoscaler compares it with 0.7", fl: "<b>Metrics adapter → Autoscaler</b>  the demand ratio   ·   checked every 15 s",
+    d: "The target is 0.7, so there is always room for a burst while new pods start. Above it, the autoscaler asks for more pods: new pods = current pods × ratio ÷ 0.7, at most doubling every 15 seconds, never above 72. Below it, it waits 5 minutes of low demand, then removes at most 2 pods a minute, never below 8.",
+    nodes: ["adapter", "hpa"], links: ["l_a2h"] },
+  { t: "10. Kubernetes starts pods", fl: "<b>Autoscaler → Kubernetes</b>  a new pod count   ·   <b>Kubernetes → Workers</b>  start these",
+    d: "A new pod pulls the image, mounts the speech models and loads them, which takes a minute or two. It is not ready until its health check answers, and meanwhile the callers keep arriving at the pods already running. This delay is why the target leaves 30% headroom.",
+    nodes: ["hpa", "k8s", "worker"], links: ["l_h2k", "l_k8s"] },
+  { t: "11. A new pod joins", fl: "<b>New worker → Redis</b>  its first report   ·   <b>Redis → Router</b>  the list, now one longer",
+    d: "From its first report the pod is in the list. Within half a second the router can give it calls, and the power-of-two draw sends it a share at once because it is the emptiest. Nobody has to register it.",
+    nodes: ["worker", "redis", "router"], links: ["l_report", "l_read"] },
+  { t: "12. Scaling down: a pod drains", fl: "<b>Kubernetes → Worker</b>  stop (SIGTERM)   ·   <b>Worker → Redis</b>  draining   ·   <b>Redis → Router</b>  skip this one",
+    d: "The worker marks itself draining and tells Redis at once. The router stops giving it new calls, but the calls in progress go on. Kubernetes waits up to 15 minutes for them to finish before the pod is removed. Most calls are over by then, because a quiet call ends itself within about 15 seconds. A call still going at 15 minutes is cut when the pod stops; the page reconnects it to another worker within a second or two, and the conversation carries on from Redis (the sentence being said is lost). A call has no time limit of its own except a hard stop at 2 hours. This is also why it shrinks slowly: calls last minutes.",
+    nodes: ["k8s", "worker", "redis", "router"], links: ["l_k8s", "l_report", "l_read"], warn: true }
+];
+let stage = 0, playing = true, timer = null;
+const dotsEl = document.getElementById("dots");
+STAGES.forEach((s, i) => { const d = document.createElement("i"); d.title = s.t; d.onclick = () => { stage = i; show(); restartTimer(); }; dotsEl.appendChild(d); });
+function show() {
+  const s = STAGES[stage];
+  document.getElementById("stage").innerHTML = '<div class="h">' + s.t + '</div><div class="fl">' + s.fl + '</div><div>' + s.d + '</div>';
+  for (const id in nodeEl) nodeEl[id].setAttribute("class", "nd" + (["model", "stt"].includes(id) ? " ext" : "") + (s.nodes.includes(id) ? " on" : "") + (s.warn && s.nodes.includes(id) ? " warn" : ""));
+  for (const id in linkEl) {
+    const on = s.links.includes(id), pull = LINKS.find(l => l[0] === id)[2], warn = id === "l_k8s" && s.warn;
+    linkEl[id].setAttribute("class", "lk" + (pull ? " dash" : "") + (id === "l_k8s" ? " warn" : "") + (TWO.has(id) ? " two" : "") + (on ? " on" : ""));
+    textEl[id].forEach(e => e.setAttribute("class", "lt" + (on ? " on" : "")));
+    badgeEl[id].setAttribute("class", "bd" + (on ? " on" : "") + (warn && on ? " warn" : ""));
+  }
+  [...dotsEl.children].forEach((d, i) => d.className = i === stage ? "on" : "");
+}
+function next() { stage = (stage + 1) % STAGES.length; show(); restartTimer(); }
+function prev() { stage = (stage + STAGES.length - 1) % STAGES.length; show(); restartTimer(); }
+function restartTimer() { clearInterval(timer); if (playing) timer = setInterval(() => { stage = (stage + 1) % STAGES.length; show(); }, 9000); }
+function toggle() { playing = !playing; document.getElementById("pp").textContent = playing ? "Pause" : "Play"; restartTimer(); }
+show(); restartTimer();
+
+</script>
+</body>
+</html>

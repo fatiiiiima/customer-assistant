@@ -14,8 +14,10 @@ One extra short model call per turn (the decision), so a turn costs a little mor
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
+import queue
 import re
 import threading
 import time
@@ -23,6 +25,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 
 from ..dialogue import templates as T
+from . import advice as AD
 from . import answers as A
 from . import guards
 from . import wording as W
@@ -40,7 +43,7 @@ from ..tools.phones import normalize_phone, speak_phone
 from ..tools.results import BookingKind
 from ..tools.service import DealerService
 
-_PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
+_PLAIN_YES = re.compile(r"(?:yes|yeah|yep|yup|sure|correct|right|perfect|ok|okay)(?: (?:yes|sure|please|that is|that's|it is|is|correct|right|perfect|confirm(?: it)?|go ahead|thanks|thank you))*")
 # A yes to "Shall I book it?" that names the booking (28 Oct, the owner's test call: "yes, please book it" was not a plain yes, the model was too slow, and the code
 # answered with the car's facts and another invitation). Used only while a read-back waits for the answer.
 _BOOK_YES = re.compile(r"(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|right|correct)(?: please)? )*(?:please )?"
@@ -240,19 +243,26 @@ _CALLER_VOICE = re.compile(r"\s*(?:tell me|show me|give me|send me|i want|i'd li
                            r"can (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive)|could (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive))\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call", "booking_aside")
-TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "advise", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
 customer's last message. Answer with ONLY the tool name, and for get_car, check_slots and prepare_booking the stock id of the car after it (like: get_car AG-101).
 
 search_cars      the customer wants to find cars or narrows a search (make, model, type, colour, budget, year, kilometres). "any budget" / "doesn't matter" / "show me" too.
+                 When they name a make or model, or a type of car (SUV, sedan), it is search_cars; when they describe a need, it is advise.
+advise           the customer describes what they need or use the car for, or asks what you recommend, WITHOUT naming a make or model: "I'm looking for a car", "something for the
+                 family", "something sporty", "good on fuel", "a long road trip", "what do you recommend?". Write advise and one need after it: family, sporty, economy,
+                 luxury, budget, trip, or any. Use the need they actually said: "I'm looking for a car" or "what do you recommend?" is advise any (they have not said what they
+                 need yet); "something for the family" is advise family; "something fast" is advise sporty; "good on fuel" is advise economy; "a long trip" is advise trip.
 get_car          a question about one specific car: price, kilometres, colour, gearbox, fuel, anything.
 check_slots      the customer asks which test-drive times are free.
 prepare_booking  the customer wants a test drive, or gives a booking detail (day, time, name or phone number).
 confirm_booking  the customer says yes to the read-back of the booking.
 cancel_draft     the customer says no or wants to change the booking details while a booking is being read back.
 compare_cars     the customer wants two cars compared ("which is better", "the difference between").
+best_of          the customer asks which car is the cheapest, newest, fastest, most economical or has the lowest kilometres, among the cars discussed or in the whole stock ("the
+                 cheapest one you have", "which is the fastest?").
 colours          the customer asks what colours the cars come in ("what colours do you have?", "what colours are they?").
 my_bookings      the customer asks what they have booked.
 cancel_booking   the customer wants to cancel a test drive they already booked.
@@ -267,6 +277,88 @@ none             greeting, thanks, small talk, anything that needs no lookup.
 The customer's words come from speech recognition and can be misspelled. The stock id must come from CODE HINT, CAR IN FOCUS or LAST SHOWN ("it", "this one",
 "the second one" mean a car from there). Prices are fixed: nothing to negotiate.
 """
+
+
+# The one-call turn (voice.one_call, with the test mode voice.model_only; owner, 30 Oct: "give Nemotron the likely facts up front so it picks the action and writes
+# the reply in a single call"). The code looks up, on a copy of the call, what the caller most likely needs: the car in focus, a car or make they named, a search their
+# words describe, a pick from the list just read out. The model is given those facts and the other actions in one short prompt, names its action on the first line and
+# writes the reply after it. An action with no facts prepared (a booking step, a comparison) stops the stream at the action line: it is looked up and written in a second
+# call, as before. Saves the decision's round trip (about 0.4-0.5 s to us-east-1, ARCH_REVIEW section 63) on the turns whose facts were prepared.
+ONE_CALL_SYSTEM = """You are Wazir, the friendly phone assistant of AGMC, a used-car dealership in Dubai. Each turn, first choose the ONE action that does what the customer asks now, then reply.
+
+Line 1: ACTION: <action>   (exactly as written below, with the car id where it has one)
+Line 2, only if that action is marked READY: your spoken reply, at most 30 words, plain spoken English for a phone call (no lists, no symbols, no markdown).
+Use only the facts given and the conversation; if something is not there, say you don't have that information. Prices are fixed.
+End with one short question unless the customer is leaving.
+For any other action write line 1 only: the system acts first and you reply after.
+
+Choosing the action:
+- wants a test drive or a visit, or gives a day, a time, a name or a phone number: prepare_booking <id> (check_slots <id> only to hear free times)
+- says goodbye, or has finished: end_call
+- wants to speak to a person: handoff
+- asks about one car (a detail, "is it ...", "tell me about it"): get_car <id> of that car
+- asks for cars by make, type, seats or budget, or for other or cheaper ones: search_cars
+- describes what they need or what the car is for, or asks what you recommend, without naming a make or model: advise <family|sporty|economy|luxury|budget|trip|any>
+- a greeting, thanks, small talk, or "maybe later": none
+The customer's words come from speech recognition and may be misspelled."""
+
+ONE_CALL_OTHERS = ("check_slots <id> (free test-drive times) | prepare_booking <id> (wants a test drive, or gives a day, time, name or phone) | "
+                   "confirm_booking (yes to the booking read-back) | cancel_draft (no, or a change, during the read-back) | compare_cars | "
+                   "best_of (fastest, cheapest, best for ...) | advise <family|sporty|economy|luxury|budget|trip|any> (a need, no car named) | colours | browse_makes | my_bookings | cancel_booking | reschedule_booking | "
+                   "showroom_info (hours, address, contact) | repeat | handoff (wants a person) | end_call (goodbye)")
+_ACTION_LINE = re.compile(r"\s*(?:\*\*)?(?:READY[ \t]*:?[ \t]*)?ACTION[ \t]*:?[ \t]*(?:\*\*)?[ \t]*(?:READY\b[ \t]*:?[ \t]*(?:ACTION[ \t]*:?[ \t]*)?)?([a-z_]+)(?:[ \t]+([A-Za-z0-9-]*\d[A-Za-z0-9-]*))?[^\n]*", re.IGNORECASE)
+
+
+_WRITTEN_AHEAD = ("get_car", "search_cars", "advise", "prepare_booking", "check_slots", "end_call", "none")     # the lookups whose reply may be written before the decision is used: they change only the call's own state
+
+
+_OPEN_ASK = re.compile(r"\b(?:looking for (?:a|an|some) (?:car|vehicle)|(?:want|need) (?:a|an|some) (?:car|vehicle)|recommend|suggest|what (?:do|would) you (?:have|suggest|recommend)|something (?:for|good|nice|cheap|fast|sporty|big|small|reliable)|"
+                       r"best (?:for|car)|any ideas|not sure|help me (?:choose|pick|find|decide))\b")          # an open request for a car: the reply for `advise` is written ahead of the decision
+
+
+_OFFERED_MORE = re.compile(r"\b(?:the rest|keep listing|name the others|hear more about)\b")                 # the agent's last line offered to go on with a list
+_CONTINUE_LIST = re.compile(r"\b(?:go through|going through|keep (?:going|listing|reading|naming|on)|continue|carry on|go on|read (?:them|those|the rest|out)|the (?:list|rest|others)|"
+                            r"list (?:them|those|the (?:rest|others|cars))|listing)\b")         # (not "more" or "next": "tell me more" is about a car, "the next one" is a pick)
+
+
+class _Spec:
+    """A reply being written ahead of the decision (voice.parallel, section 67): the writer's stream for one prepared lookup, run on its own thread into a queue.
+    The turn that follows takes it if the decision names that lookup and the writer's input is the same as the one it would send itself; the rest are stopped."""
+
+    def __init__(self, key: str, w: WriterInput, writer: ReplyWriter) -> None:
+        self.key, self.w, self.writer = key, w, writer
+        self.q: queue.Queue = queue.Queue()
+        self.stop = threading.Event()
+        self.info: dict = {}
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        try:
+            for sentence in self.writer.stream(self.w):
+                if self.stop.is_set():
+                    break
+                self.q.put(sentence)
+        except Exception as e:  # noqa: BLE001 - a reply that failed ahead is simply empty; the turn then writes its own
+            self.info = {"stopped": f"ahead: {type(e).__name__}"}
+        else:
+            self.info = dict(self.writer.last_stream)              # the writer keeps this per thread: read it on this one
+        finally:
+            self.q.put(None)
+
+    def sentences(self):
+        """What the writer said, as it comes (and what it had already said when this is called); self.info is set once it ends."""
+        while True:
+            try:
+                item = self.q.get(timeout=30.0)
+            except queue.Empty:
+                return
+            if item is None:
+                return
+            yield item
+
+    def cancel(self) -> None:
+        self.stop.set()
 
 
 def plural_make(name: str) -> str:
@@ -319,8 +411,19 @@ class AgentEngine:
 
     def __init__(self, svc: DealerService, backend, reply_writer: ReplyWriter | None, agent_name: str | None = None) -> None:
         self.svc, self.backend, self.reply_writer = svc, backend, reply_writer
+        # Test mode (voice.model_only; owner, 30 Oct: "i want to see how nemotron works alone, without the code"): the model decides every turn (no rules first, no
+        # code corrections of its choice) and writes every reply (full level, no code-spoken lists, booking lines, bridge or completions); the checks only note what
+        # they would have stopped; a turn it leaves empty is silent unless silent_fallback. The tools still run: the facts come from the stock and the bookings.
         self.model_only = False
         self.silent_fallback = True
+        self.one_call = False                            # with model_only: the action and the reply in one model call (see ONE_CALL_SYSTEM)
+        self.parallel = False                            # with model_only: replies for the likely lookups are written while the decision is made (see _speculate)
+        self.measure_trip = False                        # the latency table's "network" figure: one request with no key per turn, in the background (voice.trip_ping; ARCH_REVIEW section 96)
+        self.trip_ms: float | None = None
+        self._trips: list[float] = []
+        self.opener_first = False                        # with model_only: a short acknowledgement the code picks is said at once while the model writes (see _opener; ARCH_REVIEW section 95)
+        self.hold_reply = False                          # with model_only: while Smart Turn holds a pause, the reply for the decided lookup is already being written (see prepare_reply; ARCH_REVIEW section 92)
+        self.rules_decide = False                        # with model_only: the code picks the lookup when its own rules are certain (no model call for the decision); the model still decides the rest and writes every reply
         self.prefix_mode = False                         # experimental: code speaks the facts, the model only continues (see _prefix_reply)
         self.prefetch_on = False                         # dialogue.prefetch (see prefetch); app.py sets it from config
         self.prefetched = 0
@@ -364,7 +467,18 @@ class AgentEngine:
     def new_session(self) -> Session:
         return Session()
 
+    def _warm_connections(self) -> None:
+        """At the start of a call, in the background: a connection to each remote model is opened (or kept) before the caller's first question. A new one to Bedrock costs
+        0.6 to 0.8 s from Dubai (ARCH_REVIEW section 74); a request on an open one waits for none of that."""
+        seen: set[int] = set()
+        for b in (self.backend, getattr(self.reply_writer, "backend", None)):
+            warm = getattr(b, "warm_connection", None)
+            if warm is not None and id(b) not in seen:
+                seen.add(id(b))
+                threading.Thread(target=warm, daemon=True).start()
+
     def opening(self, s: Session) -> str:
+        self._warm_connections()
         name = self.svc.cfg.app.agent_name
         c = self.svc.get_car(s.car) if s.car else None
         if name:
@@ -417,11 +531,51 @@ class AgentEngine:
             self.governor.record_probe(ms)
         return ms
 
+    def _ping_trip(self) -> None:
+        """Measure the network round trip to the model (background): the median of the last five, kept for the latency table."""
+        ping = getattr(getattr(self.reply_writer, "backend", None), "ping_ms", None)
+        ms = ping() if ping is not None else None
+        if ms is not None:
+            self._trips = (self._trips + [ms])[-5:]
+            self.trip_ms = sorted(self._trips)[len(self._trips) // 2]
+
+    def prepare_reply(self, s: Session, text: str, decision: dict | None) -> "_Spec | None":
+        """voice.hold_reply (with model_only; ARCH_REVIEW section 92): the decision for `text` is known before the turn has ended (made while Smart Turn held a pause, or the code's
+        own rules when voice.rules_decide), so the reply for it is written now, on a copy of the call, with the writer's own input. The turn that follows takes it if it names the
+        same lookup and the writer's input is the same; otherwise it is written after the decision as usual. Only lookups that change nothing outside the call are written ahead
+        (the same ones the parallel turn prepares): never a hand-off, a confirmed booking or a cancellation."""
+        if not (self.model_only and self.hold_reply) or self.one_call or self.reply_writer is None or s.ended:
+            return None
+        if decision is None and self.rules_decide:
+            decision = self._fast_decide(s, text)
+        if not decision or decision.get("error") or decision.get("also") or decision.get("thanked") or decision.get("fallback"):
+            return None
+        tool = decision.get("tool", "none")
+        if tool not in TOOLS and tool != "booking_aside":
+            tool = "none"
+        if tool not in _WRITTEN_AHEAD:
+            return None
+        c = copy.deepcopy(s)
+        tool_text = decision.get("as_if") or text
+        if tool not in ("prepare_booking", "check_slots"):
+            c.day_asks = 0
+        args = self._args_for(c, tool, decision.get("car_id"), tool_text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
+        args = args if isinstance(args, dict) else {}
+        if tool == "get_car":
+            car_in_play = self._car_arg(c, args)
+            key = f"get_car {car_in_play.stock_id if car_in_play else None}"
+        else:
+            key = tool
+        res = self._run(c, tool, args, tool_text, TurnDebug(state_before=c.state.value))
+        core, awaiting, facts, stable = self._speaking_input(c, text, res)
+        w = WriterInput(caller=text, core=core, risk=res["risk"], history=list(c.history), facts=facts, awaiting=awaiting, stable=stable, history_base=c.forgotten)
+        return _Spec(key, w, self.reply_writer)
+
     def predecide(self, s: Session, text: str) -> dict | None:
         """The model's decision for `text`, made ahead of the turn (voice/speculate.py: during Smart Turn's hold). None when there is nothing
         to prepare: the code routes these words itself, or the model has no room (a guess that may be thrown away must not crowd out real turns)."""
-        if self._fast_decide(s, text) is not None:
-            return None
+        if self._fast_decide(s, text) is not None and not (self.model_only and not self.rules_decide):
+            return None                                           # (the test mode without rules_decide has the model decide even these turns, so they are made ahead too)
         if self.governor is not None:
             if not self.governor.has_room():
                 return None
@@ -432,11 +586,14 @@ class AgentEngine:
             return decision
         return self._decide(s, text)
 
-    def handle_stream(self, s: Session, text: str, predecided=None, uncertain: bool = False):
+    def handle_stream(self, s: Session, text: str, predecided=None, uncertain: bool = False, reply_ahead=None):
         """Yield the spoken sentences, then the TurnResult (same contract as DialogueEngine.handle_stream).
         `predecided`: a future holding the decision already made for these words (see `predecide`), used instead of asking the model now.
-        `uncertain`: the words came from a very quiet segment (room noise can be recognised as words): they may not end the call."""
+        `uncertain`: the words came from a very quiet segment (room noise can be recognised as words): they may not end the call.
+        `reply_ahead`: a future holding the reply already being written for the decision made during the hold (see `prepare_reply`)."""
         t0 = time.perf_counter()
+        if self.measure_trip:
+            threading.Thread(target=self._ping_trip, daemon=True).start()
         self._prefetch_turn.pop(id(s), None)                     # the caller spoke: prefetches still queued for this call are not sent
         dbg = TurnDebug(state_before=s.state.value)
         if s.ended:
@@ -445,7 +602,8 @@ class AgentEngine:
             yield TurnResult("Goodbye.", dbg, True)
             return
         words = ex.tokens_of(text)
-        if not words or all(w in _FILLER for w in words):                    # "the", "um": a fragment the recognizer picked up, not a request
+        mo = self.model_only                                                 # test mode: the model decides and writes every turn (see model_only in __init__)
+        if not mo and (not words or all(w in _FILLER for w in words)):      # "the", "um": a fragment the recognizer picked up, not a request
             line = "Sorry, I didn't catch that. Could you say it again?"
             dbg.intent, dbg.via, dbg.note = "none", "rules", "fragment: asked to repeat"
             s.remember("customer", text)
@@ -453,7 +611,7 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        if self._unfinished(s, words):                                    # "I'm looking for a..." / "I'm looking forward.": the end was cut off
+        if not mo and self._unfinished(s, words):                         # "I'm looking for a..." / "I'm looking forward.": the end was cut off
             line = W.pick(s, "cut_off", CUT_OFF)
             dbg.intent, dbg.via, dbg.note = "none", "rules", "cut off mid-phrase: asked again"
             s.remember("customer", text)
@@ -467,7 +625,7 @@ class AgentEngine:
             s.no_invite_until = len(s.history) + 12                        # "No, I want to know something else": no more invitations for the next few exchanges
         elif _visit_cue(joined_words):
             s.no_invite_until = 0                                          # the caller is talking about visiting: asking again is fine
-        check = self._sounds_like_shown(s, text)
+        check = None if mo else self._sounds_like_shown(s, text)
         if check is not None:                                              # "the Audi A4" right after a list with the RAV4 in it: ask, don't guess
             heard, near = check
             s.shown, s.car, s.state = [near, heard], None, State.ANSWERING
@@ -478,7 +636,22 @@ class AgentEngine:
             yield line
             yield TurnResult(line, dbg, False)
             return
-        decision = self._fast_decide(s, text)
+        decision = self._fast_decide(s, text) if (not mo or self.rules_decide) else None
+        if mo and decision is not None:
+            dbg.note = (dbg.note + "; " if dbg.note else "") + "rules_decide: the code picked the lookup, no model call for the decision"
+        if mo and self.one_call and decision is None:
+            decision = yield from self._one_call(s, text, dbg, t0)
+            if decision is None:
+                return                                                     # answered in the one call
+            if decision.get("again"):
+                decision = None                                            # no usable action from it: decided the usual way
+        held: _Spec | None = None
+        if reply_ahead is not None:
+            try:
+                held = reply_ahead.result(timeout=0.3)               # made a few milliseconds after the decision, in the same thread
+            except Exception:
+                held = None
+        specs: dict[str, _Spec] = self._speculate(s, text) if mo and self.parallel and not self.one_call and decision is None and held is None else {}
         bridge = ""
         if decision is None and predecided is not None:
             try:
@@ -488,11 +661,11 @@ class AgentEngine:
             if decision is not None:
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "decision made during the hold"
         no_model = False
-        if decision is None and self.governor is not None and not self.governor.model_allowed():
+        if decision is None and not mo and self.governor is not None and not self.governor.model_allowed():
             decision, no_model = self._code_decision(s, text), True             # the model is overwhelmed: the code decides and speaks
             dbg.note = (dbg.note + "; " if dbg.note else "") + "model overloaded: shed, decided by code"
         if decision is None:
-            bridge = self._bridge(s, text)
+            bridge = "" if mo else self._bridge(s, text)
             if bridge:                                                     # the caller hears this while the model decides (and writes)
                 yield bridge
             t_decide = time.perf_counter()
@@ -502,13 +675,15 @@ class AgentEngine:
                 self.governor.record_decide((time.perf_counter() - t_decide) * 1000)
             else:
                 decision = self._decide(s, text)
-            if decision.get("error"):                                      # no decision within the deadline: the code decides, nothing waits longer
+            if decision.get("error") and mo:
+                dbg.note = (dbg.note + "; " if dbg.note else "") + f"model_only: no decision from the model ({decision['error']}), so no tool was run"
+            elif decision.get("error"):                                    # no decision within the deadline: the code decides, nothing waits longer
                 decision, no_model = self._code_decision(s, text), True
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "model too slow: decided by code"
         tool = decision.get("tool", "none")
         if tool not in TOOLS and tool != "booking_aside":
             tool = "none"
-        if tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
+        if not mo and tool in ("reschedule_booking", "cancel_booking") and not s.known_bookings and (s.state in (State.SLOT, State.CONTACT) or s.draft_slot or s.offered_slots):
             # 28 Oct: nothing is booked yet, a booking is only being arranged. "Do." (for "two") and "I want to change the time", said while times were on offer, went to the tools
             # for bookings that exist and were answered "I don't see any test drives booked to move."
             if tool == "reschedule_booking":
@@ -519,7 +694,7 @@ class AgentEngine:
                 tool = "cancel_draft"
         if tool not in ("prepare_booking", "check_slots"):
             s.day_asks = 0                                                  # the booking talk was left: the next request for a day is a first ask again
-        if uncertain and tool == "end_call":                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
+        if uncertain and tool == "end_call" and not mo:                               # 17:49 in the 27 Oct log: a segment at level 0.013-0.015 hung up two calls
             line = W.pick(s, "still_there", STILL_THERE)
             dbg.intent, dbg.via, dbg.note = "none", "rules", "goodbye heard at a very low level: asked if the caller is there, did not end the call"
             s.remember("customer", text)
@@ -531,16 +706,45 @@ class AgentEngine:
         args = self._args_for(s, tool, decision.get("car_id"), tool_text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "booking_aside":
             args = {"kind": decision.get("kind")}
-        if tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
+        if tool == "advise":
+            args = {"need": decision.get("need") or ""}
+        if not mo and tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
-        picked = ex.selection(text, s.shown) if decision.get("via") != "rules" else None      # code's own routing already looked at this
+        picked = ex.selection(text, s.shown) if decision.get("via") != "rules" and not mo else None      # code's own routing already looked at this
         if picked and tool in ("none", "check_slots", "search_cars"):
             tool, args = "get_car", {"car_id": picked}                # "tell me about the second one" is about that car, whatever the model called it
-        elif tool == "none" and s.car and (HAGGLE.search(" ".join(ex.tokens_of(text))) or self._offer_on(s, s.car, " ".join(ex.tokens_of(text)))):
+        elif not mo and tool == "none" and s.car and (HAGGLE.search(" ".join(ex.tokens_of(text))) or self._offer_on(s, s.car, " ".join(ex.tokens_of(text)))):
             tool, args = "get_car", {"car_id": s.car}                 # "what's your best price" / "any discount": the answer is the fixed price
         dbg.intent, dbg.via = tool, "agent:rules" if decision.get("via") == "rules" else "agent"
         dbg.nlu_ms = (time.perf_counter() - t0) * 1000
+        ahead: _Spec | None = None
+        if held is not None and not specs:
+            if tool == "get_car" and isinstance(args, dict):
+                car_in_play = self._car_arg(s, args)
+                key = f"get_car {car_in_play.stock_id if car_in_play else None}"
+            else:
+                key = tool
+            ahead = held if held.key == key else None
+            if ahead is None:
+                held.cancel()                                                   # the decision named another lookup than the one written during the hold
+            dbg.reply_ahead = ahead is not None
+            dbg.note = (dbg.note + "; " if dbg.note else "") + (f"hold: the reply for {key} was written during the hold" if ahead else f"hold: the reply written during the hold was for {held.key}, not {key}, so it is written now")
+        elif specs:
+            if tool == "get_car" and isinstance(args, dict):
+                car_in_play = self._car_arg(s, args)                          # no id given: the car in focus, as the tool reads it (2 Nov local run: "is it reliable" missed its reply)
+                key = f"get_car {car_in_play.stock_id if car_in_play else None}"
+            else:
+                key = tool
+            ahead = specs.get(key)
+            dbg.reply_ahead = ahead is not None
+            for sp in specs.values():
+                if sp is not ahead:
+                    sp.cancel()
+            dbg.note = (dbg.note + "; " if dbg.note else "") + (f"parallel: decision at {dbg.nlu_ms:.0f} ms; replies written ahead for {', '.join(specs)}; "
+                                                                 + (f"{key} was used" if ahead else f"none for {key}, so its reply is written now"))
+        t_lookup = time.perf_counter()
         result = self._run(s, tool, args if isinstance(args, dict) else {}, tool_text, dbg)
+        dbg.lookup_ms = (time.perf_counter() - t_lookup) * 1000
         if decision.get("also") and s.car:
             result["core"] = f"{result['core']} {self._side_answer(s, decision['also'], 'car')}".strip()
         if decision.get("thanked"):                                        # "You're welcome." and then the question the booking is waiting on, as it was
@@ -556,20 +760,20 @@ class AgentEngine:
             result["core"] = result["core"][:1].upper() + result["core"][1:]
             dbg.note = (dbg.note + "; " if dbg.note else "") + "bridge said while the model decided"
         prefix, question = self._split_core(result["core"])
-        level = "code" if no_model else self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
-        if level == "full" and tool in _FACT_TOOLS and prefix:
+        level = "full" if mo else "code" if no_model else self.governor.choose() if self.governor is not None else ("prefix" if self.prefix_mode else "full")
+        if level == "full" and tool in _FACT_TOOLS and prefix and not mo:
             level = "prefix"           # a list of cars, a count, a comparison: pure facts, said by code; the model adds the question
         self.last_level = level
-        speaks = self.model_speaks and level == "full"
+        speaks = (self.model_speaks or mo) and level == "full"
         quiet = speaks and not self._slow_writer()             # model_speaks: an acknowledgement only while the model is slow to its first sentence
-        opener, lead = ("", bridge) if bridge else ("" if quiet else self._opener(s, tool, result["core"]), "")
+        opener, lead = ("", bridge) if bridge else ("" if (quiet or mo) and not (mo and self.opener_first) else self._opener(s, tool, result["core"], force=mo and self.opener_first), "")
         if opener and level == "full":
             lead = opener                                       # said on its own while the model writes (see the full branch)
         elif opener:                                            # "Sure, we've got 4 BMWs ...": the caller hears something at once
             result["core"] = f"{opener} {_lower_first(result['core'], self._proper(s))}"
             prefix, question = self._split_core(result["core"])
         dbg.note = (dbg.note + "; " if dbg.note else "") + f"level {level}"
-        if not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
+        if not mo and not s.ended and tool in EXACT_TOOLS and (self.governor is not None or self.prefix_mode):
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word, at every level
                 spoken.append(part)
                 yield part
@@ -578,17 +782,17 @@ class AgentEngine:
             for part in _clauses(result["core"]):             # the model is overloaded or down: the code's own wording, at once
                 spoken.append(part)
                 yield part
-        elif self.prefix_mode and not s.ended and tool in EXACT_TOOLS:
+        elif self.prefix_mode and not mo and not s.ended and tool in EXACT_TOOLS:
             for part in _clauses(result["core"]):             # slot-filling questions, the read-back and the confirmation are spoken by code, word for word; the model only chose the tool
                 spoken.append(part)
                 yield part
             self.prefix_stats = {"continuation": "exact-wording"}
-        elif level == "prefix" and self.reply_writer is not None and not s.ended and prefix:
+        elif level == "prefix" and not mo and self.reply_writer is not None and not s.ended and prefix:
             dbg.risk = result["risk"]
             for sentence in self._prefix_reply(s, text, result, prefix, question, dbg):
                 spoken.append(sentence)
                 yield sentence
-        elif self.reply_writer is not None and not s.ended:
+        elif self.reply_writer is not None and (mo or not s.ended):     # model_only: the model says the goodbye too
             facts, stable = "\n".join(result["facts"]), ""
             core, awaiting = result["core"], result["awaiting"]
             if speaks:
@@ -600,30 +804,43 @@ class AgentEngine:
             t_write = time.perf_counter()
             if lead and not bridge:                             # said while the model writes; the model's own opener is then dropped
                 spoken.append(lead)
+                dbg.first_say_ms = dbg.first_say_ms or (time.perf_counter() - t0) * 1000
                 yield lead
             for attempt in range(2):                                    # a reply the checks rejected outright: ask the model again, more carefully (still the model's words)
                 if attempt:
                     why = self.reply_writer.last_stream.get("stopped", "")
                     w = dataclasses.replace(w, facts=w.facts + f"\nYour previous attempt was rejected because: {why}. Write it again without that.")
+                early = ahead if attempt == 0 and ahead is not None and ahead.w == w else None     # the same input the writer would be given: its reply is the one written ahead
+                if ahead is not None and attempt == 0 and early is None:
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + "parallel: the prompt had changed since it was written ahead, so it is written again"
                 with (self.governor.using_model() if self.governor is not None else _nothing()):
-                    for sentence in self.reply_writer.stream(w, temperature=0.2 if attempt else None):
+                    for sentence in (early.sentences() if early is not None else self.reply_writer.stream(w, temperature=0.2 if attempt else None)):
                         if speaks:
                             self.fidelity["sentences"] += 1
                             leak = guards.leaks(sentence, allowed, self._car_words())
                             if leak:                                    # fail closed: not said; what was said stands, the code's wording follows if nothing was
                                 self.fidelity["leaks"] += 1
-                                dbg.note = (dbg.note + "; " if dbg.note else "") + "fact guard: " + "; ".join(leak)
-                                break
+                                dbg.note = (dbg.note + "; " if dbg.note else "") + ("model_only: said anyway; the fact guard would have stopped it: " if mo else "fact guard: ") + "; ".join(leak)
+                                if not mo:
+                                    break
                         if lead and len(spoken) == 1:
                             sentence = _after_opener(sentence, self._proper(s), new_sentence=not lead.rstrip().endswith(","))
                             if not sentence:
                                 continue
                         if len(spoken) == (1 if lead else 0) and self.governor is not None:
                             self.governor.record_full((time.perf_counter() - t_write) * 1000)
+                        if early is not None and not spoken:
+                            dbg.note = (dbg.note + "; " if dbg.note else "") + f"parallel: first words at {(time.perf_counter() - t0) * 1000:.0f} ms"
                         spoken.append(sentence)
+                        dbg.first_say_ms = dbg.first_say_ms or (time.perf_counter() - t0) * 1000
                         yield sentence
-                info = self.reply_writer.last_stream
+                info = early.info if early is not None else self.reply_writer.last_stream
                 dbg.lead_ms = info.get("first_ms", 0.0)
+                if info.get("t_sent") is not None:                      # the model call, against the start of this turn (negative: written ahead, before the words arrived)
+                    dbg.writer_steps = {k: round(info[f"t_{k}"] - t0, 4) for k in ("sent", "token", "first") if info.get(f"t_{k}") is not None}
+                    dbg.trip_ms = self.trip_ms
+                if info.get("would_stop"):
+                    dbg.note = (dbg.note + "; " if dbg.note else "") + "model_only: said anyway; the checks would have stopped: " + " | ".join(info["would_stop"])
                 if info.get("stopped"):
                     dbg.note = (dbg.note + "; " if dbg.note else "") + f"stream{' (retry)' if attempt else ''}: " + info["stopped"]
                 if info.get("stopped") == FIRST_SENTENCE_DEADLINE:        # the model is slow, not wrong: asking again would only double the wait. The code's own wording follows below,
@@ -632,11 +849,11 @@ class AgentEngine:
                     break
                 if len(spoken) > (1 if lead else 0):
                     break
-            if lead and spoken == [lead]:                       # the model gave nothing usable after the opener: the code's facts
+            if lead and spoken == [lead] and not mo:            # the model gave nothing usable after the opener: the code's facts
                 spoken.append(result["core"] if bridge else _lower_first(result["core"], self._proper(s)))
                 dbg.note = (dbg.note + "; " if dbg.note else "") + "FALLBACK: the model gave nothing usable, so the code-written wording was spoken"
                 yield spoken[-1]
-            if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")):
+            if spoken and not spoken[-1].rstrip().endswith(("?", ".", "!")) and not mo:
                 # The reply was cut mid-sentence (the time limit or a check): finish with the facts the code has, then the question.
                 core_facts, core_q = self._split_core(result["core"])
                 if core_facts:
@@ -725,10 +942,10 @@ class AgentEngine:
         s.last_variant["bridge_turn"] = turn
         return line
 
-    def _opener(self, s: Session, tool: str, core: str) -> str:
+    def _opener(self, s: Session, tool: str, core: str, force: bool = False) -> str:
         """A short acknowledgement before a factual answer, when the answer does not already start with one. It is rendered in advance by
         the voice, so it plays the moment the turn ends while the rest of the reply is still being made."""
-        if not self.openers or s.ended or tool not in _FACT_TOOLS + ("get_car",) or not core or _HAS_OPENER.match(core):
+        if not (self.openers or force) or s.ended or tool not in _FACT_TOOLS + ("get_car",) or not core or _HAS_OPENER.match(core):
             return ""
         first = re.split(r"(?<=[.!?])\s", core, maxsplit=1)[0]
         negative = bool(_NEGATIVE.search(first))
@@ -834,7 +1051,7 @@ class AgentEngine:
         return [fact_sheet([car], self._branch_name),
                 f"Everything on the spec sheet of the {T.car_name(car)} (say only what the caller needs now): "
                 + " ".join(x for x in (A.group_sentence(g, d) for g in A.FACT_GROUPS) if x) + (f" It has {A.DRIVE.get(d.drive.upper(), d.drive)}." if d.drive else "")
-                + " Anything not listed here is not recorded: say you don't have it on record."]
+                + f" Not recorded, so say you don't have it on record: {', '.join(A.unrecorded(d))}; and anything else not listed here."]
 
     def prefetch(self, s: Session) -> int:
         """While the agent speaks, send the start of the next likely prompt to the model server, which keeps what it reads (29 Oct, the owner's call: the first
@@ -904,11 +1121,15 @@ class AgentEngine:
                 lines.append(line[:line.index(" dirhams") + len(" dirhams")])      # another car in the call: name, colour and price
             else:
                 lines.append(line)
-        if lines and lines[-1] == "Cars in this call (true facts you may use):":
+        lines = list(dict.fromkeys(lines))                       # each line once (a search turn gave its three cars twice: as the examples, and again as the cars in this call)
+        while lines and lines[-1] == "Cars in this call (true facts you may use):":
             lines.pop()
+        for i in range(len(lines) - 2, -1, -1):                  # a heading left with nothing under it (its cars were given above)
+            if lines[i] == "Cars in this call (true facts you may use):" and not lines[i + 1].startswith("- "):
+                del lines[i]
         if focus:
             stable[:0] = self._car_facts(car, d)
-            told = s.said_about.get(s.car, [])
+            told = [t for t in s.said_about.get(s.car, []) if t != "about"]          # ("about" is the blurb: "heard about its about" read as nonsense)
             if told:
                 lines.append("The caller has already heard about its " + ", ".join(told) + ". Do not repeat those unless they ask again.")
         words = " ".join(ex.tokens_of(text))
@@ -1067,6 +1288,7 @@ class AgentEngine:
         focus = self.svc.get_car(s.car) if s.car else None
         draft = (f"car {s.car or '-'}, name {s.draft_name or '-'}, phone {s.draft_phone or '-'}, "
                  f"when {T.when_full(s.draft_slot) if s.draft_slot else '-'}, read back to the customer: {'yes, waiting for their yes/no' if s.read_back else 'no'}")
+        drafting = bool(s.draft_name or s.draft_phone or s.draft_slot or s.read_back or s.state in (State.SLOT, State.CONTACT, State.CONFIRM))     # no draft, no line: it only added tokens
         shown = "; ".join(f"{i + 1}) {c.stock_id} {c.year} {c.make} {c.model}" for i, c in enumerate(s.shown)) or "none"
         convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
         # The customer's words are matched to the stock by code (spelling-tolerant), so the model never has to know the whole inventory.
@@ -1076,7 +1298,7 @@ class AgentEngine:
             hint = f"CODE HINT (spelling corrected): the customer's words match make {found['make']}" + (f", model {found['model']}" if found.get("model") else "") + f", ids {ids}\n"
         return (f"NOW: {now:%A %d %B %Y, %H:%M} (Dubai). Open every day.\n{hint}"
                 f"CAR IN FOCUS: {focus.stock_id + ' ' + T.car_name(focus) if focus else 'none'}\nLAST SHOWN: {shown}\n"
-                f"SEARCH SO FAR: {s.filters or 'nothing'}\nBOOKING DRAFT: {draft}\nCONVERSATION:\n{convo}\n")
+                f"SEARCH SO FAR: {s.filters or 'nothing'}\n{'BOOKING DRAFT: ' + draft + chr(10) if drafting else ''}CONVERSATION:\n{convo}\n")
 
     def _fast_decide(self, s: Session, text: str) -> dict | None:
         """The turns whose action the code can tell for certain, without asking the model (saves its 0.25-0.4 s decision call):
@@ -1092,6 +1314,8 @@ class AgentEngine:
             if "name the others" in s.last_agent().lower():
                 return {"tool": "browse_makes", "as_if": "the others", "via": "rules"}     # "yes" to "...or shall I name the others?"
             return {"tool": "search_cars", "as_if": "what other ones do you have", "via": "rules"}   # "yes" to "...or shall I go through the rest?"
+        if not booking_flow and self._continues_list(s, text):
+            return {"tool": "search_cars", "as_if": "what other ones do you have", "via": "rules"}   # "go through the list" / "keep listing": the next ones
         aside = self._aside_kind(s, text, words, joined) if booking_flow else None
         if aside:                                                                # "is it automatic?", "one sec" while times are on offer: answer, and the booking goes on
             return {"tool": "booking_aside", "kind": aside, "car_id": s.car, "via": "rules"}
@@ -1199,6 +1423,8 @@ class AgentEngine:
             r"\b(?:which|what|how|when|where|who|anything else|hear|know|tell|features?|more|details?|about|other|else|similar|compare)\b", q))
         if s.car and not s.read_back and s.state not in (State.SLOT, State.CONTACT, State.CONFIRM) and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and offered:
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules"}       # "yes" to "want to check it out?" / "shall I set up a test drive?"
+        if s.car and not booking_flow and (_PLAIN_YES.fullmatch(joined) or _AGREE.fullmatch(joined)) and re.search(r"\bhear more\b", q) and not re.search(r"\bwhich\b", q):
+            return {"tool": "get_car", "car_id": s.car, "via": "rules"}           # "yes" to "would you like to hear more about it?" (30 Oct, Bedrock call: the model confirmed a booking that did not exist)
         if _THANKS.fullmatch(joined) and (s.state in (State.SLOT, State.CONTACT, State.CONFIRM) or s.read_back):
             return {"tool": "prepare_booking", "car_id": s.car, "via": "rules", "thanked": True}   # mid-booking (29 Oct: "Thank you." after the number dropped the question for the name)
         if _THANKS.fullmatch(joined):
@@ -1271,6 +1497,9 @@ class AgentEngine:
         if raw.strip() in options:                                      # an exact listed answer: "get_car S1042", "search_cars"
             tool, _, car_id = raw.strip().partition(" ")
             return {"tool": tool, "car_id": car_id or None}
+        advised = re.match(r"\s*advise\b[ \t:]*(" + "|".join(AD.NEEDS) + r")?", raw, re.I)
+        if advised:                                                      # "advise family": the need is the word after the tool
+            return {"tool": "advise", "car_id": None, "need": (advised.group(1) or "").lower()}
         data = _json_from(raw)
         tool = data.get("tool") if data else None
         if tool is None:
@@ -1278,6 +1507,182 @@ class AgentEngine:
             tool = m.group(1) if m else "none"
         car = re.search(r"\b[A-Z]{2}-\d{2,4}\b", raw)
         return {"tool": tool, "car_id": car.group(0) if car else (data.get("args", {}) or {}).get("car_id") if data else None}
+
+    def _speculate(self, s: Session, text: str) -> dict[str, _Spec]:
+        """voice.parallel (with model_only; owner, 2 Nov): while the decision is made, the reply is already being written for each lookup the code can prepare (the car in
+        focus, a pick, a named car, a search, none): the writer's own input, built on a copy of the call. Costs a reply call for each, about 3 to 4 a turn."""
+        if self.reply_writer is None:
+            return {}
+        specs: dict[str, _Spec] = {}
+        for key, _args, c, res in self._one_call_candidates(s, text, more=True):
+            try:
+                core, awaiting, facts, stable = self._speaking_input(c, text, res)
+                w = WriterInput(caller=text, core=core, risk=res["risk"], history=list(c.history), facts=facts, awaiting=awaiting, stable=stable, history_base=c.forgotten)
+            except Exception:  # noqa: BLE001 - a lookup whose input cannot be built is simply not written ahead
+                w = None
+            if w is not None:
+                specs[key] = _Spec(key, w, self.reply_writer)
+        return specs
+
+    def _one_call_candidates(self, s: Session, text: str, more: bool = False) -> list[tuple[str, dict, Session, dict]]:
+        """The lookups made before the model is asked, each on a copy of the call: (the action as the model writes it, the tool's arguments, the call as it
+        would be after it, the tool's result). The car in focus, a car picked from the list or named alone, a search the words describe, and "none".
+        `more` (the parallel turn) adds the two that only change the call's own state: a booking step when the words are about booking, and the goodbye.
+        Not the hand-off or the confirmation: those act outside the call (an escalation, a saved booking) and are never run ahead."""
+        words = ex.tokens_of(text)
+        wanted: list[tuple[str, dict]] = []
+        picked = ex.selection(text, s.shown)
+        if picked:
+            wanted.append(("get_car", {"car_id": picked}))
+        found, ids = self._code_hint(text)
+        if len(ids) == 1:
+            wanted.append(("get_car", {"car_id": ids[0]}))
+        if s.car:
+            wanted.append(("get_car", {"car_id": s.car}))
+        if found.get("make") or ex.search_filters(text, self.svc.inventory.vocabulary()) or ex.wants_listing(text) or _CHEAPER.search(" ".join(words)):
+            wanted.append(("search_cars", self._args_for(s, "search_cars", None, text)))
+        said = " ".join(words)
+        if not found.get("make") and (AD.need_from_words(said) != "any" or _OPEN_ASK.search(said)):
+            wanted.append(("advise", {}))                                        # a need or an open request: the suggestion is prepared too
+        if more:
+            joined = " ".join(words)
+            if _BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found:
+                wanted.append(("prepare_booking", self._args_for(s, "prepare_booking", None, text)))
+                wanted.append(("check_slots", self._args_for(s, "check_slots", None, text)))
+            if s.shown and not s.car:
+                wanted.append(("get_car", {"car_id": None}))                       # a question about "it" with cars shown and none in focus: "Which car do you mean?"
+            if _BYE.search(joined):
+                wanted.append(("end_call", {}))
+        wanted.append(("none", {}))
+        out, seen = [], set()
+        for tool, args in wanted:
+            key = f"{tool} {args['car_id']}" if tool == "get_car" else tool        # (a get_car with no id is keyed "get_car None", as the decided one is)
+            if key in seen:
+                continue
+            seen.add(key)
+            c = copy.deepcopy(s)
+            try:
+                res = self._run(c, tool, args, text, TurnDebug(state_before=c.state.value))
+            except Exception:  # noqa: BLE001 - a lookup that fails is simply not offered; the model can still name it (second call)
+                res = None
+            if res is not None:
+                out.append((key, args, c, res))
+        return out[:8 if more else 4]
+
+    def _one_call_prompt(self, s: Session, text: str, cands: list) -> str:
+        """Short: the time, the booking if one is under way, the last four lines, the caller's words, then each prepared action with its facts (each fact once)."""
+        tz = self.svc.slots.tz(self.svc.cfg.branches[0].id)
+        now = self.svc.clock().astimezone(tz)
+        convo = "\n".join(f"{'AGENT' if who == 'agent' else 'CUSTOMER'}: {t}" for who, t in s.history[-4:]) or "(start of the call)"
+        booking = ""
+        if s.draft_slot or s.draft_name or s.draft_phone or s.read_back or s.state in (State.SLOT, State.CONTACT):
+            booking = (f"BOOKING UNDER WAY: car {s.car or '-'}, when {T.when_full(s.draft_slot) if s.draft_slot else '-'}, name {s.draft_name or '-'}, "
+                       f"phone {s.draft_phone or '-'}{', read back: waiting for yes/no' if s.read_back else ''}\n")
+        blocks, given = [], {PRICE_RULE, "Cars in this call (true facts you may use):"}
+        for key, args, c, res in cands:
+            if key == "none":
+                blocks.append("READY: ACTION none (a greeting, thanks, small talk, a question you cannot answer, or an answer from the conversation above)")
+                continue
+            car = self.svc.get_car(args["car_id"]) if key.startswith("get_car") else None
+            d = self.svc.details(car.stock_id) if car is not None else None
+            facts = self._car_facts(car, d) if car is not None and d is not None else list(res.get("facts", []))
+            facts = [f for f in facts if f not in given]
+            given.update(facts)
+            blocks.append(f"READY: ACTION {key}, FACTS:\n" + "\n".join(facts) if facts else f"READY: ACTION {key}, FACTS: as given above.")
+        return (f"NOW: {now:%A %d %B, %H:%M} (Dubai). Open every day. {PRICE_RULE}\n{booking}CONVERSATION:\n{convo}\nCUSTOMER (now): {text}\n\n"
+                + "\n\n".join(blocks) + f"\n\nOTHER ACTIONS (line 1 only): {ONE_CALL_OTHERS}")
+
+    def _one_call(self, s: Session, text: str, dbg: TurnDebug, t0: float):
+        """The action and the reply from one model call. Yields the reply's pieces as they come; returns None when the turn was answered, or the decision
+        for the usual second call when the model named an action whose facts were not prepared (or gave no action)."""
+        cands = self._one_call_candidates(s, text)
+        user = self._one_call_prompt(s, text, cands)
+        w = self.reply_writer
+        note = lambda x: setattr(dbg, "note", (dbg.note + "; " if dbg.note else "") + x)
+        note(f"one call: prompt {len(ONE_CALL_SYSTEM) + len(user)} characters, prepared {', '.join(c[0] for c in cands)}")
+        history_text = " ".join(t for _, t in s.history)
+        buf, hit, spoken, would_stop, facts = "", None, [], [], ""
+        stream = w.backend.lead_in_stream(ONE_CALL_SYSTEM, user, w.max_tokens + 20, w.temperature, w.deadline_s)
+
+        def take(sentence: str) -> str | None:
+            sentence = clean_draft(sentence)
+            if sentence:
+                bad = verify_sentence(sentence, text, "", facts, history_text)
+                if bad:
+                    would_stop.append(f"{sentence!r}: {'; '.join(bad)}")
+            return sentence or None
+
+        def adopt(said_so_far: list) -> None:
+            """The prepared lookup becomes the call's own (its list, its car, its state), once a word of the reply is said."""
+            if not said_so_far:
+                for f in dataclasses.fields(s):
+                    setattr(s, f.name, getattr(hit[2], f.name))
+
+        def choose(m) -> dict | None:
+            """The action line read: the prepared lookup it names becomes the call's state, or the decision for a second call."""
+            nonlocal hit, facts
+            tool, car_id = m.group(1).lower(), m.group(2)
+            key = f"{tool} {car_id}" if tool == "get_car" and car_id else tool
+            hit = next((c for c in cands if c[0].lower() == key.lower()), None)
+            if hit is None:
+                note(f"one call: {key} had no facts prepared, so it is looked up and written in a second call")
+                return {"tool": tool, "car_id": car_id.upper() if car_id else None, "via": "one-call"}
+            facts = user                                                   # every fact the model was given is one it may use
+            dbg.intent, dbg.via, dbg.tools = tool, "agent:one-call", list(dbg.tools) + [key]
+            return None
+
+        try:
+            for piece in stream:
+                buf += piece
+                if hit is None:
+                    if "\n" not in buf.lstrip() and len(buf) < 120:
+                        continue
+                    m = _ACTION_LINE.match(buf)
+                    if not m:
+                        stream.close()
+                        note("one call: no ACTION line, so the action was decided again in a second call")
+                        return {"again": True}
+                    decision = choose(m)
+                    if decision is not None:
+                        stream.close()
+                        return decision
+                    buf = buf[m.end():].lstrip()
+                while cut := split_point(buf, clauses=not spoken, min_words=self.reply_writer.first_clause_words):
+                    sentence, buf = buf[:cut[0]], buf[cut[1]:]
+                    if (ok := take(sentence)):
+                        adopt(spoken)
+                        spoken.append(ok)
+                        yield ok
+        except Exception as e:  # noqa: BLE001 - the model failed: what was said stands; with nothing said, the usual second call
+            note(f"one call: backend {type(e).__name__}" + ("" if hit else ", so the action was decided again in a second call"))
+            if hit is None:
+                return {"again": True}
+        if hit is None:
+            m = _ACTION_LINE.match(buf)
+            if not m:
+                note("one call: no ACTION line, so the action was decided again in a second call")
+                return {"again": True}
+            decision = choose(m)
+            if decision is not None:
+                return decision
+            buf = buf[m.end():]
+        if buf.strip() and re.search(r"[.!?][\"')]*\s*$", buf) and (ok := take(buf)):
+            adopt(spoken)
+            spoken.append(ok)
+            yield ok
+        if not spoken:                                                     # it named a ready action and wrote nothing after it: written in a second call
+            note(f"one call: {hit[0]} named with no reply after it, so the reply is written in a second call")
+            tool, _, car_id = hit[0].partition(" ")
+            return {"tool": tool, "car_id": car_id or None, "via": "one-call"}
+        if would_stop:
+            note("model_only: said anyway; the checks would have stopped: " + " | ".join(would_stop))
+        reply = " ".join(spoken)
+        s.remember("customer", text)
+        s.remember("agent", reply)
+        dbg.draft, dbg.about, dbg.state_after = reply, s.focus, s.state.value
+        dbg.total_ms = (time.perf_counter() - t0) * 1000
+        yield TurnResult(reply, dbg, s.ended)
+        return None
 
     def _args_for(self, s: Session, tool: str, car_id: str | None, text: str) -> dict:
         """The tool's arguments, read from the customer's own words by code (the same extractors the state machine trusts)."""
@@ -1372,9 +1777,10 @@ class AgentEngine:
                 "facts": [f"In stock by make: " + ", ".join(f"{names[mk]} {counts[mk]}" for mk in others)], "awaiting": True}
 
     def _t_best_of(self, s, args, text, dbg) -> dict:
-        pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
+        whole = re.search(r"\b(?:you have|you got|in stock|overall|of all|all your|your (?:cars|stock|inventory|showroom|range|collection)|available|in the showroom|you sell|you offer)\b", " ".join(ex.tokens_of(text)))     # "the cheapest one you have": the stock, not the cars just read out
+        pool = [] if whole else list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
         if not pool:                                                      # chosen from the stock, within what was asked for (29 Oct: "a family SUV under 100,000" got the Carnival, a van at 126,000)
-            asked = {**s.filters, **ex.search_filters(text, self.svc.inventory.vocabulary())}
+            asked = {**({} if whole else s.filters), **ex.search_filters(text, self.svc.inventory.vocabulary())}
             wanted = {k: v for k, v in asked.items() if k in SearchFilters.model_fields and v not in (None, "")}
             pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**wanted), 200)]
             if not pool:
@@ -1390,6 +1796,30 @@ class AgentEngine:
             sentence = sentence.replace(" of these", " we have")
         s.car, s.state = winner.stock_id, State.ANSWERING
         return {"core": f"{sentence} Would you like to hear more about it?", "facts": [sentence], "awaiting": True}
+
+    def _t_advise(self, s, args, text, dbg) -> dict:
+        """The customer describes a need, not a car (5 Nov): suggest from the stock by the spec sheets' figures, or ask what they are after. The model says which need; the cars are
+        chosen by code (advice.py), so every figure the model may use is a recorded one."""
+        words = " ".join(ex.tokens_of(text))
+        earlier = [t for who, t in s.history[-6:] if who == "customer"]
+        need = AD.resolve_need(str(args.get("need") or "").lower(), words, earlier)
+        kept = {k: v for k, v in s.filters.items() if k in ("max_price", "min_price", "body_type", "fuel", "color") and v not in (None, "")}      # a price or a type still counts; the make they looked at before does not
+        pool = [c for c in self.svc.inventory.search(SearchFilters(**kept), 200)]
+        if s.filters and not pool:
+            pool = list(self.svc.inventory.search(SearchFilters(), 200))
+        cars = [self.svc.get_car(c.stock_id) for c in pool]
+        cars = [c for c in cars if c is not None and c.stock_id not in s.excluded] or [c for c in cars if c is not None]
+        details = self.svc.details_for(c.stock_id for c in cars)
+        picks = AD.shortlist(cars, details, need, 3)
+        if not picks:
+            return self._t_search_cars(s, {}, text, dbg)
+        lines = [AD.car_line(c, details.get(c.stock_id), self._spec_facts(c), AD.reason(need if need != "any" else AD.kind_of(c, details.get(c.stock_id)), c, details.get(c.stock_id))) for c in picks]
+        names = [T.short_name(c) for c in picks]
+        s.state, s.shown, s.car = State.ANSWERING, list(picks), None
+        if need == "any":
+            return {"core": f"What will you use the car for? For example, the {names[0]} is {picks[0].price:,} dirhams.", "facts": AD.facts_for(need, text, lines), "awaiting": True}
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or the " + names[-1]
+        return {"core": f"For that I'd look at the {listed}. Which one would you like to hear more about?", "facts": AD.facts_for(need, text, lines), "awaiting": True}
 
     def _t_none(self, s, args, text, dbg) -> dict:
         question = "What are you looking for today?" if not s.car and not s.shown else W.anything_else(s)
@@ -1416,6 +1846,17 @@ class AgentEngine:
         return {"core": question, "facts": ["No lookup was needed. Answer from the conversation and these facts only; never say the dealership has no cars unless a search said so.",
                           "If the customer's words do not make sense here (speech recognition can mishear), say you did not catch that and ask them to say it again.", *context],
                 "awaiting": False}
+
+    def _continues_list(self, s: Session, text: str) -> bool:
+        """The caller asks to go on with the list the agent just read from ("go through the list", "keep listing the cars, please") and names nothing new: the cars
+        already read out are left out, as for "any others?". Without this the same first cars came back every time (3 Nov call: 74 cars, the same three three times)."""
+        if not s.shown or not _OFFERED_MORE.search(s.last_agent().lower()):
+            return False
+        toks = ex.tokens_of(text)
+        if not toks or len(toks) > 8 or not _CONTINUE_LIST.search(" ".join(toks)):
+            return False
+        vocab = self.svc.inventory.vocabulary()
+        return not ex.search_filters(text, vocab) and not ex.find_vehicle(toks, vocab).get("make")
 
     def _t_search_cars(self, s, args, text, dbg) -> dict:
         vocab = self.svc.inventory.vocabulary()
@@ -1452,8 +1893,12 @@ class AgentEngine:
             filters = SearchFilters(make=f.get("make"), model=f.get("model"), color=f.get("color"), max_price=f.get("max_price"))
         unchanged = f == s.filters                                   # nothing new said: "any budget" / "doesn't matter" / "show me"
         s.filters = f
-        if ex.wants_others(text) and s.shown:                          # "any others?" / "you don't have anymore?": not the ones already read out
-            filters = filters.model_copy(update={"exclude_stock_ids": tuple(c.stock_id for c in s.shown)})
+        more_of_it = ex.wants_others(text) or self._continues_list(s, text)
+        if more_of_it and s.shown:                                     # "any others?" / "go through the list": not ANY of the ones already read out in this run of the list
+            filters = filters.model_copy(update={"exclude_stock_ids": tuple(sorted(s.excluded | {c.stock_id for c in s.shown}))})
+        elif not more_of_it:
+            s.excluded = set()                                         # a new question: the list starts again
+        read_out_before = len(s.excluded | {c.stock_id for c in s.shown}) if more_of_it and s.shown else 0
         words = " ".join(ex.tokens_of(text))
         base = (self.svc.get_car(s.car) if s.car else None) or (min(s.shown, key=lambda c: c.price) if s.shown else None)
         if _CHEAPER.search(words) and base is not None and not args.get("max_price"):
@@ -1495,15 +1940,18 @@ class AgentEngine:
                         "facts": [f"Nothing cheaper within {wanted}; cheaper across all makes: {wider.total}."], "awaiting": True}
             return {"core": f"The {T.short_name(base)} at {T.money(base.price)} is the cheapest car we have right now. Would you like to hear more about it?",
                     "facts": ["Nothing in stock is cheaper."], "awaiting": True}
-        if not res.cars and ex.wants_others(text) and f.get("make"):
+        if not res.cars and more_of_it and f.get("make"):
             return self._t_browse_makes(s, args, text, dbg)
-        if not res.cars and ex.wants_others(text) and len(s.shown) >= 1 and f:          # "any other red cars?" after every red one was read out
+        if not res.cars and more_of_it and len(s.shown) >= 1 and f:          # "any other red cars?" after every red one was read out
             what = W.what_they_asked(list(s.shown), f)
             names = [f"the {T.short_name(c)}" for c in s.shown]
             listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
             only = f"That's the only one of our {what} right now: {listed}." if len(names) == 1 else f"Those are all the {what} I have right now: {listed}."
             return {"core": f"{only} {'Would you like to hear more about it?' if len(names) == 1 else 'Which one would you like to hear more about?'}",
                     "facts": [f"Search for {wanted}: no others beyond the {len(names)} already read out."], "awaiting": True}
+        if not res.cars and more_of_it and read_out_before:               # "keep listing" at the end of the list: every car has been read out
+            return {"core": "That was every car we have. Would you like to hear more about any of them?",
+                    "facts": [f"Search for {wanted}: all {read_out_before} cars were read out; none are left. Say that was the whole list."], "awaiting": True}
         if not res.cars:
             # Nothing matches EVERYTHING asked so far. If a filter from earlier in the call is what empties it (a budget from "something
             # cheaper", then "do you have a BMW?"), look again with only what was just asked, and say both: never "we have no BMWs" when we do.
@@ -1577,9 +2025,13 @@ class AgentEngine:
             res = SearchResult(total=res.total, cars=tuple(every[:res.total]), needs_narrowing=False)
             s.shown, more = list(res.cars), 0
             sheet = [f"- {T.car_name(c)}: {c.color}, {c.price:,} dirhams" for c in res.cars]
+        s.excluded |= {c.stock_id for c in s.shown}                    # read out now: a "keep listing" moves on from these too
         ask = W.hear_more_or_book(s) if len(res.cars) == 1 else (
             "Which one would you like to hear more about, or shall I go through the rest?" if more > 0 else "Which one would you like to hear more about?")
         listed = W.list_line(s, list(res.cars), res.total)               # "..., and 5 more" when more than two are left
+        if read_out_before:
+            return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {read_out_before} already read out earlier in this list, {res.total} left; these are the next {len(res.cars)}:", *sheet,
+                                                          *([f"{more} more are still left after these: read out only these {len(res.cars)}."] if more > 0 else ["That is the end of the list."])], "awaiting": True}
         if more > 0:
             return {"core": f"{listed} {ask}", "facts": [f"Search for {wanted}: {res.total} match(es):", *sheet,
                                                               *([f"There are {more} more not listed: say how many in total ({res.total}) and read out only these {len(res.cars)}."] if more > 0 else [])], "awaiting": True}

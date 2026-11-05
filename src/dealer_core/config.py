@@ -71,7 +71,11 @@ class BackendCfg(_Strict):
     kv_cache_gb: float = 2.0                     # openvino batching only: memory for the shared KV cache
     max_parallel: int = 32                       # openvino batching only: requests in flight at once
     model_env: str | None = None                 # cloud_stub only: env var holding the model name (never hard-coded)
-    api_key_env: str | None = None               # cloud_stub only
+    api_key_env: str | None = None               # cloud_stub, and openai on a hosted service (Bedrock): env var holding the key (never in config)
+    extra_body: dict[str, Any] = Field(default_factory=dict)   # openai only: fields added to every request (Bedrock: reasoning_effort, service_tier)
+    cloud: bool = False                          # a third-party service outside the company (Bedrock): built only with VOICE_AGENT_ALLOW_CLOUD=1
+    keepalive_s: float | None = None             # openai only: seconds an idle connection is kept open (None = httpx's own 5 s). A new connection to Bedrock costs 0.6 to 0.8 s from Dubai (section 74)
+    http2: bool = False                          # openai only: HTTP/2, so the decision and the replies share one connection and stopping a reply does not close it (needs the h2 package)
 
 
 class LlmCfg(_Strict):
@@ -181,7 +185,7 @@ class DialogueCfg(_Strict):
     reply_max_words: int = 0                     # ask the model for at most this many words (0 = no limit; voice sets one)
     max_reply_tokens: int = 70                   # cap on the model-written reply (the main driver of reply time)
     decision_backend: str | None = "openvino_gpu"   # agent engine: the (smaller, faster) model that picks the tool each turn; None = the reply model
-    quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code (agent/governor.py)
+    quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code | observe (always full, never sheds, still measures) (agent/governor.py)
     model_budget_ms: float = 700.0               # auto: time to the model's first sentence that still keeps the reply under ~1 s; slower -> prefix
     model_shed_after_ms: float = 450.0           # auto: past this measured decision time a growing share of turns skip the model (load shedding; 0 = never)
     explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
@@ -203,6 +207,10 @@ class DialogueCfg(_Strict):
     variant_seed: int = 7                        # seeds the per-call pick, so a call can be reproduced
 
 
+FAST_HOLD_FALLBACK_SECS = 0.4        # voice.fast_hold: the silence after which a turn Smart Turn calls unfinished ends anyway (default 0.6)
+FAST_HOLD_STOP_SECS = 0.15           # ...and the voice detector's own silence before Smart Turn looks (default 0.2)
+
+
 class VoiceCfg(_Strict):
     reply_deadline_ms: int = 4500                # model-written reply must be ready by then, else the standard wording is spoken
     first_sentence_deadline_ms: int = 1500       # ...and its FIRST usable sentence by this time (about twice the governor's budget): else the model is given up on and the code's own wording is spoken at once,
@@ -210,17 +218,25 @@ class VoiceCfg(_Strict):
     history_lines: int = 6                       # lines of the conversation the model is shown for a reply (the text chat keeps 10)
     reply_max_words: int = 30
     reply_max_tokens: int = 110
+    stt_hotwords_max: int = 200                   # with stt_hotwords_field: the most car names sent to the recogniser each turn (the makes in play first). 200 sends every make and model of a stock twice the size of today's 95 names; names cost about 1 ms each, and only the names that exist are sent
+    first_clause_words: int = 6                   # the reply's first spoken piece may end at a comma once it has this many words (6 = as before; 3 starts speech on "I've got ten Toyotas," instead of waiting for a longer clause)
     opener: bool = False                          # the reply starts with a very short reaction, so the first audio does not wait for the facts
     barge_in: bool = True                         # the caller can talk over the agent (needs a headset or the browser's echo cancellation; off on open laptop speakers)
     barge_in_min_speech_secs: float = 0.3         # barge-in: the caller must speak this long over the agent (after the detector's own 0.1 s start) before it stops: a cough or a click does not
     barge_in_level: float = 0.01                  # ...counting audio at least this loud (speech in the owner's calls: median 0.03 to 0.05; background 0.0003 to 0.004)
     model_only: bool = False                      # False (the production behaviour): a reply the model leaves short, or a sentence the checks drop, is completed with the code's own facts and question.
                                                   # True = TEST MODE: only the model's own words are spoken, nothing in their place (27 Oct: a reply could end after its opener). Was True by default
+    one_call: bool = False                        # with model_only: the model picks the action and writes the reply in ONE call, given the likely facts up front (ARCH_REVIEW section 64)
+    rules_decide: bool = False                    # with model_only: the code picks the lookup when its own rules are certain, so the decision costs no model call; the model still decides every other turn and writes every reply (ARCH_REVIEW section 89)
+    hold_reply: bool = False                      # with model_only: while Smart Turn holds a pause (and when the words read as finished), the reply for the decided lookup is already being written, so the first words are ready when the turn ends. Costs one reply call per hold (ARCH_REVIEW section 92)
+    parallel: bool = False                        # with model_only (and not one_call): while the model picks the action, the reply is already written for each likely lookup; the decision's pick is spoken (ARCH_REVIEW section 67)
     high_risk_drafts: bool = True                 # the model also words price / booking / hand-off turns in voice (exact figures, dates and numbers are verified; the standard wording is the fallback)
     smart_turn: bool = True                       # Smart Turn v3 decides when you have finished (short VAD silence + a model), instead of a fixed silence
     smart_stop_secs: float = 0.2                  # the VAD silence used with smart_turn
     smart_fallback_secs: float = 0.6              # with smart_turn: silence after which the turn ends even if the model says "still going"
     smart_short_answer_secs: float = 0.0          # OFF. The length rule (an answer this short after a question counts as finished) cut 20 of 36 sentences in half instead of 4: "Toyota" and "Can I book..." are both short
+    smart_text_check: bool = False                # OFF. MEASURED 3 Nov (ARCH_REVIEW section 93): it ended "Can you tell me?" as a turn, because the recogniser writes a question mark on a fragment, and split the sentence in two. Leave it off. When Smart Turn says "still going", recognise the turn once and end it at once if the words read as a finished sentence (voice/finished.py); the words then serve the decision and reply. Saves the rest of the hold (0.3 to 0.6 s) on those turns; a caller who finishes a clause and carries on after the short silence is cut
+    fast_hold: bool = False                       # OFF. MEASURED 3 Nov (section 93): a 0.4 s fallback (and even 0.5 s) split a caller whose pauses inside a sentence are 0.5 to 0.6 s long; 0.6 s kept it whole. The shorter hold in one switch: smart_fallback_secs 0.4 (was 0.6) and smart_stop_secs 0.15 (was 0.2), whichever is longer is lowered to those. Turns end 0.05 s sooner and held turns 0.2 s sooner; cuts a sentence at a pause of 0.15 s that is not its end
     smart_peek: bool = False                      # OFF until real recordings show a gain (synthetic voices: no benefit, +3 cut sentences in 36). When Smart Turn hesitates, check the WORDS: a complete answer to the agent's last question ends the turn at once
     vad_start_secs: float = 0.1                   # speech must last this long to start a turn (0.2 lost one-word answers such as "Toyota")
     vad_min_volume: float = 0.1                   # volume gate of the detector (Pipecat's default 0.6 rejected short words)
@@ -257,10 +273,15 @@ class VoiceCfg(_Strict):
     greet_if_quiet_secs: float = 3.0              # voice server: the caller speaks first; the greeting is said only after this much quiet at the start (owner, 30 Oct). 0 = greet at once
     still_there_secs: float = 8.0                 # voice server: after the agent has finished, this much quiet gets "Hello? Are you still there?". 0 = never
     hang_up_secs: float = 7.0                     # ...and this much more ends the call, after "I'll end the call here...". The call can be carried on for calls_kept_secs. 0 = never
-    calls_kept_secs: float = 900.0                # a call is remembered this long after its last turn: the visitor who comes back carries on where they were (owner, 30 Oct)
+    max_call_secs: float = 7200.0                 # voice server: the longest one call may last (5 Nov, the owner: calls go on until the caller stops them, so this only keeps a call that never ends, from holding a place forever). Was a fixed 900 (15 minutes). A quiet call already ends by itself after still_there_secs + hang_up_secs. The call is kept (calls_kept_secs), so the page's reconnect carries on. 0 = no limit
+    calls_kept_secs: float = 86400.0              # a call is remembered this long after its last turn: the visitor who comes back carries on where they were, until they close the browser (the page forgets the call then). Was 900 (15 minutes); a day is the ceiling for a browser left open (owner, 3 Nov)
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling
     admission_target_ms: float = 1000.0          # the 90th percentile of replies the cap is held to
+    trip_ping: bool = True                        # agent engine: each turn sends one request with no key to the model server in the background, to show the network round trip in the page's latency table (ARCH_REVIEW section 96). False = no extra request
+    early_start_gate: bool = True                 # with early_start_secs: the early work (the decision and the reply written ahead) is started only when the words so far read as a finished sentence or a complete answer; a half sentence is recognised and nothing more (ARCH_REVIEW section 95)
+    early_start_verify: bool = True               # with early_start_secs: the turn is still recognised in full after it ends, and the early work is used only if the words are the same (the early reading differed on about 1 turn in 4 with Whisper). False = the early words are used as they are, 0.06 to 0.1 s sooner
+    opener_first: bool = False                    # with model_only: a short acknowledgement the code picks ("Sure,", "Okay,", from the voice's cache) is said at once while the model writes, for list, count and car-fact answers; the model's own words follow, with its own "Sure," dropped (ARCH_REVIEW section 95)
     early_start_secs: float = 0.0                 # speculate: also start recognising (and the model's decision) after this much real quiet INSIDE a turn, before the turn is confirmed over. In tap mode the
                                                   # voice detector waits 0.6 s, so this answers up to 0.4 s sooner; wasted work if the caller was only pausing (at most 3 times a turn). 0 = only when Smart Turn holds a pause
     speculate: bool = True                       # smart_turn: while it holds a pause as "still going", recognise the turn and make the model's decision in the
@@ -271,7 +292,17 @@ class VoiceCfg(_Strict):
     stt_url: str = ""                            # recognition on a shared GPU server instead of in the worker (OpenAI-compatible /v1/audio/transcriptions:
                                                  # vLLM with a Whisper model, speaches / faster-whisper-server). Empty = local OpenVINO Whisper
     stt_remote_model: str = "openai/whisper-large-v3-turbo"   # the name that server knows the model by
+    stt_hotwords_field: bool = False              # with stt_url: send the stock's make and model names as a `hotwords` field (the model's own hot-word list) and NO `prompt`. For Qwen3-ASR
+                                                  # (scripts/qwen3_asr_server.py), which does better with hot-words than with the hint's sentences (ARCH_REVIEW section 81); a Whisper server wants the hint
     stt_timeout_s: float = 3.0                   # a remote transcription slower than this counts as "not heard" (the caller is asked again)
+
+    @model_validator(mode="after")
+    def _fast_hold(self) -> "VoiceCfg":
+        """voice.fast_hold: the shorter hold in one switch (only ever shortens: a value already lower is kept)."""
+        if self.fast_hold:
+            self.smart_fallback_secs = min(self.smart_fallback_secs, FAST_HOLD_FALLBACK_SECS)
+            self.smart_stop_secs = min(self.smart_stop_secs, FAST_HOLD_STOP_SECS)
+        return self
 
 
 class Config(_Strict):

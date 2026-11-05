@@ -204,7 +204,7 @@ def test_off_greets_at_once_and_never_asks():
 
 def test_the_settings():
     v = load_config(environ={}).voice
-    assert (v.greet_if_quiet_secs, v.still_there_secs, v.hang_up_secs, v.calls_kept_secs) == (3.0, 8.0, 7.0, 900.0)
+    assert (v.greet_if_quiet_secs, v.still_there_secs, v.hang_up_secs, v.calls_kept_secs) == (3.0, 8.0, 7.0, 86400.0)       # the call is kept a day (was 900 s; 3 Nov, ARCH_REVIEW section 94)
 
 
 def test_a_turn_taken_while_the_agent_is_still_talking_does_not_start_the_clock_until_it_stops():

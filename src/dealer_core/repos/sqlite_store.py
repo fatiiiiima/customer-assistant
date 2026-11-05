@@ -154,6 +154,13 @@ class SqliteInventoryRepo:
             vocab.setdefault(r["make"].lower(), []).append(r["model"].lower())
         return vocab
 
+    def hotword_vocabulary(self) -> dict[str, list[str]]:
+        """{make: [models]} of EVERY car in the database, sold or reserved too: what the recogniser should be able to hear (a caller may ask for a car that is no longer for sale)."""
+        vocab: dict[str, list[str]] = {}
+        for r in self.db.query("SELECT DISTINCT make, model FROM cars ORDER BY make, model"):
+            vocab.setdefault(r["make"].lower(), []).append(r["model"].lower())
+        return vocab
+
     # ---- spec sheets, showroom, sync (inventory/sync.py) --------------------------------------------------------
     def details(self, stock_id: str) -> CarDetails | None:
         rows = self.db.query("SELECT * FROM car_details WHERE stock_id = ?", (stock_id,))

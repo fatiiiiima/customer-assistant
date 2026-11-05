@@ -19,6 +19,7 @@ by code ("prefill") is continued with `continue_final_message` (vLLM) and, for s
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -26,8 +27,20 @@ from typing import Iterator
 
 from ..config import BackendCfg, LlmCfg
 from ..dialogue.states import Intent, State
+from ..shared import usage
 from . import prompts
 from .backend import BackendError, BackendHealth, BackendTimeout, IntentResult, NluBackend, resolve_prompt_mode
+
+
+log = logging.getLogger(__name__)
+
+
+def _http2_available() -> bool:
+    try:
+        import h2  # noqa: F401 - httpx needs it for http2=True
+    except ImportError:
+        return False
+    return True
 
 
 class OpenAICompatBackend(NluBackend):
@@ -38,8 +51,14 @@ class OpenAICompatBackend(NluBackend):
         self.mode = resolve_prompt_mode(cfg)
         self.base = cfg.host.rstrip("/")
         key = os.environ.get(cfg.api_key_env) if cfg.api_key_env else None
+        limits = {"max_connections": cfg.max_parallel, "max_keepalive_connections": cfg.max_parallel}
+        if cfg.keepalive_s is not None:
+            limits["keepalive_expiry"] = cfg.keepalive_s
+        http2 = cfg.http2 and _http2_available()
+        if cfg.http2 and not http2:
+            log.warning("backend %s: http2 is set but the h2 package is missing; using HTTP/1.1", name)
         self.client = httpx.Client(timeout=cfg.timeout_s, headers={"Authorization": f"Bearer {key}"} if key else {},
-                                   limits=httpx.Limits(max_connections=cfg.max_parallel, max_keepalive_connections=cfg.max_parallel))
+                                   limits=httpx.Limits(**limits), http2=http2)
         self.can_choose = True                     # False once the server refused a constrained choice (then the decision is asked as free text)
 
     def health(self) -> BackendHealth:
@@ -52,6 +71,25 @@ class OpenAICompatBackend(NluBackend):
         if names and self.cfg.model not in names:
             return BackendHealth(False, f"model {self.cfg.model!r} not served at {self.base} (it serves {names[:3]})")
         return BackendHealth(True, f"openai-compatible {self.cfg.model} at {self.base}")
+
+    def warm_connection(self) -> bool:
+        """Open (or keep) a connection to the server with a cheap request, so the first real call of a call does not pay for a new one (0.6 to 0.8 s to Bedrock from Dubai,
+        ARCH_REVIEW section 74). Never raises: a failure just means the first call pays."""
+        try:
+            self.client.get(f"{self.base}/models", timeout=5.0).raise_for_status()
+        except Exception:  # noqa: BLE001 - warming is best effort
+            return False
+        return True
+
+    def ping_ms(self) -> float | None:
+        """The network round trip to the server, in milliseconds: a request with no key, answered at the edge, on the connection the calls use (ARCH_REVIEW section 96: about 0.2 s
+        to Bedrock from Dubai, 1 ms to a server on this machine). None on a failure. Never raises."""
+        try:
+            t = time.perf_counter()
+            self.client.get(f"{self.base}/models", headers={"Authorization": ""}, timeout=3.0)
+            return (time.perf_counter() - t) * 1000
+        except Exception:  # noqa: BLE001 - a diagnostic
+            return None
 
     # -- internals ---------------------------------------------------------------------------
     def _body(self, system: str, user: str, max_tokens: int, temperature: float | None, prefill: str = "", schema: dict | None = None,
@@ -69,18 +107,23 @@ class OpenAICompatBackend(NluBackend):
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
         if "qwen3" in self.cfg.model.lower() and not self.llm.think:
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        body.update(self.cfg.extra_body)                                                  # Bedrock: reasoning_effort, service_tier
         return body
 
     def _post(self, body: dict, timeout: float) -> dict:
+        usage.add("model.post")
+        usage.add("model.input_chars", sum(len(m.get("content") or "") for m in body.get("messages", [])))
         try:
             r = self.client.post(f"{self.base}/chat/completions", json=body, timeout=timeout)
         except Exception as e:
+            usage.add("model.error")
             if "Timeout" in type(e).__name__:
                 raise BackendTimeout(f"{self.name} exceeded {timeout:.1f}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
         if r.status_code == 400 and body.get("continue_final_message"):
             raise _NoPrefill()
         if r.status_code >= 400:
+            usage.add("model.error")
             raise BackendError(f"{self.name} HTTP {r.status_code}: {r.text[:200]}")
         return r.json()
 
@@ -136,6 +179,9 @@ class OpenAICompatBackend(NluBackend):
     def _stream(self, body: dict, deadline_s: float | None) -> Iterator[str]:
         limit = deadline_s or self.cfg.timeout_s * 3
         started = time.perf_counter()
+        usage.add("model.stream")
+        usage.add("model.input_chars", sum(len(m.get("content") or "") for m in body.get("messages", [])))
+        finished = False
         try:
             with self.client.stream("POST", f"{self.base}/chat/completions", json=body, timeout=limit + 2) as r:
                 if r.status_code == 400 and body.get("continue_final_message"):
@@ -149,18 +195,27 @@ class OpenAICompatBackend(NluBackend):
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        finished = True
                         return
                     delta = (json.loads(data).get("choices") or [{}])[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
+                finished = True                                       # the server ended the stream itself (some end with no "[DONE]" line)
         except _NoPrefill:
             raise
         except BackendError:
+            usage.add("model.error")
+            raise
+        except GeneratorExit:
             raise
         except Exception as e:
+            usage.add("model.error")
             if "Timeout" in type(e).__name__:
                 raise BackendTimeout(f"{self.name} produced nothing within {limit:.0f}s") from e
             raise BackendError(f"{type(e).__name__}: {e}") from e
+        finally:
+            if not finished:
+                usage.add("model.stream_cut")                       # closed before its end: stopped by the caller, or failed
 
     def answer(self, question: str, context: str, max_sentences: int = 2) -> Iterator[str]:
         yield from self.lead_in_stream(prompts.OPEN_ANSWER_SYSTEM.format(n=max_sentences), f"CONTEXT: {context}\nCALLER: {question}",

@@ -22,10 +22,15 @@ class TurnClock:
         self._turn_stop = stop_secs if not callable(stop_secs) else 0.0           # the value that applied to the turn in progress
         self.on_answer, self.fillers = on_answer, fillers
         self.t_stop = self.t_stt = self.t_sentence = None
+        self.trace = None                                              # diagnostics only (the call recorder): (kind, text) when the clock sees a stop, the words, the first sentence, the first sound
+        self._traced = None
         self._turn: dict | None = None                                 # this turn's answer timing: base, filler first, answer ready, voice delay
 
     def see(self, frame: Frame, stage: str) -> None:
         now = self._now()
+        if self.trace is not None and frame is not self._traced and isinstance(frame, (VADUserStoppedSpeakingFrame, TranscriptionFrame, TTSSpeakFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame)):
+            self._traced = frame                                       # (each frame passes three probes: noted once)
+            self.trace("clock", f"{type(frame).__name__.replace('Frame', '')}{' (waiting for a stop: %s)' % ('yes' if self.t_stop is not None else 'no') if isinstance(frame, BotStartedSpeakingFrame) else ''}")
         if stage == "vad" and isinstance(frame, VADUserStoppedSpeakingFrame):
             self.t_stop, self.t_stt, self.t_sentence = now, None, None
             self._turn_stop = self.stop_secs() if callable(self.stop_secs) else self.stop_secs

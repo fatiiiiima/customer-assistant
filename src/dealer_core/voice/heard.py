@@ -41,6 +41,10 @@ class Playback:
     def sentence(self, text: str) -> None:
         self._sentences.append(text)
 
+    def text(self) -> str:
+        """The reply being played, as written."""
+        return " ".join(self._sentences)
+
     def audio(self, seconds: float, at: float | None = None) -> None:
         """A chunk of the latest sentence reached the output transport at `at`."""
         if not self._sentences or seconds <= 0:

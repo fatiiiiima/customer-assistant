@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import numpy as np
 from loguru import logger
-from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, InputAudioRawFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, InputAudioRawFrame, TranscriptionFrame, VADUserStartedSpeakingFrame,
+                                   VADUserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
 class BargeIn(FrameProcessor):
-    def __init__(self, playback=None, min_speech_secs: float = 0.3, level: float = 0.01, **kwargs) -> None:
+    def __init__(self, playback=None, min_speech_secs: float = 0.3, level: float = 0.01, on_event=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.playback, self.min_speech_secs, self.level = playback, min_speech_secs, level
+        self.on_event = on_event                       # (kind, text) for the call recorder (voice/audiotap.py): why a speech over the agent did or did not stop it
+        self._peak = 0.0                               # the loudest 20 ms frame of the candidate
         self._bot_speaking = False                     # the server's own view (used only without a Playback)
         self._candidate = False                        # the caller started speaking over the agent: is it real speech?
         self._voiced = 0.0
@@ -41,27 +44,73 @@ class BargeIn(FrameProcessor):
         elif direction is not FrameDirection.DOWNSTREAM:
             return False
         elif isinstance(frame, VADUserStartedSpeakingFrame):
-            self._candidate, self._voiced = self.agent_audible(), 0.0
+            self._candidate, self._voiced, self._peak = self.agent_audible(), 0.0, 0.0
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             if self._candidate:
                 self.ignored += 1
+                self._event("over_agent", f"not enough: {self._voiced:.2f} s of speech louder than {self.level} (needs {self.min_speech_secs} s); loudest {self._peak:.3f}")
             self._candidate = False
         elif isinstance(frame, InputAudioRawFrame) and self._candidate:
             if not self.agent_audible():
                 self._candidate = False                # the agent finished by itself: nothing to interrupt
+                self._event("over_agent", f"the agent finished by itself first ({self._voiced:.2f} s of speech so far, loudest {self._peak:.3f})")
                 return False
             x = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float32) / 32768
-            if len(x) and float(np.sqrt(np.mean(x ** 2))) >= self.level:
+            rms = float(np.sqrt(np.mean(x ** 2))) if len(x) else 0.0
+            self._peak = max(self._peak, rms)
+            if rms >= self.level:
                 self._voiced += len(x) / max(1, frame.sample_rate * frame.num_channels)
             if self._voiced >= self.min_speech_secs:
                 self._candidate, self._bot_speaking = False, False
                 self.interruptions += 1
+                self._event("cut", f"stopped the agent after {self._voiced:.2f} s of speech louder than {self.level}; loudest {self._peak:.3f}")
                 return True
         return False
+
+    def _event(self, kind: str, text: str) -> None:
+        if self.on_event is not None:
+            self.on_event(kind, text)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if self.observe(frame, direction):
             logger.debug("barge-in: the caller spoke over the agent")
+            await self.broadcast_interruption()
+        await self.push_frame(frame, direction)
+
+
+class LateBargeIn(FrameProcessor):
+    """Between the recogniser and the brain. A turn whose words arrive while the agent is still audible was said over it but did not stop it: BargeIn wants 0.3 s of
+    loud speech, and "Tomorrow.", "no", "Porsche." are shorter. It used to be answered after the whole reply had played (30 Oct, the owner: "it hears me but it
+    continues speaking the full response ... and then it replies to that barge in"). Now, unless the brain says it is not the caller talking over the agent
+    (`DealerBrain.talks_over`: the room, echo, invented words, a "yes" or "okay"), the agent stops there: the brain keeps what was heard of the reply, the voice and
+    the page drop the rest, and the words are answered at once."""
+
+    def __init__(self, brain, playback, on_event=None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.brain, self.playback = brain, playback
+        self.on_event = on_event                                   # (kind, text) for the call recorder: the words that arrived over the agent, and whether they stopped it
+        self.interruptions = 0
+
+    def observe(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM) -> bool:
+        """The decision, without the pipeline: True when these words should stop the agent. Keeps what the caller heard of the reply (the tracker after the
+        voice would see a new reply by then)."""
+        if direction is not FrameDirection.DOWNSTREAM or not isinstance(frame, TranscriptionFrame) or not self.playback.playing():
+            return False
+        if not self.brain.talks_over(frame.text):
+            if self.on_event is not None:
+                self.on_event("late_kept", f"words arrived over the agent but were not taken as talking over it: {frame.text!r}")
+            return False
+        if self.on_event is not None:
+            self.on_event("late_cut", f"stopped the agent for the words {frame.text!r}")
+        self.brain.reply_cut(self.playback.heard())
+        self.playback.new_reply()
+        self.interruptions += 1
+        return True
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if self.observe(frame, direction):
+            logger.debug("late barge-in: words said over the agent arrived while it was still audible")
             await self.broadcast_interruption()
         await self.push_frame(frame, direction)

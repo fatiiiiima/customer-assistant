@@ -269,6 +269,17 @@ def _join(*parts: str | None) -> str | None:
     return body[0].upper() + body[1:] + "."
 
 
+NEVER_RECORDED = ("number of keys", "registration expiry", "finance and insurance", "tyre condition")      # asked on the phone, in no car's record
+
+
+def unrecorded(d: CarDetails) -> list[str]:
+    """What a caller may ask about this car that its record does not hold: the things the spec sheet can hold and this car's leaves blank, then what no car's record has.
+    The model is told, so it says it does not have it instead of guessing (a blank accident field must not become "accident-free")."""
+    blank = [name for name, value in (("accident history", d.accident), ("service history", d.service), ("number of previous owners", d.owners),
+                                      ("warranty", d.warranty), ("fuel economy", d.consumption)) if not _known(value)]
+    return [*blank, *NEVER_RECORDED]
+
+
 def group_sentence(group: str, d: CarDetails) -> str | None:
     """One sentence about a group of facts; None when the spec sheet records none of them."""
     if group == "about":

@@ -68,6 +68,21 @@ class Hardware:
     tts_ms: float = 60.0          # the voice's first audio, unloaded
     endpoint_s: float = 0.25      # waiting for the caller to finish (Smart Turn)
     code_share: float = 0.6       # turns the code answers without the model (measured in the live calls: most of them)
+    # The measured stack (ARCH_REVIEW sections 101 and 102): servers that do ONE request at a time per copy (our recogniser and voice server), what a turn asks of them, and
+    # the reply written ahead. All off (0) by default: the scenarios above are unchanged.
+    decide_share: float = 1.0     # of the turns that use the model, those that need it for the decision too (measured: 0.2; the code's rules decide the rest)
+    ahead_share: float = 0.0      # replies already being written when the words arrive (measured: 0.72 to 0.85) ...
+    ahead_s: float = 0.0          # ... and how long before (measured: 0.2 s)
+    stt_copies: int = 0           # recogniser copies, each one clip at a time (0: the shared server above)
+    stt_service_ms: float = 167.0  # one clip (measured: Qwen3 6.0 a second, Parakeet 23)
+    stt_clips: float = 2.7        # clips a turn: the early readings and the final one (measured 2.5 to 2.85)
+    tts_copies: int = 0           # voice server copies, each one sentence at a time (0: the voice above, unshared)
+    tts_first_ms: float = 70.0    # the first byte of a sentence from an idle server (measured)
+    tts_first_service_ms: float = 170.0   # the server's time for the first clause of a reply ...
+    tts_rest_service_ms: float = 620.0    # ... and for the rest of it (5.5 s of speech a turn at 7 s of speech a second: 0.79 s)
+    tts_timeout_s: float = 2.0    # a voice server that has not answered by then is given up on (voice/remote_tts.py first_timeout_s)
+    tts_fallback_ms: float = 300.0  # the fallback voice's first audio (Kokoro, on the worker)
+    extra_model_requests: float = 0.0   # model requests a turn makes that nobody waits for (a reply written ahead for a lookup that was not picked, one written during a hold): measured 1.0 of the 2.8 to 3.3 a model-decides turn makes
 
 
 class Shared:
@@ -85,6 +100,32 @@ class Shared:
 
     def end(self) -> None:
         self.in_flight -= 1
+
+
+class Serial:
+    """A server whose every copy does one request at a time (our Qwen3 recogniser, our Pocket voice server): a request goes to the copy that is free soonest and waits for its
+    turn. MEASURED the same way (section 101): the wait is the number ahead of it times the service time."""
+
+    def __init__(self, sim: Sim, copies: int) -> None:
+        self.sim, self.free = sim, [0.0] * max(1, copies)
+        self.requests = 0
+        self.busy_s = 0.0
+
+    def ask(self, service_s: float) -> tuple[int, float]:
+        """(the copy, the time before this request starts)."""
+        service_s *= math.exp(self.sim.rng.gauss(0, 0.2))
+        i = min(range(len(self.free)), key=self.free.__getitem__)
+        start = max(self.sim.t, self.free[i])
+        self.free[i] = start + service_s
+        self.requests += 1
+        self.busy_s += service_s
+        self._last = service_s
+        return i, start - self.sim.t
+
+    def give_up(self, copy: int) -> None:
+        """The caller closed the request (the voice's 2 s timeout): the copy does not make that speech."""
+        self.free[copy] = max(self.sim.t, self.free[copy] - self._last)
+        self.busy_s -= self._last
 
 
 # ------------------------------------------------------------------------------------------------ the cluster
@@ -119,6 +160,8 @@ class Stats:
     prefix_idle: int = 0                                   # model turns spoken at the prefix level while the model server was less than half busy
     stuck: int = 0                                         # samples (every 5 s) of a worker with calls whose governor is above its budget although the model server is less than half busy
     worker_samples: int = 0
+    voice_sentences: int = 0                               # first sentences asked of the voice server ...
+    voice_fallbacks: int = 0                               # ... and the ones its 2 s timeout gave to the fallback voice
     timeline: list[tuple] = field(default_factory=list)    # (t, callers wanting a call, in calls, workers ready, answer p90 last 30 s, workers above their budget, model load 0-1+)
 
 
@@ -132,6 +175,8 @@ class Scenario:
     model_slots_at: list[tuple[float, int]] = field(default_factory=list)   # (t, slots): a GPU fails / comes back
     adaptive: bool = True                                  # protection on: the measured call cap, model load shedding, the 1.2 s decision deadline.
                                                            # False = the code before it: a fixed cap, no shedding, a 5 s deadline
+    model_only: bool = False                               # the boss's rule: the model decides and writes EVERY turn, no code or prefix answers, nothing shed, no deadline after which the code answers.
+                                                           # The governor only observes; what protects callers is the call cap (callers turned away) and more model capacity.
     ceiling: int = 16
     min_workers: int = 36                                  # what is running when the calls start (deploy/k8s: 36 replicas)
     max_workers: int = 72                                  # deploy/k8s: maxReplicas
@@ -141,6 +186,8 @@ class Scenario:
     probe_every_s: float = 20.0                            # dialogue.probe_every_s
     probe_max_in_flight: int = 0                           # dialogue.probe_max_in_flight (0: only when no turn at all is using the model)
     probe_skip_fresh: bool = True                          # skip a round when a caller's model-written turn timed the model within the interval (B5; False = the rule before it)
+    think_s: tuple[float, float] = (0.0, 0.0)              # the caller's pause after a reply, before the next question (the recorded calls: a turn every 15 s in all)
+    agent_speaks_s: tuple[float, float] = (2.5, 6.0)       # how long a reply is spoken (measured, section 102: 5 s at the median, 6.4 on average)
     cold_start: bool = False                               # start from `cold_min` workers (everything scaled down overnight)
     cold_min: int = 8
     seed: int = 7
@@ -159,12 +206,14 @@ def run(sc: Scenario) -> dict:
     hw = sc.hardware
     model = Shared(sim, hw.model_slots, hw.decide_ms)
     stt = Shared(sim, hw.stt_slots, hw.stt_ms)
+    stt_serial = Serial(sim, hw.stt_copies) if hw.stt_copies else None
+    tts_serial = Serial(sim, hw.tts_copies) if hw.tts_copies else None
     router = Assigner(None, rng=random.Random(sc.seed), clock=sim.now)
     workers: list[Worker] = []
     st = Stats()
 
     def new_worker(start_delay: float) -> Worker:
-        gov = QualityGovernor("auto", budget_ms=700, shed_after_ms=450 if sc.adaptive else 0, rng=random.Random(sim.rng.random()), clock=sim.now)
+        gov = QualityGovernor("observe" if sc.model_only else "auto", budget_ms=700, shed_after_ms=450 if sc.adaptive and not sc.model_only else 0, rng=random.Random(sim.rng.random()), clock=sim.now)
         gov.probed = True                                   # the voice server always runs the probe (server/app.py): an unmeasured model is played safe
         w = Worker(f"w{len(workers) + 1}", sc.ceiling, gov,
                    AdmissionController(sc.ceiling, target_s=sc.target_s, clock=sim.now) if sc.adaptive else None, sim.t + start_delay)
@@ -252,12 +301,16 @@ def run(sc: Scenario) -> dict:
         cpu = max(1.0, w.active / hw.worker_cpu_calls) ** 3      # a worker past what its CPU keeps up with: everything on it lags
         lag = 0.04 * (cpu - 1)
         yield hw.endpoint_s * math.exp(rng.gauss(0, 0.1)) + lag
-        lat = stt.begin()
-        yield lat
-        stt.end()
+        if stt_serial is not None:                              # the final clip waits behind the early readings of every caller
+            _, wait = stt_serial.ask(hw.stt_service_ms / 1000)
+            yield wait + hw.stt_service_ms / 1000
+        else:
+            lat = stt.begin()
+            yield lat
+            stt.end()
         heard = sim.t - t0
         bridged = False
-        deadline = 1.2 if sc.adaptive else 5.0
+        deadline = 1e9 if sc.model_only else 1.2 if sc.adaptive else 5.0         # model_only: no request is dropped for the code to answer; the caller waits for the model
         if rng.random() < hw.code_share:
             st.levels["code-routed"] += 1 if t0 >= sc.measure_from_s else 0
             yield 0.02
@@ -268,21 +321,28 @@ def run(sc: Scenario) -> dict:
             yield 0.02
         else:
             wait = w.governor.expected_wait_ms()
-            bridged = wait is not None and wait >= 450 and rng.random() < 0.7      # "Let me check." (lookup-like requests only)
-            lat = model.begin(hw.decide_ms)
-            w.governor.stats.in_flight += 1                        # engine: `with governor.using_model()` around the decision and the writing
-            yield min(lat, deadline)                               # past the deadline the request is dropped (the server stops it)
-            model.end()
-            w.governor.stats.in_flight -= 1
-            w.governor.record_decide(min(lat, deadline) * 1000)
+            bridged = wait is not None and wait >= 450 and rng.random() < 0.7 and not sc.model_only      # (model_only: the engine says no "Let me check.")      # "Let me check." (lookup-like requests only)
+            if rng.random() < hw.decide_share:
+                lat = model.begin(hw.decide_ms)
+                w.governor.stats.in_flight += 1                    # engine: `with governor.using_model()` around the decision and the writing
+                yield min(lat, deadline)                           # past the deadline the request is dropped (the server stops it)
+                model.end()
+                w.governor.stats.in_flight -= 1
+                w.governor.record_decide(min(lat, deadline) * 1000)
+            else:
+                lat = 0.0                                          # the code's rules chose the look-up: no decision call
             level = "code" if lat > deadline else w.governor.choose()   # too slow: the code's own decision and wording
             if t0 >= sc.measure_from_s:
                 st.levels[level] += 1
                 st.prefix_idle += level == "prefix" and model.in_flight / model.slots < 0.5
+            if hw.extra_model_requests and level == "full":
+                for _ in range(int(hw.extra_model_requests) + (rng.random() < hw.extra_model_requests % 1)):
+                    sim.spawn(continuation(w, 1.0))                 # work the model does that nobody waits for: it still takes a place in the queue
             if level == "full":
                 lat = model.begin(hw.first_ms)
                 w.governor.stats.in_flight += 1
-                yield lat
+                ahead = rng.random() < hw.ahead_share              # the request went out during the pause: part of the wait is already over
+                yield max(0.0, lat - hw.ahead_s) if ahead else lat
                 model.end()
                 w.governor.stats.in_flight -= 1
                 w.governor.record_full(lat * 1000)
@@ -290,7 +350,21 @@ def run(sc: Scenario) -> dict:
                 yield 0.01                                         # the code's facts, at once
                 if level == "prefix":
                     sim.spawn(continuation(w))                      # the model adds the question while the facts are spoken
-        yield hw.tts_ms / 1000 * cpu
+        if tts_serial is not None:
+            copy, wait = tts_serial.ask(hw.tts_first_service_ms / 1000)
+            delay = wait + hw.tts_first_ms / 1000
+            if t0 >= sc.measure_from_s:
+                st.voice_sentences += 1
+            if delay > hw.tts_timeout_s:                            # no first byte in time: the fallback voice says it, on the worker's CPU
+                tts_serial.give_up(copy)
+                delay = hw.tts_timeout_s + hw.tts_fallback_ms / 1000 * cpu
+                if t0 >= sc.measure_from_s:
+                    st.voice_fallbacks += 1
+            else:
+                sim.spawn(voice_rest(), hw.tts_first_service_ms / 1000)
+            yield delay
+        else:
+            yield hw.tts_ms / 1000 * cpu
         answer = sim.t - t0
         first = min(answer, heard + 0.03 + lag) if bridged else answer
         if w.admission is not None:
@@ -303,8 +377,16 @@ def run(sc: Scenario) -> dict:
             st.answer.append(answer)
             st.bridged += bridged
 
-    def continuation(w: Worker):
-        lat = model.begin(hw.first_ms * 0.6)
+    def early_clip():
+        stt_serial.ask(hw.stt_service_ms / 1000)
+        yield 0.0
+
+    def voice_rest():                                       # the rest of the reply's speech: not waited for, but it holds a voice server copy
+        tts_serial.ask(hw.tts_rest_service_ms / 1000)
+        yield 0.0
+
+    def continuation(w: Worker, share: float = 0.6):
+        lat = model.begin(hw.first_ms * share)
         w.governor.stats.in_flight += 1
         yield lat
         model.end()
@@ -332,9 +414,15 @@ def run(sc: Scenario) -> dict:
                 st.calls += 1
             yield rng.uniform(4.0, 7.0)                            # the greeting
             for _ in range(rng.randint(6, 12)):
-                yield rng.uniform(1.5, 4.0)                        # the caller speaks
+                speaking = rng.uniform(1.5, 4.0)
+                if stt_serial is not None:                          # the early start's readings, while the caller is still speaking or pausing
+                    for _k in range(max(0, round(hw.stt_clips - 1))):
+                        sim.spawn(early_clip(), rng.uniform(0.2, speaking + 0.2))
+                yield speaking                                      # the caller speaks
                 yield from turn(w)
-                yield rng.uniform(2.5, 6.0)                        # the agent speaks
+                yield rng.uniform(*sc.agent_speaks_s)              # the agent speaks
+                if sc.think_s != (0.0, 0.0):
+                    yield rng.uniform(*sc.think_s)                 # the caller thinks
             w.active -= 1
             if w.draining and w.active == 0:
                 workers.remove(w)
@@ -350,7 +438,12 @@ def run(sc: Scenario) -> dict:
     for slot in range(max(k for _, k in sc.callers)):
         sim.spawn(caller(slot))
     sim.run(sc.duration_s)
-    return summarize(sc, st, model)
+    out = summarize(sc, st, model)
+    window = max(1.0, sc.duration_s)
+    out["recogniser busy %"] = round(100 * stt_serial.busy_s / (len(stt_serial.free) * window)) if stt_serial else None
+    out["voice server busy %"] = round(100 * tts_serial.busy_s / (len(tts_serial.free) * window)) if tts_serial else None
+    out["fallback voice %"] = round(100 * st.voice_fallbacks / max(1, st.voice_sentences)) if tts_serial else None
+    return out
 
 
 def pct(xs: list[float], q: float) -> float:
@@ -414,6 +507,59 @@ def model_capacity_sweep(callers: int, slots: list[int], max_workers: int) -> li
     for n in slots:
         hw = Hardware(f"{n} slots", model_slots=n, decide_ms=FAST.decide_ms, first_ms=FAST.first_ms, stt_slots=max(64, callers // 4))
         out.append({"model slots": n, **{k: v for k, v in run(Scenario(f"{callers} callers, {n} slots", hw, ramp, max_workers=max_workers)).items() if k != "timeline"}})
+    return out
+
+
+def measured_hardware(name: str, voice_copies: int, stt_copies: int, stt_service_ms: float = 167.0, model_slots: int = 64) -> Hardware:
+    """The stack as measured on 3 November (ARCH_REVIEW sections 98 to 102): the model writes every reply and is asked for the decision in 1 turn in 5, the reply is already
+    being written in 3 turns in 4, the recogniser and the voice server do one request at a time per copy. `model_slots`: the model server was measured linear to 48 requests at once."""
+    return Hardware(name, model_slots=model_slots, decide_ms=230, first_ms=650, code_share=0.0, decide_share=0.2, ahead_share=0.78, ahead_s=0.22, endpoint_s=0.24,
+                    stt_copies=stt_copies, stt_service_ms=stt_service_ms, stt_clips=2.7, tts_copies=voice_copies, tts_first_ms=70.0)
+
+
+def measured_scenarios(adaptive: bool = True) -> list[Scenario]:
+    """Calibration first: the 8 and 16 caller runs of section 98 (one worker, one recogniser, one voice server, the call cap off), then 100 and 200 callers, then 1,000 (4 Nov)."""
+    rhythm = {"think_s": (3.0, 6.0), "agent_speaks_s": (4.0, 9.0)}                     # a real caller: a turn about every 15 s
+    as_tested = {"think_s": (0.2, 0.6), "agent_speaks_s": (4.0, 9.0)}                  # the load test's callers asked again at once: a turn every 11 or 12 s
+    one = measured_hardware("1 worker, 1 voice server, 1 Qwen3", 1, 1)
+    ramp100 = [(0, 25), (30, 50), (60, 80), (90, 100)]
+    ramp200 = [(0, 50), (30, 100), (60, 150), (90, 200)]
+    ramp1000 = [(0, 250), (30, 500), (60, 750), (90, 1000)]
+    return [
+        Scenario("calibration: 8 callers, as the laptop", one, [(0, 8)], adaptive=False, min_workers=1, max_workers=1, duration_s=400, measure_from_s=60, **as_tested),
+        Scenario("calibration: 16 callers, as the laptop", one, [(0, 16)], adaptive=False, min_workers=1, max_workers=1, duration_s=400, measure_from_s=60, **as_tested),
+        Scenario("calibration: 16 callers, as the laptop, real-call rhythm", one, [(0, 16)], adaptive=False, min_workers=1, max_workers=1, duration_s=400, measure_from_s=60, **rhythm),
+        Scenario("100 callers, 1 voice server, 1 Qwen3 (as built)", one, ramp100, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("100 callers, 4 voice servers, 2 Qwen3", measured_hardware("4 voice, 2 Qwen3", 4, 2), ramp100, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("100 callers, 8 voice servers, 5 Qwen3 (sized)", measured_hardware("8 voice, 5 Qwen3", 8, 5), ramp100, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("100 callers, 8 voice servers, 2 Parakeet", measured_hardware("8 voice, 2 Parakeet", 8, 2, stt_service_ms=43.0), ramp100, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("200 callers, 8 voice servers, 5 Qwen3 (half of what it needs)", measured_hardware("8 voice, 5 Qwen3", 8, 5), ramp200, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("200 callers, 16 voice servers, 9 Qwen3 (sized)", measured_hardware("16 voice, 9 Qwen3", 16, 9), ramp200, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("200 callers, 16 voice servers, 3 Parakeet", measured_hardware("16 voice, 3 Parakeet", 16, 3, stt_service_ms=43.0), ramp200, adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("200 callers, 20 voice servers, 9 Qwen3, a surge to 300 at 5 min", measured_hardware("20 voice, 9 Qwen3", 20, 9), ramp200 + [(300, 300), (420, 200)], adaptive=adaptive, min_workers=8, **rhythm),
+        Scenario("1000 callers, 80 voice servers, 45 Qwen3 (sized)", measured_hardware("80 voice, 45 Qwen3", 80, 45), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
+        Scenario("1000 callers, 80 voice servers, 15 Parakeet", measured_hardware("80 voice, 15 Parakeet", 80, 15, stt_service_ms=43.0), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
+        Scenario("1000 callers, 40 voice servers, 22 Qwen3 (half of what it needs)", measured_hardware("40 voice, 22 Qwen3", 40, 22), ramp1000, adaptive=adaptive, min_workers=8, max_workers=72, **rhythm),
+    ]
+
+
+def model_only_hardware(name: str, voice_copies: int, stt_copies: int, model_slots: int, stt_service_ms: float = 167.0) -> Hardware:
+    """measured_hardware, but with the model deciding every turn (not 1 in 5) and one more request a turn that nobody waits for (ARCH_REVIEW section 108: 2.8 to 3.3 requests a turn, 1.25 s median)."""
+    from dataclasses import replace
+
+    return replace(measured_hardware(name, voice_copies, stt_copies, stt_service_ms, model_slots), decide_share=1.0, extra_model_requests=1.0, ahead_share=0.5)
+
+
+def model_only_scenarios() -> list[Scenario]:
+    """1,000 callers with the boss's rule, at 64 model requests at once per GPU (assumed): how many GPUs does it take, and what happens with fewer."""
+    rhythm = {"think_s": (3.0, 6.0), "agent_speaks_s": (4.0, 9.0)}
+    ramp1000 = [(0, 250), (30, 500), (60, 750), (90, 1000)]
+    out = []
+    for gpus in (1, 2, 3, 4, 8):
+        hw = model_only_hardware(f"model-only, {gpus} GPUs", 80, 45, model_slots=64 * gpus)
+        out.append(Scenario(f"1000 callers, model-only, {gpus} GPUs ({64 * gpus} slots), cap target 2 s", hw, ramp1000, adaptive=True, model_only=True, target_s=2.0, min_workers=8, max_workers=72, **rhythm))
+    hw = model_only_hardware("model-only, 4 GPUs", 80, 45, model_slots=256)
+    out.append(Scenario("1000 callers, model-only, 4 GPUs (256 slots), cap target 1 s (as built)", hw, ramp1000, adaptive=True, model_only=True, target_s=1.0, min_workers=8, max_workers=72, **rhythm))
     return out
 
 

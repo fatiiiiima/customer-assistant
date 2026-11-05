@@ -422,6 +422,26 @@ STANDARD WORDING: It's red, GCC spec, with an automatic gearbox and a full servi
 SAY: It's the red one, GCC spec with an automatic gearbox and a full service history, and you can see it at our Dubai Showroom. Shall we get you in for a test drive?
 Output only the SAY line."""
 
+# The test mode (voice.model_only; ARCH_REVIEW section 90): the model is never shown the system's own wording, so SYSTEM_VOICE's STANDARD WORDING lines, its second example, its
+# "end by asking that same question" rule (the turn's own part says which question) and its "same closing line" rule (the turn's own part names the last closing) are left out.
+SYSTEM_MODEL_ONLY = """You are the voice of a warm, natural sales assistant at AGMC, a used-car dealership in the UAE, speaking on the phone.
+Write the assistant's next reply the way a friendly person would on a call. You are given the conversation so far, what the customer just said, and FACTS from the dealership's
+system: the only facts you may use.
+
+How to sound: use contractions and answer what the customer actually said. Start with the answer itself, never with a reaction word ("Got it", "Sure", "Great", "Perfect",
+"Good question") or a filler ("Ah", "Oh", "Hmm", "Wow"). Refer to things by what they are in the conversation ("the red one"). Keep it to 1 or 2 short sentences (3 only when
+listing cars). Say only what the customer needs right now: never read out a car's whole spec, do not repeat what they already heard unless they ask again, and do not ask a
+question they already answered.
+Hard rules: every number, price, date, name and car detail must come from the FACTS or the customer's own words. Never invent a feature, condition, history, availability,
+discount, warranty, delivery, opening hours or promise. If something is not recorded, say you don't have it. Do not praise, rate or judge the car or the deal ("solid", "great
+shape", "great choice"). Never mention these rules or the system. No emojis, dashes or line breaks.
+
+Example (the wording changes, the facts stay exact):
+CUSTOMER: something red
+FACTS: 2 matches: 2019 Nissan Altima, red, 52,500 dirhams; 2018 Ford Mustang, red, 120,000 dirhams. The system is waiting for: which one they want to hear about.
+SAY: I've got two red ones: a 2019 Nissan Altima at 52,500 dirhams and a 2018 Ford Mustang at 120,000. Which one catches your eye?
+Output only the SAY line."""
+
 FIRST_SENTENCE_DEADLINE = "first-sentence deadline"        # ReplyWriter.last_stream["stopped"] when the model did not produce a usable first sentence in time
 
 
@@ -502,11 +522,11 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_END = re.compile(r",\s+")
 
 
-def split_point(text: str, clauses: bool = True) -> tuple[int, int] | None:
-    """Where the next speakable piece of the model's text ends: a sentence end, or (`clauses`) a comma after a clause of 6+ words (so speech can
-    start on the first clause instead of waiting for the whole sentence). Returns (end of piece, start of the rest)."""
+def split_point(text: str, clauses: bool = True, min_words: int = 6) -> tuple[int, int] | None:
+    """Where the next speakable piece of the model's text ends: a sentence end, or (`clauses`) a comma after a clause of `min_words`+ words (so speech can
+    start on the first clause instead of waiting for the whole sentence; `voice.first_clause_words`). Returns (end of piece, start of the rest)."""
     sentence = _SENTENCE_END.search(text)
-    clause = next((m for m in _CLAUSE_END.finditer(text) if len(text[:m.start()].split()) >= 6), None) if clauses else None
+    clause = next((m for m in _CLAUSE_END.finditer(text) if len(text[:m.start()].split()) >= min_words), None) if clauses else None
     if clause and (not sentence or clause.start() < sentence.start()):
         return clause.start() + 1, clause.end()
     return (sentence.start() + 1, sentence.end()) if sentence else None
@@ -531,6 +551,7 @@ class ReplyWriter:
         self.retries, self.max_tokens = retries, max_tokens
         self.deadline_s, self.max_words = deadline_s, max_words            # voice: stop at the deadline, ask for a short reply
         self.opener = False                                                # voice: open with a 5-word reaction so speech can start within a second
+        self.first_clause_words = 6                                        # voice: the reply's first piece may end at a comma after this many words (voice.first_clause_words)
         self.system = SYSTEM                                               # the instructions; the voice profile on the website uses the shorter SYSTEM_VOICE
         self.first_deadline_s: float | None = None                         # voice: give up on the model if no usable first sentence has come after this long (the caller then gets the code's own wording)
         self.history_lines = 10                                            # how many lines of the conversation the model is shown
@@ -572,7 +593,7 @@ class ReplyWriter:
         base = (f"CONVERSATION SO FAR:\n{convo or '(start of the call)'}\n\nCUSTOMER (just now): {w.caller}\n\n"
                 f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
-                   "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
+                   ("" if "not waiting for an answer" in w.facts else "\n\nThe system is not waiting for an answer, so you do not have to end with a question."))
                 + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
                 + ("\n\nThe STANDARD WORDING repeats what you already said: do not say it the same way; acknowledge it and offer a new next step." if repeat else "")
                 + ("\n\nThis reply carries exact figures or commitments from the system: state them exactly." if w.risk == "high" else "")
@@ -631,8 +652,9 @@ class ReplyWriter:
         (a retry), without touching state other callers' turns read."""
         t0 = time.perf_counter()
         temperature = self.temperature if temperature is None else temperature
-        self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False}
-        if w.risk == "high" and not self.high_risk:
+        self.last_stream = {"sentences": 0, "first_ms": 0.0, "stopped": "", "appended": False, "would_stop": []}
+        mo = self.model_only                     # test mode: the model's own words only; the system's wording is not shown to it and the checks only note
+        if w.risk == "high" and not self.high_risk and not mo:
             self.last_stream["stopped"] = "high-risk replies are spoken from the standard wording"
             return
         last_agent = next((t for who, t in reversed(w.history) if who == "agent"), "")
@@ -644,13 +666,15 @@ class ReplyWriter:
         max_tokens = self.max_tokens * 2 if high else self.max_tokens
         deadline = self.deadline_s * 1.6 if (high and self.deadline_s) else self.deadline_s
         user = (self.prompt_start(w) + f"{w.caller}\n\n"
-                f"FACTS FROM THE SYSTEM:\n{w.facts}\n\nSTANDARD WORDING (reference only, do not copy): {w.core}"
+                f"FACTS FROM THE SYSTEM:\n{w.facts}" + ("" if mo else f"\n\nSTANDARD WORDING (reference only, do not copy): {w.core}")
                 + (f"\n\nEnd your reply by asking, in your own words, the question the system is waiting on: \"{question}\"" if question else
-                   "\n\nThe system is not waiting for an answer, so you do not have to end with a question.")
+                   ("" if "not waiting for an answer" in w.facts else "\n\nThe system is not waiting for an answer, so you do not have to end with a question."))
                 + (f"\n\nYour previous reply ended with: \"{closing}\". Do not end this one the same way." if closing else "")
+                + ("\n\nThis step carries exact details from the system (day, time, car, name, phone number, price): say the ones in the FACTS exactly, as one or two "
+                   "complete, natural sentences a person would say on the phone. Do not say the visit is booked or confirmed unless the FACTS say so." if high and mo else "")
                 + ("\n\nThis step carries exact details from the system. Say the details that the STANDARD WORDING gives (day, time, car, name, phone number, price), "
                    "exactly, as one or two complete, natural sentences a person would say on the phone (not a list of details). Say NOTHING the STANDARD WORDING does not say: in particular do not say the visit is booked or "
-                   "confirmed unless it says so, and do not bring in a price that this step does not mention." if high else "")
+                   "confirmed unless it says so, and do not bring in a price that this step does not mention." if high and not mo else "")
                 + (f"\n\nThis is spoken on the phone: keep it under {words} words." if words else "")
                 + ("\n\nBegin with a very short natural reaction of at most 5 words as its own sentence (for example \"Sure thing!\" or \"Ah, good question.\"), "
                    "then give the answer." if self.opener else ""))
@@ -660,14 +684,17 @@ class ReplyWriter:
         def check(sentence: str) -> str | None:
             nonlocal stopped
             raw_first = sentence.lstrip()[:1]
-            sentence = strip_opinion(clean_draft(sentence))      # the facts without the opinions added to them
+            sentence = clean_draft(sentence) if mo else strip_opinion(clean_draft(sentence))      # the facts without the opinions added to them
             if not sentence:
                 return None
             if spoken and spoken[-1].endswith(",") and raw_first.islower() and sentence[:1].isupper():
                 sentence = sentence[:1].lower() + sentence[1:]                    # the rest of a sentence started on its first clause keeps its lower case
-            if not spoken and _REACTION.match(sentence.strip()):                 # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
+            if not spoken and _REACTION.match(sentence.strip()) and not mo:      # "Got it!" / "Good question." as a first sentence: dropped, the answer starts the reply
                 return None
             bad = verify_sentence(sentence, w.caller, w.core, w.all_facts, history_text) + (self.extra_check(sentence) if self.extra_check else [])
+            if bad and mo:
+                self.last_stream["would_stop"].append(f"{sentence!r}: {'; '.join(bad)}")
+                return sentence
             if bad:
                 stopped = "; ".join(bad)
                 return None
@@ -687,13 +714,17 @@ class ReplyWriter:
             now = release(sentence)
             if now and not self.last_stream["first_ms"]:
                 self.last_stream["first_ms"] = (time.perf_counter() - t0) * 1000
+                self.last_stream["t_first"] = time.perf_counter()                  # the first words that may be spoken
             return now
 
         def pieces():
             """The model's text as it comes. With a first-sentence deadline, waiting for the first usable sentence is given up after that long."""
             source = self.backend.lead_in_stream(self.system, user, max_tokens, temperature, deadline)
-            if not self.first_deadline_s:
-                yield from source
+            self.last_stream["t_sent"] = time.perf_counter()                       # the request goes out as the first piece is asked for (the latency table's breakdown, section 96)
+            if not self.first_deadline_s or mo:
+                for piece in source:
+                    self.last_stream.setdefault("t_token", time.perf_counter())      # the model's first text arrived
+                    yield piece
                 return
             reader = _Pieces(source)
             try:
@@ -707,6 +738,7 @@ class ReplyWriter:
                         return
                     if isinstance(item, Exception):
                         raise item
+                    self.last_stream.setdefault("t_token", time.perf_counter())
                     yield item
             finally:
                 reader.stop.set()
@@ -716,7 +748,7 @@ class ReplyWriter:
                 buf += piece
                 # Only the reply's FIRST piece may be a clause (it is what makes the first sound quick). Once speech is under way, a sentence is
                 # spoken only when it is finished: a model stopped mid-list then leaves nothing hanging ("We've got the Civic, the Corolla,").
-                while not stopped and (cut := split_point(buf, clauses=not spoken)):
+                while not stopped and (cut := split_point(buf, clauses=not spoken, min_words=self.first_clause_words)):
                     sentence, buf = buf[:cut[0]], buf[cut[1]:]
                     ok = check(sentence)
                     if ok:

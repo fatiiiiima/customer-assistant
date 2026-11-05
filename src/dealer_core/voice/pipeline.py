@@ -5,6 +5,7 @@ All local. The language model runs on the iGPU, Whisper on the CPU, Piper on the
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from .brain import SILENT_GOODBYE, WELCOME_BACK, DealerBrain
 from .mic_health import MicHealth
 from .gate import HalfDuplexGate
 from .services import OpenVinoWhisperSTTService, SherpaPiperTTSService
-from .prompts import hotword_groups, stt_prompt
+from .prompts import hotword_groups, hotword_names, stt_prompt
 from .stt import RemoteWhisper, WhisperOpenVino, hotword_terms
 from .tts import PiperSherpa
 from ..agent.wording import NARROW_QUESTIONS
@@ -43,12 +44,37 @@ class VoiceParts:
     hotword_groups: dict = field(default_factory=dict)
 
 
+def turn_trace(result) -> str:
+    """One line for the call recorder per turn the agent answered: how it was decided and how long each part took (the notes the worker keeps in its own log, saved beside the audio)."""
+    d = result.debug
+    return json.dumps({"intent": d.intent, "via": d.via, "state": d.state_after, "decision_ms": round(d.nlu_ms), "first_piece_ms": round(d.lead_ms), "turn_ms": round(d.total_ms),
+                       "words": len(result.reply.split()), "ended": result.ended, "tools": [t[:200] for t in d.tools], "note": d.note[:700]}, ensure_ascii=False)
+
+
+def makes_in_play(session, service) -> list[str]:
+    """The makes the call is about: the one searched for, those of the cars shown, and the car in focus (lower case, no repeats)."""
+    makes = [str((session.filters or {}).get("make") or "")]
+    makes += [str(c.make) for c in session.shown or []]
+    car = service.get_car(session.car) if session.car else None
+    if car is not None:
+        makes.append(str(car.make))
+    return list(dict.fromkeys(m.lower() for m in makes if m))
+
+
+def attach_stock_hotwords(stt_engine, inventory, in_play=None) -> None:
+    """A recogniser set to take hot-words (voice.stt_hotwords_field) is given the stock's make and model names, read from the inventory at each turn so a car added to the stock is heard.
+    `in_play` (optional): () -> the makes the call is about; they and their models go first, so a stock bigger than the cut still has them."""
+    if getattr(stt_engine, "hotwords_field", False):
+        stt_engine.hotword_source = lambda: hotword_names(getattr(inventory, "hotword_vocabulary", inventory.vocabulary)(), in_play() if in_play else (), stt_engine.hotwords_max)
+
+
 def load_engines(cfg: Config, stt_model: str | None = None, voice: str | None = None) -> VoiceParts:
     """Load and warm the local STT and TTS engines (about 5 s, once per process)."""
     models = ROOT / cfg.app.model_dir
     hotwords = hotword_terms(ROOT / cfg.stt.hotwords_file)
     if cfg.voice.stt_url:                               # a shared, batched recognizer on a GPU server (production): no Whisper in the worker
-        stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords)
+        stt = RemoteWhisper(cfg.voice.stt_url, cfg.voice.stt_remote_model, cfg.voice.stt_timeout_s, hotwords, hotwords_field=cfg.voice.stt_hotwords_field,
+                            hotwords_max=cfg.voice.stt_hotwords_max)
     else:
         stt = WhisperOpenVino(models / "ov" / (stt_model or cfg.voice.stt_model), models / "ov_cache", cfg.voice.stt_device, hotwords, copies=cfg.voice.stt_copies,
                               precision=cfg.voice.stt_precision, threads=cfg.voice.stt_threads)
@@ -123,6 +149,9 @@ def common_phrases(cfg: Config) -> list[str]:
             "Yes,", "Sorry,", "Got it,", "Got it.", "Hmm,"] + BRIDGES + CUT_OFF + STILL_THERE + ["Is there a colour you'd like?", SILENT_GOODBYE, WELCOME_BACK]
 
 
+MODEL_ONLY_TOKENS = 200
+
+
 def apply_voice_profile(app: App, cfg: Config) -> None:
     """Voice replies are short and time-boxed: ask for ~20 words, cap the tokens, and STOP the model at the deadline (the standard wording is then
     spoken). Text chat keeps its longer, richer replies."""
@@ -134,14 +163,24 @@ def apply_voice_profile(app: App, cfg: Config) -> None:
     w.max_tokens = min(w.max_tokens, cfg.voice.reply_max_tokens)
     w.retries = 0
     w.opener = cfg.voice.opener
+    w.first_clause_words = max(1, cfg.voice.first_clause_words)
     w.first_deadline_s = (cfg.voice.first_sentence_deadline_ms / 1000.0) or None   # a model that has not given a usable first sentence by then is not waited for
     w.history_lines = cfg.voice.history_lines
     if not cfg.negotiation.enabled:                         # the website: fixed prices, so the instructions need no counter-offer example (about half the tokens)
-        from ..dialogue.writer import SYSTEM_VOICE
+        from ..dialogue.writer import SYSTEM_MODEL_ONLY, SYSTEM_VOICE
 
-        w.system = SYSTEM_VOICE
+        w.system = SYSTEM_MODEL_ONLY if cfg.voice.model_only else SYSTEM_VOICE      # the test mode: the model is not shown the code's wording, so its instructions leave that out (section 90)
     app.engine.stream_high_risk = cfg.voice.high_risk_drafts
     app.engine.model_only = w.model_only = cfg.voice.model_only
+    if cfg.voice.model_only:                                  # the model writes lists too (a 3-car list with prices is about 70 tokens): a reply cut there is dropped
+        w.max_tokens = max(w.max_tokens, MODEL_ONLY_TOKENS)   # and, in this mode, not finished by code (30 Oct, Nemotron: "I have a 2016 black Macan at 149,000 dirhams," and nothing)
+    if hasattr(app.engine, "one_call"):
+        app.engine.one_call = cfg.voice.model_only and cfg.voice.one_call
+        app.engine.parallel = cfg.voice.model_only and cfg.voice.parallel
+        app.engine.hold_reply = cfg.voice.model_only and cfg.voice.hold_reply
+        app.engine.opener_first = cfg.voice.model_only and cfg.voice.opener_first
+        app.engine.measure_trip = cfg.voice.trip_ping
+        app.engine.rules_decide = cfg.voice.model_only and cfg.voice.rules_decide
     app.engine.silent_fallback = cfg.voice.silent_turn_fallback
     if hasattr(app.engine, "decide_deadline_s"):              # agent engine: a slow decision is replaced by the code's own, not waited for
         app.engine.decide_deadline_s = cfg.voice.decide_deadline_ms / 1000
@@ -188,6 +227,8 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                 vad_analyzer._params = params
 
     def after_turn(result) -> None:
+        if trace is not None:
+            trace("turn", turn_trace(result))
         follow_the_question()
         if on_turn:
             on_turn(result)
@@ -198,11 +239,14 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         heard_hook, say_hook = on_heard, on_say
         on_heard = lambda text: (in_tap.note("heard", text), heard_hook(text) if heard_hook else None)[1]
         on_say = lambda text: (in_tap.note("said", text), say_hook(text) if say_hook else None)[1]
+    trace = (lambda kind, text: in_tap.note(kind, text)) if in_tap is not None else None       # the call recorder, when it is on (VA_DUMP_AUDIO_DIR): after_turn and the barge-in stages write to it
     from .services import EchoGuard
 
+    attach_stock_hotwords(parts.stt_engine, app.inventory, lambda: makes_in_play(brain.session, app.service))        # (brain is made just below; the names are read each turn)
     hear = EchoGuard(parts.stt_engine, lambda: brain.session.last_agent(),            # (brain is made just below; the guard only asks for the line when a turn is heard)
                      lambda: stt_prompt(brain.session.state, "", parts.hotword_groups, app.inventory.vocabulary()))
     stt = OpenVinoWhisperSTTService(engine=hear, min_rms=vcfg.min_rms)
+    stt.on_trace = trace
     stop_now = lambda: current_stop[0]                           # the silence the detector waits right now: the turn clock subtracts it to find the real end of speech
     if in_tap is not None:
         stt.on_text = lambda text: in_tap.note("stt", text)
@@ -214,6 +258,7 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
                         greet_after=greet_after, still_there_after=still_there_after, hang_up_after=hang_up_after, welcome_back=welcome_back,
                         on_before_greeting=on_before_greeting, on_silent_end=on_silent_end)
     brain.vad_stop_secs = stop_now
+    brain.trace = trace
     if seed_agent_line:                                       # tests and studies: start as if the agent had just said this
         brain.session.remember("agent", seed_agent_line)
         brain.session.state = seed_state if seed_state is not None else brain.session.state
@@ -224,27 +269,44 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
         [in_tap] if in_tap is not None else []) + [vad]
     if smart_turn:                                           # `stop_secs` is then the short VAD silence; Smart Turn decides whether the turn is really over
         from .endpoint import SmartEndpointer
+        from .finished import reads_finished
 
         endpointer = SmartEndpointer(STT_RATE, smart_fallback_secs, short_answer_secs=vcfg.smart_short_answer_secs if smart_short_answer_secs is None else smart_short_answer_secs,
                                      early_start_secs=vcfg.early_start_secs if vcfg.speculate else 0.0)
         endpointer.asked_question = lambda: brain.session.last_agent().rstrip().endswith("?")        # the agent's last turn ended on a question
-        if vcfg.smart_peek if smart_peek is None else smart_peek:
-            from zoneinfo import ZoneInfo
+        brain.end_check = lambda: endpointer.last_check_secs                                           # for the page's latency table (server/latency.py)
+        use_peek = vcfg.smart_peek if smart_peek is None else smart_peek
+        from zoneinfo import ZoneInfo
 
-            from .answers import is_complete_answer
+        from .answers import is_complete_answer
+        from .services import clean_transcript
 
-            tz = ZoneInfo(app.service.cfg.branches[0].timezone)
-            endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
-            endpointer.is_answer = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
-                                                                   app.inventory.vocabulary(), app.service.clock(), tz)
+        tz = ZoneInfo(app.service.cfg.branches[0].timezone)
+        answer_check = lambda text: is_complete_answer(text, brain.session.last_agent(), brain.session.state, brain.session.shown,
+                                                       app.inventory.vocabulary(), app.service.clock(), tz)
+        if use_peek or vcfg.smart_text_check:
+            if vcfg.smart_text_check:                         # the words also serve the speculation: cleaned the way it cleans them (a loop is no sentence)
+                endpointer.peek = lambda pcm: asyncio.to_thread(lambda: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000))
+                endpointer.reads_finished = reads_finished
+                endpointer.on_note = trace
+            else:
+                endpointer.peek = lambda pcm: asyncio.to_thread(lambda: hear.transcribe(pcm, stt.prompt_for())[0])
+            if use_peek:
+                endpointer.is_answer = answer_check
         if vcfg.speculate:                                    # recognise (and decide) during Smart Turn's hold; used if the caller has finished
             from .services import clean_transcript
             from .speculate import Speculation
 
-            spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0]),
+            spec = Speculation(lambda pcm: clean_transcript(hear.transcribe(pcm, stt.prompt_for())[0], len(pcm) / 32000),
                                (lambda text: app.engine.predecide(brain.session, text)) if hasattr(app.engine, "predecide") else None,
-                               lambda: len(brain.session.history))
+                               lambda: len(brain.session.history),
+                               (lambda text, decision: app.engine.prepare_reply(brain.session, text, decision)) if getattr(app.engine, "hold_reply", False) else None)
             endpointer.speculation = stt.speculation = brain.speculation = spec
+            spec.on_event = trace
+            if vcfg.early_start_secs > 0:                     # work started inside the turn: only on words that read as finished, and checked against the full reading
+                spec.verify_early = vcfg.early_start_verify
+                if vcfg.early_start_gate:
+                    spec.gate = lambda text: reads_finished(text) or answer_check(text)
         stages.append(endpointer)
     stages.append(MicHealth())                                # one log line per turn, only when the microphone audio arrived damaged (voice/mic_health.py)
     if in_tap is not None:                                    # the recorder notes when the turn was decided over, so scripts/call_latency.py can tell the detector's wait from Whisper's
@@ -268,11 +330,13 @@ def build_pipeline(app: App, parts: VoiceParts, source: FrameProcessor, sink: Fr
     brain.playback = playback
     if mic_gate is not None:
         mic_gate.playback = playback                          # tap mode: a tap while the agent is audible interrupts it (not only while the server is still sending)
+    late = None
     if barge_in and not half_duplex:                          # the caller may talk over the agent (needs a headset or echo cancellation)
-        from .bargein import BargeIn
+        from .bargein import BargeIn, LateBargeIn
 
-        stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level))
-    for name, proc in (("vad", None), ("stt", stt), ("brain", brain), ("tts", tts)):
+        stages.append(BargeIn(playback, min_speech_secs=vcfg.barge_in_min_speech_secs, level=vcfg.barge_in_level, on_event=trace))
+        late = LateBargeIn(brain, playback, on_event=trace)                   # words said over the agent that were too short to stop it: they stop it when recognised
+    for name, proc in (("vad", None), ("stt", stt), ("late", late), ("brain", brain), ("tts", tts)):
         if proc is not None:
             stages.append(proc)
         if name in probes:

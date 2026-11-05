@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice call walkthrough</title>
+<style>
+:root{--text-primary:#1f1e1d;--text-secondary:#5f5e5a;--surface-0:#faf9f5;--surface-1:#f1efe8;--border:rgba(31,30,29,.15);--border-strong:rgba(31,30,29,.3);--radius:8px}
+@media (prefers-color-scheme: dark){:root{--text-primary:#f1efe8;--text-secondary:#b4b2a9;--surface-0:#1f1e1d;--surface-1:#2c2c2a;--border:rgba(241,239,232,.15);--border-strong:rgba(241,239,232,.3)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-0);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.6}
+main{max-width:760px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;font-weight:500;margin:0 0 4px}
+h2{font-size:16px;font-weight:500;margin:28px 0 6px}
+.sub{font-size:14px;color:var(--text-secondary);margin:0 0 16px}
+button,select{font:inherit;font-size:14px;color:var(--text-primary);background:transparent;border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 12px;cursor:pointer}
+button:hover{background:var(--surface-1)}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.clk{font-variant-numeric:tabular-nums;font-size:14px;color:var(--text-secondary);min-width:52px}
+.cap{margin:12px 0 4px;padding:10px 12px;border-radius:var(--radius);background:var(--surface-1);font-size:14px;line-height:1.5;min-height:92px}
+.cap b{font-weight:500}.cap .k{color:var(--text-secondary)}
+svg{width:100%;height:auto;display:block;margin-top:8px}
+.nd rect{fill:var(--surface-1);stroke:var(--border-strong);stroke-width:.6}
+.nd.ext rect{stroke-dasharray:none}
+.nd.on rect{stroke:#1D9E75;stroke-width:2;fill:rgba(29,158,117,.14)}
+.nd.ext.on rect{stroke:#7F77DD;fill:rgba(127,119,221,.16)}
+.nd text{fill:var(--text-primary);font-size:12px}.nd text.s{fill:var(--text-secondary);font-size:10px}
+.grp{fill:none;stroke:var(--border-strong);stroke-width:.6;stroke-dasharray:4 3}
+.gl{fill:var(--text-secondary);font-size:10px}
+.lk{fill:none;stroke:var(--border-strong);stroke-width:1.1;marker-end:url(#ar)}
+.lk.on{stroke:#1D9E75;stroke-width:2.2;marker-end:url(#ag)}
+.lk.dash{stroke-dasharray:3 3}
+.lt{fill:var(--text-secondary);font-size:9px}
+.gantt{position:relative;margin-top:14px}
+.row{display:grid;grid-template-columns:128px 1fr;gap:8px;align-items:center;margin:3px 0;font-size:12px}
+.row .nm{color:var(--text-secondary);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk{position:relative;height:16px;background:var(--surface-1);border-radius:3px}
+.bx{position:absolute;top:0;height:100%;border-radius:3px;opacity:.28;min-width:2px}
+.bx.done{opacity:1}
+.cur{position:absolute;top:0;bottom:18px;width:1px;background:var(--text-primary);opacity:.7;pointer-events:none}
+.ax{display:grid;grid-template-columns:128px 1fr;gap:8px;font-size:11px;color:var(--text-secondary)}
+.ax div+div{position:relative;height:14px}.ax span{position:absolute;transform:translateX(-50%)}
+.key{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);margin-top:8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.s{background:var(--surface-1);border-radius:var(--radius);padding:8px 10px}
+.s b{display:block;font-size:18px;font-weight:500;font-variant-numeric:tabular-nums}
+.s span{font-size:12px;color:var(--text-secondary)}
+.tw{overflow-x:auto;margin-top:6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:640px}
+th,td{padding:6px 8px;text-align:left;vertical-align:top;border-bottom:0.5px solid var(--border)}
+th{font-weight:500;color:var(--text-secondary);font-size:12px}
+td.t{white-space:nowrap;font-variant-numeric:tabular-nums}
+ol.life{margin:6px 0 0;padding-left:20px;font-size:13.5px}ol.life li{margin:3px 0}
+.note{font-size:12px;color:var(--text-secondary);margin-top:16px}
+@media (max-width:560px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.row{grid-template-columns:92px 1fr}.ax{grid-template-columns:92px 1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>How one voice turn works</h1>
+<p class="sub">From the end of your sentence to the first sound: about 1 second. Which tool does each step, where it runs, why it was chosen, and what the step takes (medians of 192 turns, 3 November).</p>
+<div class="bar">
+<button id="pp" onclick="toggle()">Pause</button>
+<button onclick="restart()">Restart</button>
+<select id="sc" onchange="pick(this.value)">
+<option value="own">The model's words come first (61% of turns)</option>
+<option value="ack">An acknowledgement comes first (39%)</option>
+<option value="slow">The model has to decide first (slow case)</option>
+</select>
+<select id="sp" onchange="speed=+this.value"><option value="0.15">0.15×</option><option value="0.3" selected>0.3×</option><option value="1">1× (real time)</option></select>
+<input type="range" id="scrub" min="0" max="1600" step="1" value="0" style="flex:1;min-width:120px" oninput="seek(+this.value)">
+<span class="clk" id="clk">0.00 s</span>
+</div>
+<div class="cap" id="cap"></div>
+<svg viewBox="0 0 720 312" role="img" aria-label="The parts of the system and how a turn moves through them">
+<defs>
+<marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#888780"/></marker>
+<marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1D9E75"/></marker>
+</defs>
+<rect class="grp" x="148" y="12" width="306" height="292" rx="10"/>
+<text class="gl" x="158" y="27">Worker: one process, up to 16 calls</text>
+<g id="links"></g>
+<g id="nodes"></g>
+</svg>
+<div class="gantt" id="gantt"></div>
+<div class="key">
+<span><i class="sw" style="background:#1D9E75"></i>Worker code</span>
+<span><i class="sw" style="background:#7F77DD"></i>A shared service</span>
+<span><i class="sw" style="background:#888780"></i>Network trip to the model</span>
+<span><i class="sw" style="background:#D85A30"></i>The model getting ready</span>
+</div>
+<div class="stats">
+<div class="s"><b id="a">0</b><span>Steps added up</span></div>
+<div class="s"><b id="b">0</b><span>Measured, these turns</span></div>
+<div class="s"><b id="c">0</b><span>Biggest step</span></div>
+<div class="s"><b id="d">0</b><span>Model started</span></div>
+</div>
+
+<h2>The tools, where they run, and why</h2>
+<div class="tw"><table>
+<thead><tr><th>Step</th><th>Tool</th><th>Where it runs</th><th>Why this one</th><th>Median</th></tr></thead>
+<tbody>
+<tr><td>Hear the voice</td><td>Your page: microphone through the browser's AudioWorklet, WebSocket</td><td>Your browser</td><td>Nothing to install; the browser removes echo; the page also draws the latency tables</td><td class="t">not on the path</td></tr>
+<tr><td>Pick a worker</td><td>Router (FastAPI), Redis worker list</td><td>Its own small service</td><td>Takes the worker with the most room, never touches the database per call, asked once per call (audio never goes through it)</td><td class="t">once per call</td></tr>
+<tr><td>Is there a voice?</td><td>Silero VAD (ONNX)</td><td>Worker CPU</td><td>Small and quick; a short silence is enough because Smart Turn decides the rest</td><td class="t">0.20 s</td></tr>
+<tr><td>Is the sentence over?</td><td>Smart Turn v3 (Pipecat, ONNX)</td><td>Worker CPU</td><td>Listens to how a sentence ends, so a pause in the middle is not taken as the end. If it says "still going" the turn waits up to 0.6 s</td><td class="t">0.04 s</td></tr>
+<tr><td>Hearing</td><td>Qwen3-ASR 0.6B (MLX) behind an OpenAI-style server, with all 95 car and model names as hot-words</td><td>A shared server on the Mac's GPU</td><td>About half the words wrong of Whisper base (8% against 16%) and it can be told the car names. Parakeet is faster but cannot take names</td><td class="t">0.22 s</td></tr>
+<tr><td>Choose the look-up</td><td>The agent's own rules, then the stock database (SQLite or PostgreSQL)</td><td>Worker</td><td>The code picks the look-up itself in about 4 of 5 turns, so the model's decision (0.23 s) is skipped</td><td class="t">0.003 s</td></tr>
+<tr><td>Write the reply</td><td>Nemotron Nano 3 30B on Amazon Bedrock, us-east-1, priority tier, no thinking, HTTP/2 kept open</td><td>The cloud (development only; production plans vLLM on GPUs)</td><td>The fastest of eleven models that invented nothing. It also decides the 1 turn in 5 the rules cannot. Started during the pause, so it overlaps the turn's end</td><td class="t">first words 0.4 s after the words, round trip 0.3 s</td></tr>
+<tr><td>Say "Sure," at once</td><td>Phrase cache (pre-rendered audio)</td><td>Worker</td><td>Plays the moment the look-up is known, while the model is still writing</td><td class="t">0.007 s</td></tr>
+<tr><td>Speak</td><td>Pocket-TTS "eve" (Kyutai, PyTorch on CPU), Kokoro as the fallback</td><td>Its own server</td><td>The quickest first sound of the voices tried (about 0.1 s) and a natural voice. It makes one sentence at a time, so it is the first part to run out under load</td><td class="t">0.12 s</td></tr>
+<tr><td>Talk over it</td><td>Barge-in: 0.3 s of speech over the agent, or words that arrive while it speaks</td><td>Worker</td><td>People interrupt. Quiet voices and noisy rooms are the weak spot</td><td class="t">0.3 s</td></tr>
+<tr><td>Remember the call</td><td>Call snapshots in Redis after every turn, kept a day</td><td>Shared Redis</td><td>Any worker can carry the call on; the page forgets it when the tab closes</td><td class="t">off the path</td></tr>
+</tbody></table></div>
+
+<h2>The whole call</h2>
+<ol class="life">
+<li>The page asks the router for a worker once, then opens a WebSocket straight to it. It is one small request, not on the path of any turn.</li>
+<li>The worker greets after 3 s of quiet, or answers if you speak first. The opening line is about 2 s of speech.</li>
+<li>Every turn follows the animation above. Behind it the call is saved to Redis.</li>
+<li>If you stop talking: "are you still there?" after 8 s, and the call ends 7 s later. It is kept: tap the microphone and it carries on.</li>
+<li>A goodbye or a hand-off ends the call and keeps the conversation; opening it again, on any worker, picks up where you left off, until you close the tab.</li>
+</ol>
+
+<p class="note">Medians of 192 turns on 3 November: one worker on an M3 Pro, five conversations in three Mac voices, 1 to 8 callers, Dubai to Bedrock in us-east-1. The medians of the steps add up to about 1.0 s for turns where the model speaks first, but those turns measured 1.2 s at the median because slow steps (a held turn's wait, a busy voice server) come in the same turns. The turn where the model must decide first is a small group (14 turns). Scenarios use the step medians; the model's request times are the measured medians relative to the arrival of the words. This is a teaching version: nothing here moves in real time. Sources: docs/ARCH_REVIEW.md sections 56 to 99. The workers diagram is autoscaler_walkthrough.html.</p>
+</main>
+<script>
+const AX = 1.6;                                   // the time axis, seconds from your last word
+const NODES = [
+  ["router", 8, 8, 110, 46, "Router", "once per call", 0],
+  ["browser", 8, 120, 110, 90, "Your browser", "mic · speaker · page", 0],
+  ["vad", 160, 40, 130, 44, "Silero VAD", "is there a voice?", 0],
+  ["smart", 308, 40, 134, 44, "Smart Turn v3", "is the sentence over?", 0],
+  ["engine", 160, 112, 282, 56, "Engine", "code rules · look-ups · checks", 0],
+  ["cache", 160, 192, 130, 44, "Phrase cache", "“Sure,” ready-made", 0],
+  ["barge", 308, 192, 134, 44, "Barge-in", "you can talk over it", 0],
+  ["asr", 500, 12, 212, 60, "Qwen3-ASR 0.6B", "speech to words · Mac GPU", 1],
+  ["bedrock", 500, 86, 212, 74, "Nemotron Nano 3 30B", "decides + writes · Amazon Bedrock", 1],
+  ["tts", 500, 174, 212, 60, "Pocket-TTS “eve”", "words to speech · own server, CPU", 1],
+  ["db", 500, 248, 212, 52, "PostgreSQL + Redis", "cars · bookings · call memory", 1]
+];
+const LINKS = [
+  ["l_in", "M118,150 L138,150 L138,62 L160,62", 0],
+  ["l_vs", "M290,62 L308,62", 0],
+  ["l_asr", "M442,56 L500,42", 0],
+  ["l_words", "M500,60 L442,118", 0],
+  ["l_model", "M442,136 L500,122", 0],
+  ["l_db", "M442,156 L470,156 L470,274 L500,274", 0],
+  ["l_tts", "M442,150 L500,204", 0],
+  ["l_out", "M500,222 L476,222 L476,296 L130,296 L130,196 L118,196", 0],
+  ["l_cache", "M160,214 L130,214", 0],
+  ["l_ask", "M44,120 L44,54", 1],
+  ["l_assign", "M82,54 L82,120", 1]
+];
+const SVG = "http://www.w3.org/2000/svg";
+function mk(tag, attrs, parent) { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+const nodeEl = {}, linkEl = {};
+LINKS.forEach(([id, d, dash]) => { linkEl[id] = mk("path", { d, class: "lk" + (dash ? " dash" : ""), id }, document.getElementById("links")); });
+mk("text", { x: 40, y: 92, class: "lt", "text-anchor": "end" }, document.getElementById("links")).textContent = "asks";
+mk("text", { x: 86, y: 86, class: "lt", "text-anchor": "start" }, document.getElementById("links")).textContent = "gets a";
+mk("text", { x: 86, y: 97, class: "lt", "text-anchor": "start" }, document.getElementById("links")).textContent = "worker";
+NODES.forEach(([id, x, y, w, h, t, s, ext]) => {
+  const g = mk("g", { class: "nd" + (ext ? " ext" : "") }, document.getElementById("nodes"));
+  mk("rect", { x, y, width: w, height: h, rx: 7 }, g);
+  mk("text", { x: x + 9, y: y + 18 }, g).textContent = t;
+  mk("text", { x: x + 9, y: y + 33, class: "s" }, g).textContent = s;
+  nodeEl[id] = g;
+});
+
+// Each scenario: bars on the time axis (lane, start, end, colour, label), and the caption stages for the clock. Seconds from your last word.
+const G = "#1D9E75", P = "#7F77DD", GR = "#888780", OR = "#D85A30";
+const LANES = [["vad", "Silence wait"], ["smart", "Turn check"], ["asr", "Hearing"], ["engine", "Look-up"], ["model", "Model"], ["voice", "Voice"]];
+const SCEN = {
+  own: {
+    total: 0.99, measured: "1.22 s", started: "0.24 s before the words",
+    bars: [["vad", 0, .2, G], ["smart", .2, .242, G], ["asr", .242, .463, P], ["engine", .463, .466, G],
+           ["model", .219, .531, GR], ["model", .531, .838, OR], ["model", .838, .874, P], ["voice", .874, .99, P]],
+    stages: [
+      [0, .2, ["browser", "vad"], ["l_in"], "You stop speaking: the silence wait", "Silero VAD, in the worker (ONNX, on the CPU)", "It only says whether there is a voice, so it can be small and quick. A silence of 0.2 s is enough because the next step decides if the sentence is really over.", "0.20 s", "At 0.1 s of quiet an early start begins in the background (see the model bar)."],
+      [.2, .242, ["smart"], ["l_vs"], "Is the sentence over?", "Smart Turn v3, in the worker (Pipecat, ONNX, CPU)", "It listens to how the sentence ended, so a pause in the middle is not taken as the end. When it says “still going” the turn waits up to 0.6 s more.", "0.04 s"],
+      [.242, .463, ["asr"], ["l_asr", "l_words"], "Hearing the words", "Qwen3-ASR 0.6B on the Mac's GPU, a shared server, given all 95 car and model names", "About half the words wrong of Whisper base, and it can be told the names of the cars.", "0.22 s"],
+      [.463, .466, ["engine", "db"], ["l_db"], "Choosing the look-up", "The agent's rules and the stock database", "The code picks the look-up itself in about 4 of 5 turns, so the model's decision is skipped.", "0.003 s"],
+      [.466, .874, ["bedrock"], ["l_model"], "Waiting for the model's first words", "Nemotron Nano 3 30B on Amazon Bedrock (priority tier, no thinking)", "The reply was already requested during your pause, so part of this wait was spent before your words arrived: the trip there (grey), the model getting ready (orange), then its first words.", "0.41 s after the words"],
+      [.874, .99, ["tts"], ["l_tts", "l_out"], "Turning the words into sound", "Pocket-TTS “eve”, its own server on the CPU", "The quickest first sound of the voices tried and a natural voice. It makes one sentence at a time.", "0.12 s"],
+      [.99, 1.6, ["browser"], ["l_out"], "The first sound reaches your browser", "WebSocket to your page", "The page plays it. From your last word: about 1.0 s here, 1.2 s measured at the median for these turns.", ""]
+    ]
+  },
+  ack: {
+    total: 0.54, measured: "0.57 s", started: "0.23 s before the words",
+    bars: [["vad", 0, .2, G], ["smart", .2, .244, G], ["asr", .244, .533, P], ["engine", .533, .536, G], ["voice", .536, .543, G],
+           ["model", .307, .694, GR], ["model", .694, 1.074, OR], ["model", 1.074, 1.09, P], ["voice", 1.09, 1.206, P]],
+    stages: [
+      [0, .2, ["browser", "vad"], ["l_in"], "You stop speaking: the silence wait", "Silero VAD, in the worker", "A silence of 0.2 s is enough to ask the next step.", "0.20 s", "The reply request goes out while you are still pausing."],
+      [.2, .244, ["smart"], ["l_vs"], "Is the sentence over?", "Smart Turn v3, in the worker", "Judges the sound of the end of the sentence.", "0.04 s"],
+      [.244, .533, ["asr"], ["l_asr", "l_words"], "Hearing the words", "Qwen3-ASR 0.6B on the Mac's GPU (the turns that start this way were heard a little slower)", "Names of the cars are given to it as hot-words.", "0.29 s"],
+      [.533, .536, ["engine", "db"], ["l_db"], "Choosing the look-up", "The agent's rules and the stock database", "Lists, counts and car facts are looked up by the code.", "0.001 s"],
+      [.536, .543, ["cache", "browser"], ["l_cache", "l_out"], "“Sure,” plays at once", "A cache of pre-rendered phrases in the worker", "The acknowledgement is ready-made, so there is no speech to make. It covers the time the model needs.", "0.007 s"],
+      [.543, 1.09, ["bedrock"], ["l_model"], "Meanwhile the model writes", "Nemotron Nano 3 30B on Amazon Bedrock", "Its first words arrive about 0.55 s after your words, and the voice then says them (the second voice bar).", "0.55 s after the words"],
+      [1.09, 1.206, ["tts"], ["l_tts", "l_out"], "The model's own words are spoken", "Pocket-TTS “eve”", "It follows the acknowledgement, with the model's own “Sure” dropped so it is not said twice.", "0.12 s"],
+      [1.206, 1.6, ["browser"], ["l_out"], "Done", "", "The first sound came at 0.54 s, the model's words at 1.1 s.", ""]
+    ]
+  },
+  slow: {
+    total: 1.47, measured: "1.6 s", started: "after the decision",
+    bars: [["vad", 0, .2, G], ["smart", .2, .242, G], ["asr", .242, .463, P], ["model", .463, .695, P], ["engine", .695, .698, G],
+           ["model", .696, 1.008, GR], ["model", 1.008, 1.316, OR], ["model", 1.316, 1.352, P], ["voice", 1.352, 1.468, P]],
+    stages: [
+      [0, .2, ["browser", "vad"], ["l_in"], "You stop speaking: the silence wait", "Silero VAD, in the worker", "A silence of 0.2 s.", "0.20 s"],
+      [.2, .242, ["smart"], ["l_vs"], "Is the sentence over?", "Smart Turn v3", "Judges the end of the sentence.", "0.04 s"],
+      [.242, .463, ["asr"], ["l_asr", "l_words"], "Hearing the words", "Qwen3-ASR 0.6B", "Speech to words, with the car names as hot-words.", "0.22 s"],
+      [.463, .695, ["bedrock"], ["l_model"], "The model decides what to look up", "Nemotron Nano 3 30B on Amazon Bedrock", "The rules could not tell, so about 1 turn in 5 asks the model first. No reply could be written ahead.", "0.23 s"],
+      [.695, .698, ["engine", "db"], ["l_db"], "The look-up", "The stock database", "Run, then the reply is requested.", "0.003 s"],
+      [.698, 1.352, ["bedrock"], ["l_model"], "Waiting for the model's first words", "Nemotron Nano 3 30B", "Started only now, so the whole trip and the model's getting ready are waited for.", "0.65 s"],
+      [1.352, 1.468, ["tts"], ["l_tts", "l_out"], "Turning the words into sound", "Pocket-TTS “eve”", "The first sound.", "0.12 s"],
+      [1.468, 1.6, ["browser"], ["l_out"], "The first sound reaches your browser", "", "About 1.5 s here, 1.6 s measured for these turns (14 turns).", ""]
+    ]
+  }
+};
+
+const gantt = document.getElementById("gantt");
+let cur = "own", time = 0, playing = true, speed = 0.3, prev = null, barEls = [];
+function build() {
+  const s = SCEN[cur]; gantt.textContent = ""; barEls = [];
+  LANES.forEach(([lane, label]) => {
+    const row = document.createElement("div"); row.className = "row";
+    const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = label; row.appendChild(nm);
+    const trk = document.createElement("div"); trk.className = "trk"; row.appendChild(trk);
+    s.bars.filter((b) => b[0] === lane).forEach((b) => {
+      const e = document.createElement("div"); e.className = "bx"; e.style.left = b[1] / AX * 100 + "%"; e.style.width = Math.max((b[2] - b[1]) / AX * 100, 0.5) + "%"; e.style.background = b[3];
+      trk.appendChild(e); barEls.push([e, b]);
+    });
+    gantt.appendChild(row);
+  });
+  const ax = document.createElement("div"); ax.className = "ax"; ax.appendChild(document.createElement("div"));
+  const t = document.createElement("div");
+  for (let v = 0; v <= 1.5001; v += 0.25) { const sp = document.createElement("span"); sp.style.left = v / AX * 100 + "%"; sp.textContent = v.toFixed(2); t.appendChild(sp); }
+  ax.appendChild(t); gantt.appendChild(ax);
+  const c = document.createElement("div"); c.className = "cur"; c.id = "cur"; gantt.appendChild(c);
+  const marker = document.createElement("div"); marker.style.cssText = "font-size:11px;color:var(--text-secondary);margin:2px 0 0 136px"; marker.textContent = "first sound at " + s.total.toFixed(2) + " s"; gantt.appendChild(marker);
+  document.getElementById("a").textContent = s.total.toFixed(2) + " s";
+  document.getElementById("b").textContent = s.measured;
+  const main = s.stages.filter((x) => x[4] && x[7] && x[0] < s.total);
+  const big = main.map((x) => [x[4], x[1] - x[0]]).sort((p, q) => q[1] - p[1])[0];
+  document.getElementById("c").textContent = big[1].toFixed(2) + " s";
+  document.getElementById("c").nextElementSibling.textContent = "Biggest step: " + big[0].toLowerCase();
+  document.getElementById("d").textContent = s.started.replace(" the words", "");
+  document.getElementById("d").style.fontSize = "14px";
+  last = -1;
+}
+function pick(v) { cur = v; time = 0; setPlay(true); build(); }
+let last = -1;
+function render() {
+  const s = SCEN[cur], i = Math.min(1600, Math.floor(time * 1000));
+  if (i === last) return; last = i;
+  document.getElementById("clk").textContent = time.toFixed(2) + " s";
+  document.getElementById("scrub").value = i;
+  document.getElementById("cur").style.left = "calc(136px + (100% - 136px) * " + (time / AX) + ")";
+  barEls.forEach(([e, b]) => e.classList.toggle("done", time >= b[2]));
+  const on = new Set(), onl = new Set(); let st = null;
+  s.stages.forEach((x) => { if (time >= x[0] && time < x[1]) { st = x; x[2].forEach((n) => on.add(n)); x[3].forEach((l) => onl.add(l)); } });
+  s.bars.forEach((b) => { if (b[0] === "model" && time >= b[1] && time < b[2]) on.add("bedrock"); });
+  for (const id in nodeEl) nodeEl[id].classList.toggle("on", on.has(id));
+  for (const id in linkEl) linkEl[id].classList.toggle("on", onl.has(id));
+  if (!st) st = s.stages[s.stages.length - 1];
+  document.getElementById("cap").innerHTML = "<b>" + st[4] + "</b> <span class='k'>" + (st[7] ? "· " + st[7] : "") + "</span><br><span class='k'>Tool:</span> " + (st[5] || "") + "<br><span class='k'>Why:</span> " + st[6] + (st[8] ? "<br><span class='k'>" + st[8] + "</span>" : "");
+}
+const T_END = 1.6;
+function frame(ts) {
+  if (prev !== null && playing) { time += (ts - prev) / 1000 * speed; if (time >= T_END) { time = T_END; setPlay(false); } }
+  prev = ts; render(); requestAnimationFrame(frame);
+}
+function setPlay(p) { playing = p; document.getElementById("pp").textContent = p ? "Pause" : "Play"; }
+function toggle() { if (!playing && time >= T_END) time = 0; setPlay(!playing); }
+function restart() { time = 0; last = -1; setPlay(true); }
+function seek(v) { time = v / 1000; last = -1; render(); }
+build(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

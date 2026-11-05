@@ -87,3 +87,75 @@ def test_with_too_little_model_capacity_callers_keep_getting_through_and_answers
 
     r = model_capacity_sweep(1000, [10], 120)[0]
     assert r["busy %"] < 1 and r["answer p90"] < 1.3 and r["shed %"] > 20          # wording and shedding give way first, not the callers
+
+
+# ------------------------------------------------------------------------------------------------ the measured stack (ARCH_REVIEW section 103)
+def test_a_serial_server_makes_each_request_wait_for_the_ones_ahead_of_it_and_copies_share_the_work():
+    from dealer_core.sim.scale import Serial, Sim
+
+    sim = Sim(1)
+    one = Serial(sim, 1)
+    c0, w0 = one.ask(1.0)
+    c1, w1 = one.ask(1.0)
+    assert w0 == 0 and 0.4 < w1 < 2.5                                     # the second starts when the first is done (the service time varies by about 20%)
+    two = Serial(sim, 2)
+    assert two.ask(1.0)[1] == 0 and two.ask(1.0)[1] == 0                  # two copies: both start at once
+    solo = Serial(sim, 1)
+    copy, _ = solo.ask(2.0)
+    solo.give_up(copy)                                                    # the caller closed it: the copy is free again
+    assert solo.ask(1.0)[1] == 0
+
+
+def short(sc, seconds=300.0):
+    sc.duration_s, sc.measure_from_s = seconds, 150.0
+    return sc
+
+
+def test_the_stack_sized_as_measured_holds_the_answer_time_and_as_built_it_does_not():
+    from dealer_core.sim.scale import measured_scenarios, run
+
+    by = {s.name: s for s in measured_scenarios(True)}
+    sized = run(short(by["100 callers, 8 voice servers, 5 Qwen3 (sized)"]))
+    built = run(short(by["100 callers, 1 voice server, 1 Qwen3 (as built)"]))
+    assert sized["answer p90"] < 1.5 and sized["answers > 2 s %"] == 0 and sized["fallback voice %"] == 0 and sized["voice server busy %"] < 75 and sized["recogniser busy %"] < 75
+    assert built["answer p90"] > 10 and built["recogniser busy %"] > 90                  # one recogniser copy cannot hear 100 callers: the queue grows
+
+
+def test_the_calibration_agrees_with_the_8_caller_run_of_the_laptop():
+    """Measured (section 98): 8 callers, median 0.94 to 1.05 s, p90 1.5 to 2.2 s, 4 to 11% over 2 s, no fallback voice to speak of."""
+    from dealer_core.sim.scale import measured_scenarios, run
+
+    sc = next(s for s in measured_scenarios(False) if s.name == "calibration: 8 callers, as the laptop")
+    r = run(sc)
+    assert 0.7 <= r["answer p50"] <= 1.2 and 1.2 <= r["answer p90"] <= 2.4 and r["answers > 2 s %"] <= 12 and r["fallback voice %"] <= 3
+
+
+def test_a_voice_server_that_cannot_answer_in_time_hands_the_sentence_to_the_fallback_voice():
+    from dealer_core.sim.scale import Hardware, Scenario, run
+
+    hw = Hardware("one voice copy", model_slots=64, decide_ms=230, first_ms=650, code_share=0.0, tts_copies=1, endpoint_s=0.24)
+    r = run(Scenario("flooded voice server", hw, [(0, 60)], adaptive=False, min_workers=4, max_workers=4, duration_s=300, measure_from_s=100, think_s=(0.1, 0.3)))
+    assert r["fallback voice %"] > 20 and r["voice server busy %"] > 80
+
+
+def test_the_new_fields_are_off_by_default_so_the_older_scenarios_are_what_they_were():
+    from dealer_core.sim.scale import Hardware
+
+    hw = Hardware("x", model_slots=1, decide_ms=1, first_ms=1)
+    assert (hw.decide_share, hw.ahead_share, hw.stt_copies, hw.tts_copies) == (1.0, 0.0, 0, 0)
+
+
+def test_model_only_scenario_never_answers_by_code_and_waits_for_the_model():
+    from dataclasses import replace
+
+    from dealer_core.sim.scale import Scenario, model_only_hardware, run
+
+    hw = model_only_hardware("tiny", 4, 3, model_slots=4)                 # far too little model for 30 callers: the answers get slow ...
+    sc = Scenario("30 callers, 4 slots, model-only", hw, [(0, 30)], duration_s=240.0, measure_from_s=60.0, model_only=True, min_workers=4, max_workers=4,
+                  think_s=(1.0, 2.0), agent_speaks_s=(3.0, 5.0))
+    r = run(sc)
+    assert r["by code %"] == 0 and r["shed %"] == 0                        # ... but never a code answer and never a shed turn
+    assert r["model full/prefix/code %"] == "100/0/0"
+    assert r["answer p90"] > 1.0 and r["turns"] > 0
+    fast = run(replace(sc, hardware=model_only_hardware("big", 4, 3, model_slots=400), name="400 slots"))
+    assert fast["answer p90"] < r["answer p90"]                            # more model capacity is the remedy

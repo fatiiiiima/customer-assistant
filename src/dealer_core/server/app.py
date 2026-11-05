@@ -24,9 +24,11 @@ from pipecat.workers.runner import WorkerRunner
 from ..app import App
 from ..config import Config
 from ..dialogue.states import State
+from ..shared.state import reopen
 from ..voice.micgate import MicGate
 from ..voice.pipeline import STT_RATE, VoiceParts, build_pipeline
 from ..voice.status import StatusLine, TurnClock
+from .latency import detail_message, timing_message
 from .protocol import PortalSerializer
 
 # Said before the answer while it is being prepared: a quick first sound, not the answer (voice/status.py TurnClock.on_answer).
@@ -42,7 +44,7 @@ class ServerState:
     parts: VoiceParts
     cfg: Config
     max_calls: int = 2
-    max_call_secs: float = 900.0
+    max_call_secs: float = 7200.0         # a hard stop for a call that never ends (voice.max_call_secs); 0 = none
     stop_secs: float = 0.35               # the VAD silence (short when smart_turn is on)
     smart_turn: bool = False
     barge_in: bool = True
@@ -168,6 +170,13 @@ def create_server(state: ServerState, allowed_origins: list[str] | None = None) 
         body, kind = state.metrics.render()
         return Response(body, media_type=kind)
 
+    @api.get("/usage")
+    async def usage_counts() -> dict:
+        """The work this worker has asked of the shared services since it started (shared/usage.py): numbers only. scripts/load_test.py reads it before and after a run."""
+        from ..shared import usage
+
+        return {"counts": usage.snapshot(), "active_calls": state.active, "at": time.time()}
+
     @api.get("/health")
     async def health() -> dict:
         gov = getattr(state.app.engine, "governor", None)
@@ -277,6 +286,7 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
     brain_ref: dict = {}
 
     def on_turn(result) -> None:
+        emit(detail_message(result, turn["n"]))
         if not turn.get("said", True):                           # model_only test mode: show that the model gave nothing usable, instead of a silent gap
             emit({"type": "line", "who": "agent", "turn": turn["n"], "text": "(the model gave no usable reply)"})
         s = brain_ref["brain"].session
@@ -298,7 +308,10 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
                   "date": start.strftime("%Y-%m-%d"), "time": start.strftime("%H:%M")})
 
     def timed(total, parts_) -> None:
-        emit({"type": "timing", "seconds": round(total, 2)})
+        check = getattr(brain_ref.get("brain"), "end_check", lambda: 0.0)()          # how long Smart Turn kept this turn open (the clock starts after it)
+        msg = timing_message(total, parts_, check, turn["n"])
+        if msg is not None:
+            emit(msg)
         if state.metrics is not None:
             state.metrics.reply_time(total)
 
@@ -349,8 +362,11 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
                                      speak_opening=not resumable, greet_after=greet_after, still_there_after=getattr(vcfg, "still_there_secs", 0.0),
                                      hang_up_after=getattr(vcfg, "hang_up_secs", 0.0), welcome_back=returning, on_before_greeting=before_greeting, on_silent_end=silent_end)
     brain_ref["brain"] = brain
+    clock.trace = getattr(brain, "trace", None)                  # the call recorder (VA_DUMP_AUDIO_DIR): when the clock saw each stop, words and sound
     def prepare() -> bool:                                    # database reads, in a thread: the event loop keeps every other call's audio moving
         resumed_ = bool(resumable and state.calls.load(call_id, brain.session, app.service))
+        if resumed_:
+            reopen(brain.session)                                          # the visitor came back after the agent ended the call: the conversation is kept, the call is open again
         if not resumed_:
             brain.session.known_bookings = site_bookings(hello, app, tz)     # "what have I booked?", "cancel my test drive": the ones already on the site
         car = hello.get("car")
@@ -372,10 +388,11 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         await send({"type": "line", "who": "agent", "turn": 0, "text": "Sorry, we got cut off for a moment. I'm back: where were we?"})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
-    limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel()))
+    limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel())) if state.max_call_secs > 0 else None
     try:
         await runner.run()
     finally:
-        limit.cancel()
+        if limit is not None:
+            limit.cancel()
         if saver is not None:
             await saver.flush()

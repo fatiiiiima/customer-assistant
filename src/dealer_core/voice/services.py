@@ -14,6 +14,7 @@ from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
 
+from ..shared import usage
 from .prompts import CONTACT
 from .stt import SAMPLE_RATE, WhisperOpenVino, is_degenerate
 from .tts import PiperSherpa
@@ -84,9 +85,11 @@ def collapse_repeats(text: str) -> str:
     return " ".join(out).strip(" ,")
 
 
-def clean_transcript(text: str) -> str:
-    """The recognizer's words as the agent receives them: loops collapsed, a repeated-word invention dropped (empty)."""
-    if text and is_degenerate(text, 0.0):
+def clean_transcript(text: str, audio_seconds: float | None = None) -> str:
+    """The recognizer's words as the agent receives them: loops collapsed, a repeated-word invention dropped (empty). `audio_seconds`: how long the clip was, when known (a
+    transcript far longer than the audio can hold is a loop); without it only repeats are judged. Until 2 Nov the unknown length counted as 0 s, so every sentence over 65
+    characters recognised during Smart Turn's hold came out as "um" (UNCLEAR)."""
+    if text and is_degenerate(text, audio_seconds):
         return UNCLEAR
     text = collapse_repeats(squeeze_punctuation(text)) if text else ""
     return "" if text and is_phantom(text) else text
@@ -133,6 +136,12 @@ class EchoGuard:
 
     def transcribe(self, pcm16: bytes, prompt: str | None = None) -> tuple[str, float]:
         text, ms = self._engine.transcribe(pcm16, prompt)
+        if getattr(self._engine, "ignores_prompt", False):       # a recogniser given hot-words, not the hint (voice.stt_hotwords_field): the hint was never written down, and a second
+            line = self._agent_line() if self._agent_line else ""   # listen would be the same request. An echo of the agent's question is still not an answer.
+            if text and line and echoes_agent(text, line):
+                self.retries += 1
+                return UNCLEAR, ms
+            return text, ms
         if prompt and prompt.startswith(CONTACT) and is_short_digit_run(text):       # the digits hint was written down: listen again with no hint at all
             self.retries += 1
             again, ms2 = self._engine.transcribe(pcm16, "")
@@ -155,6 +164,7 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         self.prompt_for = None                   # set by the pipeline: () -> the recognizer hint for what the agent just asked
         self.speculation = None                  # voice.speculate.Speculation: words already recognised during Smart Turn's hold
         self.on_text = None                      # diagnostics only (voice/audiotap.py): told the words of each segment
+        self.on_trace = None                     # diagnostics only: (kind, text) which audio each segment was recognised from, and how
         super().__init__(sample_rate=SAMPLE_RATE, ttfs_p99_latency=0.3, settings=STTSettings(model=engine.name, language=Language.EN), **kwargs)
         self._engine = engine
         self.last_ms = 0.0                       # timing of the most recent transcription, read by the timing probe
@@ -172,14 +182,21 @@ class OpenVinoWhisperSTTService(SegmentedSTTService):
         self.last_level = rms
         if rms < self.min_rms:
             logger.debug(f"STT skipped: segment too quiet to be speech (level {rms:.4f})")
+            if self.on_trace:
+                self.on_trace("stt_skipped", f"too quiet to be speech: {len(audio) / 2 / SAMPLE_RATE:.2f} s of audio, level {rms:.4f} (below {self.min_rms})")
             return
         await self.start_processing_metrics()
         early = await self.speculation.transcript() if self.speculation is not None else None
         if early is not None:                    # recognised while Smart Turn waited, from this same audio: nothing left to do
             text, self.last_ms = early, 0.0
+            usage.add("stt.final_from_early")
         else:
+            usage.add("stt.final")
             text, self.last_ms = await asyncio.to_thread(self._engine.transcribe, audio, self.prompt_for() if self.prompt_for else None)
         await self.stop_processing_metrics()
+        if self.on_trace:
+            self.on_trace("stt_path", f"{'taken from the early recognition' if early is not None else 'recognised after the turn ended'}: {len(audio) / 2 / SAMPLE_RATE:.2f} s of audio, "
+                                      f"level {rms:.3f}, {self.last_ms:.0f} ms, got {text!r}")
         if text and is_degenerate(text, len(audio) / 2 / SAMPLE_RATE):
             logger.debug(f"STT returned a loop ({len(text)} characters): the caller is asked to repeat")
             text = UNCLEAR

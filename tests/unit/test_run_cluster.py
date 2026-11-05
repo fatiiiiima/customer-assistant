@@ -87,3 +87,60 @@ def test_a_dry_run_with_a_local_server_prints_the_plan(tmp_path):
     out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "local", "--site", str(tmp_path)],
                          capture_output=True, text=True, timeout=60).stdout
     assert "backend   local" in out and "local_server" in out and "VA__DIALOGUE__DECISION_BACKEND=local_server" in out and "dealer_core.modelserver" not in out
+
+
+def test_a_bedrock_worker_runs_as_the_owners_live_calls_do():
+    """ARCH_REVIEW section 99: hands-free, the full quality, Nemotron on Bedrock for the decisions and the replies, no prefix mode, the shared call state and a worker id."""
+    assert rc.pick_backend("bedrock", "arm64") == "bedrock"
+    cmd = rc.worker_cmd(1, "bedrock", "postgresql://db", Path("/s/site"), 8785, 16, None)
+    assert cmd[cmd.index("--backend") + 1] == "bedrock_nemotron" and "--hands-free" in cmd and "--prefix" not in cmd
+    assert cmd[cmd.index("--quality") + 1] == "full" and cmd[cmd.index("--port") + 1] == "8786" and cmd[cmd.index("--worker-id") + 1] == "w2"
+    assert cmd[cmd.index("--state-url") + 1] == "postgresql://db" and cmd[cmd.index("--max-calls") + 1] == "16"
+    assert rc.worker_cmd(0, "bedrock", "x", Path("/s"), 8785, 4, "prefix")[rc.worker_cmd(0, "bedrock", "x", Path("/s"), 8785, 4, "prefix").index("--quality") + 1] == "prefix"
+    env = rc.worker_env("bedrock", "postgresql://db", extra={"VA__VOICE__HOLD_REPLY": "true"})
+    assert env["VOICE_AGENT_ALLOW_CLOUD"] == "1" and env["VA__DIALOGUE__DECISION_BACKEND"] == "bedrock_nemotron" and env["VA__LLM__FALLBACKS"] == "[]"
+    assert env["VA__VOICE__HOLD_REPLY"] == "true" and env["DATABASE_URL"] == "postgresql://db"
+    assert "VOICE_AGENT_ALLOW_CLOUD" not in {k for k in rc.worker_env("ollama", "x") if k == "VOICE_AGENT_ALLOW_CLOUD" and k not in __import__("os").environ}   # only the Bedrock backend sets it
+
+
+def test_set_makes_environment_for_every_worker_and_refuses_a_bad_one():
+    import pytest
+
+    assert rc.parse_sets(["VA__VOICE__A=1", "B=x=y"]) == {"VA__VOICE__A": "1", "B": "x=y"} and rc.parse_sets(None) == {}
+    with pytest.raises(SystemExit):
+        rc.parse_sets(["nothing"])
+    with pytest.raises(SystemExit):
+        rc.parse_sets(["=1"])
+
+
+def test_a_dry_run_of_the_bedrock_cluster_shows_the_settings_and_starts_nothing(tmp_path):
+    (tmp_path / "data.js").write_text("// cars")
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "bedrock", "--workers", "2", "--site", str(tmp_path),
+                          "--set", "VA__VOICE__HOLD_REPLY=true"], capture_output=True, text=True, timeout=60).stdout
+    assert "backend   bedrock" in out and out.count("dealer_core.server") == 2 and "VA__VOICE__HOLD_REPLY=true" in out and "--hands-free" in out
+    assert "dealer_core.modelserver" not in out and "dealer_core.gateway" in out
+
+
+def test_redis_holds_the_load_reports_and_call_snapshots_by_default_and_the_database_only_the_stock_and_bookings(tmp_path):
+    """5 Nov: the router's list of workers and the call snapshots in Redis (the default), bookings and stock in PostgreSQL."""
+    (tmp_path / "data.js").write_text("// cars")
+    cmd = rc.worker_cmd(0, "bedrock", "postgresql://db", Path("/s/site"), 8800, 16, None, "redis://127.0.0.1:6390/0")
+    assert cmd[cmd.index("--state-url") + 1] == "redis://127.0.0.1:6390/0"                                      # the workers report there
+    assert rc.worker_env("bedrock", "postgresql://db")["DATABASE_URL"] == "postgresql://db"                     # and the stock and bookings are still in the database
+    assert rc.worker_cmd(0, "bedrock", "postgresql://db", Path("/s/site"), 8800, 16, None)[cmd.index("--state-url") + 1] == "postgresql://db"     # no state address: the database
+    base = [sys.executable, str(ROOT / "scripts" / "run_cluster.py"), "--dry-run", "--backend", "bedrock", "--workers", "2", "--site", str(tmp_path)]
+    default = subprocess.run(base, capture_output=True, text=True, timeout=60).stdout
+    assert default.count("--state-url redis://127.0.0.1:6390/0") == 3 and "redis-server" in default                # 2 workers and the router, and a local Redis is started
+    own = subprocess.run(base + ["--redis-url", "redis://cache:6379/0"], capture_output=True, text=True, timeout=60).stdout
+    assert own.count("--state-url redis://cache:6379/0") == 3 and "redis-server" not in own                       # one that exists is not started
+    old = subprocess.run(base + ["--no-redis"], capture_output=True, text=True, timeout=60).stdout
+    assert "redis://" not in old and "redis-server" not in old and old.count("--state-url") == 3                                           # back in the database
+
+
+def test_the_local_redis_keeps_its_data_on_disk_so_conversations_survive_a_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda name: "/opt/homebrew/bin/redis-server" if name == "redis-server" else None)
+    cmd = rc.redis_server_cmd(6391, tmp_path)
+    assert cmd[0].endswith("redis-server") and cmd[cmd.index("--port") + 1] == "6391" and cmd[cmd.index("--bind") + 1] == "127.0.0.1"
+    assert cmd[cmd.index("--appendonly") + 1] == "yes" and cmd[cmd.index("--appendfsync") + 1] == "everysec" and cmd[cmd.index("--dir") + 1] == str(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert rc.redis_server_cmd() is None

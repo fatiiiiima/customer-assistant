@@ -85,7 +85,7 @@ def main() -> int:
     print("Loading speech models...", flush=True)
     parts = load_engines(cfg, a.stt_model, a.voice)
     smart = cfg.voice.smart_turn and not a.fixed_silence
-    state = ServerState(app, parts, cfg, max_calls=a.max_calls, stop_secs=cfg.voice.smart_stop_secs if smart else cfg.voice.stop_secs,
+    state = ServerState(app, parts, cfg, max_calls=a.max_calls, max_call_secs=cfg.voice.max_call_secs, stop_secs=cfg.voice.smart_stop_secs if smart else cfg.voice.stop_secs,
                         smart_turn=smart, smart_fallback_secs=cfg.voice.smart_fallback_secs, default_mode="handsfree" if a.hands_free else "tap", half_duplex=a.mute_while_speaking, barge_in=cfg.voice.barge_in and not a.no_barge_in)
     import os
 

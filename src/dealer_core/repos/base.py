@@ -23,6 +23,10 @@ class InventoryRepository(Protocol):
     def vocabulary(self) -> dict[str, list[str]]:
         """{make: [models]} for cars that can be sold: builds the NLU make/model gazetteer from real stock."""
 
+    def hotword_vocabulary(self) -> dict[str, list[str]]:
+        """{make: [models]} of every car in the database whatever its status (the recogniser's hot-words). Defaults to the cars that can be sold."""
+        return self.vocabulary()
+
     def details(self, stock_id: str) -> CarDetails | None:
         """The car's spec sheet (any field None: not recorded), or None when there is none."""
 

@@ -1426,3 +1426,1955 @@ Live check after the fixes, MEASURED by a synthetic-voice call to each worker (`
 * "Can I come and see it tomorrow?" still offers tomorrow's times.
 
 `python -m pytest tests/unit`: 1,443 passed, 40 skipped.
+
+## 53. A speed test for models on Amazon Bedrock, written but not run (30 Oct, the owner: "write the speed test for the four shortlisted Bedrock models. Don't run it until I've set the key and said go.")
+
+`scripts/bedrock_speed.py` times the two jobs the agent gives a model:
+* **Deciding the next action.** This happens before the first sound of a reply, so it is the one the 1 s rule depends on. ARCH_PLAN wants the model's part under 300 ms.
+* **Writing the follow-up question** after a reply the code has begun.
+
+Shortlist, from the models the owner's key can use (a GUESS, to be measured):
+* `qwen.qwen3-next-80b-a3b-instruct`: the same family as today's Qwen3-4B, with about 3B parameters used per token.
+* `mistral.ministral-3-8b-instruct`.
+* `anthropic.claude-haiku-4-5`.
+* `google.gemma-4-26b-a4b`.
+
+Not tested, and why:
+* `kimi-k2-thinking` and `magistral`: they reason before they answer, which is slow.
+* The large models: too slow and too costly to call on every turn.
+* Coding, vision and safeguard models: the wrong kind of model for this job.
+* `voxtral`: a speech recogniser, not a chat model.
+
+How it works:
+* **`capture`** runs the three conversations from `compare_agent_models.py` through the agent on the local model server, with the website's demo cars. It saves every prompt to `benchmarks/bedrock_speed_prompts.json`.
+* The capture also records the decision prompt for turns the code decides by itself. Only 2 of 17 turns reached the model, and the same 2 prompts sent over and over would flatter a server that caches recent prompts. The file holds 17 different decision prompts (12 with a known right action) and 21 follow-ups.
+* **`run`** sends those prompts word for word through the agent's own client (`OpenAICompatBackend`), one model at a time:
+  * 1 warm-up call, then 10 decisions and 10 follow-ups: 21 calls a model, 84 for the four;
+  * about 11,000 input tokens and at most 540 output tokens a model (`--dry-run`; input estimated as characters / 4).
+* The network trip is timed separately with a plain `GET /models`.
+* It sends nothing unless `BEDROCK_API_KEY` and `VOICE_AGENT_ALLOW_CLOUD=1` are both set. The key is never printed or saved.
+
+Compatibility with Bedrock (UNKNOWN until run): the client sends three fields only vLLM knows.
+* For "pick one of these actions" and for "continue this begun reply", the client already copes with a refusal on its own: it switches to free text, or to "you have already said …". The results show when this happened (`constrained_choice`, `prefill_refused`).
+* Every call to a Qwen3 model also carries `chat_template_kwargs`, so a server that refuses unknown fields would refuse everything. In that case the script tries again with standard fields only and marks the row `plain`. If that is the mode that works, the agent's client will need the same option before it can use that model.
+
+Noticed during the capture, not followed up: in one of two local runs, "can I speak to someone" (after "the BMW M3") was answered as `get_car` by the code's rules instead of a handoff.
+
+Tests: `test_bedrock_speed.py` (5, against a fake server; nothing leaves the machine). `python -m pytest tests/unit`: 1,448 passed, 40 skipped.
+
+## 54. Bedrock speed test results (30 Oct, run by the owner from this M3 Pro, `us-east-1`)
+
+MEASURED with `scripts/bedrock_speed.py run`, raw figures in `benchmarks/results/bedrock_speed_2026-10-30.json` (ignored by git). Calls were made one at a time, 10 of each kind per model. Times are from this laptop and include the trip to `us-east-1`.
+
+| model | network (GET /models) p50 | decide p50 / p90 | right action | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `qwen.qwen3-next-80b-a3b-instruct` | 368 ms | 2,574 / 7,799 ms | 5/6 | 3,269 / 6,254 ms |
+| `mistral.ministral-3-8b-instruct` | 378 ms | 530 / 657 ms | 6/6 | no text (10 empty replies, no error) |
+| `anthropic.claude-haiku-4-5` | 561 ms | not run: "does not support the '/v1/chat/completions' API" on this endpoint | | |
+| `google.gemma-4-26b-a4b` | 346 ms | not run: "isn't supported on this route" | | |
+
+* **The network alone is over budget.** A plain `GET /models` takes 346 to 378 ms at p50, with one-off waits of 1.2 to 1.7 s. ARCH_PLAN gives the model 300 ms, and the trip to `us-east-1` uses more than that before the model starts. No model in this region can meet it from here.
+* **Ministral 3 8B** is the only one near usable:
+  * decisions in 530 ms at p50 and 657 ms at p90;
+  * all 6 labelled actions right;
+  * it is told to pick from a list, and both that and the reply prefill were accepted (no HTTP 400).
+  * But it wrote nothing for the follow-up question. The stream ended with no text and no error. INFERRED: it does not continue a reply that ends with the assistant's own message; it treats that reply as finished. Not confirmed; one cheap call in `plain` mode would settle it.
+* **Qwen3-Next 80B** is too slow for a live call: 2.6 s at p50, 7.8 s at p90, and very uneven (624 ms to 9.3 s). Its follow-up questions read well.
+* **Haiku and Gemma** need a different Bedrock API from the OpenAI-style one the agent's client speaks. Testing them means adding a second client (for Haiku, Bedrock's Converse or Messages API). UNKNOWN whether they would be faster; they pay the same network trip.
+* Only the first 10 of the 17 captured decisions were sent, so the last conversation (greeting, "something sporty", the M3, "speak to someone") was not covered.
+* What it means for the 1 s rule, INFERRED: in the captured conversations the model decided 2 turns out of 17; the code decided the rest. On those 2, a Bedrock decision of about 0.5 to 0.7 s plus speech recognition and the first sound of the voice would land around 1 s or over. The agent's "Let me check." bridge (`bridge_after_ms`) could cover that wait, at the cost of a filler on those turns. The local model server stays the default.
+
+Token use (non-streamed calls, reported by Bedrock): about 7,700 to 7,900 input and under 60 output tokens per model.
+
+## 55. Which other Bedrock models could work; the test now reaches them (30 Oct, the owner: "we cant change the region ... are there any other models that are viable to use? please check again throughly")
+
+The region stays `us-east-1`; it is the region where the company's key has these models. The network trip measured in section 54 (about 350 to 380 ms) is a fixed cost on every model call from this laptop.
+
+**Why two models failed in section 54** (from the AWS model cards, read 30 Oct):
+* Gemma 4 models answer under `/openai/v1`, not `/v1`. A call to `/v1` gets exactly the "isn't supported on this route" error we saw. The GPT-5.x and GPT-6.x models use `/openai/v1` too.
+* Claude models on this endpoint take only Anthropic's Messages API, at `/anthropic/v1/messages`, with an `x-api-key` header and an `anthropic-version: 2023-06-01` header. They do not take chat completions.
+* Every model in the owner's list is on this endpoint (AWS endpoint table). The failures were about the request, not about access.
+
+**Levers the cards offer:**
+* **Reasoning effort.** Several models think before answering by default. It can be turned off on Nemotron Nano 3 and GPT-6 Luna (`none`). Gemma 4 takes an effort setting; whether it accepts `none` is UNKNOWN. gpt-oss goes no lower than `low`.
+* **Priority tier.** `service_tier: "priority"` is described as "the fastest response times for a price premium". It puts our requests ahead of Standard and Flex ones. It is offered for the Mistral, Gemma, Nemotron, gpt-oss and GLM models, but not for GPT-6 Luna or Claude Haiku 4.5. It may remove the queueing behind Qwen3-Next's 0.6 to 9.3 s spread (INFERRED from the endpoint docs: requests "may be briefly queued"). It cannot shorten the network trip.
+
+**Shortlist to measure next.** Speed is a GUESS for every one of them, because no card publishes latency.
+
+| model | why | route / settings |
+|---|---|---|
+| `mistral.ministral-3-8b-instruct` | MEASURED: decisions 530 / 657 ms, 6/6 right; follow-ups came back empty | `/v1`; follow-ups to be retried with `--plain` |
+| `mistral.ministral-3-3b-instruct` | same family, smaller, so probably faster; accuracy unknown | `/v1`, priority |
+| `nvidia.nemotron-nano-3-30b` | about 3B parameters used per token; reasoning can be off | `/v1`, `reasoning none`, priority |
+| `google.gemma-4-26b-a4b` | 3.8B parameters used per token | `/openai/v1`, reasoning effort, priority |
+| `openai.gpt-6-luna` | "repeatable work at scale"; reasoning can be off; $0.11 input / $0.55 output per million tokens in-region | `/openai/v1`, `reasoning none`, Standard only |
+| `anthropic.claude-haiku-4-5` | likely the most accurate small model on the list | Messages API, Standard only |
+
+**Second tier**, if the first finds nothing:
+* `mistral.ministral-3-14b-instruct`.
+* `google.gemma-4-e2b` (very small; quality risk).
+* `google.gemma-3-4b-it` and `gemma-3-12b-it` (older, no reasoning; their cards list them as Legacy).
+* `zai.glm-4.7-flash` (Legacy, end of life March 2027).
+* `openai.gpt-oss-20b` (reasoning cannot be turned off).
+
+**Not viable for a live call**, GUESS from size or design:
+* Large or reasoning-first models: DeepSeek V3.x, Kimi, MiniMax M2.x, Qwen3 235B, Mistral Large 3, GLM 4.6 / 4.7 / 5, Nemotron Super 120B, gpt-oss-120b, Grok 4.3.
+* The larger OpenAI and Claude models: GPT-5.x, GPT-6 Sol / Terra / Astra, Claude Opus / Sonnet / Fable.
+* Coding, vision and safeguard models.
+* Voxtral, which is speech recognition.
+* Qwen3-Next 80B: MEASURED too slow.
+
+**Changes to `scripts/bedrock_speed.py`:**
+* Each model is sent to the address its card gives (`base_for`). Claude goes through a small Messages API client, `MessagesBackend`, which continues the begun reply natively.
+* `--reasoning` and `--service-tier` reach only the models whose card takes them (`applies`), so one run can mix models.
+* For GPT-5.x and GPT-6.x, `max_tokens` becomes `max_completion_tokens` and temperature is left out. INFERRED from OpenAI's API for its reasoning-era models.
+* `--plain` with `--decisions 0 --follow-ups 3` retests Ministral's follow-ups in 3 calls.
+* By default every captured decision (17) is sent, so all three conversations are covered.
+
+Tests: `test_bedrock_speed.py` has 10 tests, all against fake servers.
+
+## 56. Six Bedrock models compared, and the local model on the same prompts (30 Oct, run by the owner; local baseline run here)
+
+MEASURED with `scripts/bedrock_speed.py run`. Each model got the 17 captured decisions (12 with a known right action) and 10 follow-ups, one call at a time, from this M3 Pro to `us-east-1`. The settings were `--reasoning none --service-tier priority`, applied only where a model's card allows them. Raw figures (ignored by git):
+* `benchmarks/results/bedrock_speed_2026-10-30_1451_six_models.json`
+* `benchmarks/results/bedrock_speed_2026-10-30_local_qwen4b.json`
+
+| model | settings sent | decide p50 / p90 | right | follow-up p50 / p90 |
+|---|---|---|---|---|
+| `nvidia.nemotron-nano-3-30b` | reasoning none, priority | 500 / 650 ms | **12/12** | 894 / 1,086 ms |
+| `google.gemma-4-26b-a4b` (`/openai/v1`) | reasoning none, priority | 490 / 660 ms | 11/12 | 945 / 1,065 ms |
+| `mistral.ministral-3-8b-instruct` | priority | 440 / 497 ms | 11/12 | empty (10 of 10) |
+| `mistral.ministral-3-3b-instruct` | priority | 501 / 522 ms | 11/12 | empty (10 of 10) |
+| `openai.gpt-6-luna` | – | refused: "not available for this account" (HTTP 401) | | |
+| `anthropic.claude-haiku-4-5` | – | refused: HTTP 403 `permission_error` (message cut off) | | |
+| *local* Qwen3-4B-Instruct-2507 (MLX, `127.0.0.1:8003`) | – | 393 / 509 ms | 11/12 | 603 / 712 ms |
+
+What it shows:
+* **Nemotron Nano 3 30B and Gemma 4 26B both work end to end.** They make the decision and write a usable follow-up.
+  * Nemotron got every labelled action right, including "I want something sporty" (both Ministrals answered `none`) and "can I see it this weekend" (Gemma and the local model answered `check_slots`).
+  * Their follow-ups read naturally and stay on the code's question, for example "Would you like to schedule a test drive?" and "Do you have a specific model or budget in mind?".
+* **Bedrock decisions are about 100 to 150 ms slower than the local model at p50** (440 to 500 ms against 393 ms). Most of that is the network: the plain `GET /models` took 221 to 1,556 ms this time, with p50s between 352 and 1,511 ms, much noisier than in section 54. The model's own share looks small (INFERRED).
+* **Both Ministrals again wrote no follow-up.** The decisions work, so the call itself is fine. The 3-call `--plain` retest in section 55 is still the way to find out whether continuing a begun reply is the cause. If the owner ran it earlier, its file was overwritten by this run; the script now writes one file per run.
+* **GPT-6 Luna and Claude Haiku 4.5** are on the key's model list but refused for this account: 401 "not available for this account" and 403 `permission_error`. Both are billed through AWS Marketplace, per their cards. INFERRED: someone with the account's admin rights must enable them, for example a Marketplace subscription or Anthropic's use-case form. The script now keeps 400 characters of an error, so the next run shows the full reason.
+* What it means for the 1 s rule, INFERRED: speech recognition takes about 0.27 s (worker log, 30 Oct). Add a 0.5 to 0.65 s decision and eve's first sound (under about 0.16 s, section 41), and a turn that needs the model lands at about 0.9 to 1.1 s. That is the same budget the local model has today plus about 0.1 to 0.15 s. Only 2 of 17 captured turns needed the model, and the `bridge_after_ms` "Let me check." can cover those.
+* Not covered here: many callers at once. Bedrock should not slow down with more callers the way one laptop does (INFERRED); the local figures are for one caller.
+
+## 57. Nemotron Nano 3 on Bedrock as a backend for live test calls (30 Oct, the owner: "add Nemotron Nano 3 on Bedrock as a backend option for the voice agent (reasoning none, priority tier), so I can make a live test call with it")
+
+What changed:
+* `config/default.yaml` has a new backend, `llm.backends.bedrock_nemotron`. It is `runtime: openai` against `https://bedrock-mantle.us-east-1.api.aws/v1`, model `nvidia.nemotron-nano-3-30b`. The key is read from `AWS_BEARER_TOKEN_BEDROCK`, the name the owner's `.env` already uses; the key never goes in config.
+* `BackendCfg.extra_body` holds fields added to every request. For this backend they are `reasoning_effort: none` and `service_tier: priority`, the settings section 56 measured (500 / 650 ms decide, 12/12). Other backends have it empty and send exactly what they sent before.
+* `BackendCfg.cloud: true` marks a third-party service outside the company. `chain.make_backend` refuses to build such a backend unless `VOICE_AGENT_ALLOW_CLOUD=1`, the same switch the speed test uses. Without it the chain logs the backend as unavailable and runs on the next one (the local model), so a worker started by mistake sends nothing to AWS.
+* The agent's own client is used unchanged. It sends `structured_outputs` for decisions and continues the begun reply for follow-ups, both of which Nemotron took in section 56. It sends no `chat_template_kwargs`, which go only to Qwen3 models.
+* Tests: `tests/unit/test_bedrock_backend.py`, against a fake server. It checks the refusal without the switch, the Bearer key, the two extra fields, the URL, that other backends send no extra fields, and that the chain skips the Bedrock backend without the switch.
+
+What goes to AWS on each call (read from `engine._context` and a captured prompt):
+* **Decision:** the agent's instructions, then the call's state: Dubai time, the code's hint, the car in focus, the cars last shown, the search so far, and the booking draft (car, **the caller's name and phone once given**, the time, the read-back). Then the last 4 lines of the conversation and the caller's latest words. The answer is a tool name and maybe a car id.
+* **Follow-up:** the last 4 lines, the caller's words, the reply already begun, and the question the code wants asked. The answer is one sentence.
+* Audio never leaves the machine. Speech recognition and the voice (eve) stay local. No Bedrock agents, guardrails, knowledge bases or prompt templates are used. The only thing Bedrock adds is the model's own chat template, which turns the messages into the model's input format.
+* So a live test call should use a made-up name and number.
+
+Still UNKNOWN until the owner's live call: how the first sound feels on a real call. Section 56's INFERRED estimate is about 0.9 to 1.1 s for a turn that needs the model.
+
+## 58. "Yes" to "Would you like to hear more about it?" is decided by code, not the model (30 Oct, the owner's first live call on Nemotron, section 57)
+
+What happened (the owner's transcript):
+> I'm looking for a family, a friendly car
+> The best for a family we have is the Tahoe, with 8 seats and a 722-litre boot. Would you like to hear more about it?
+> Yes.
+> I don't have a booking to confirm yet. Which car and time would you like? Hello? Are you still there?
+
+Cause: no rule covered a plain yes to "hear more" with a car in focus, so the model decided. Replayed here on the local Qwen3-4B, the same two turns went to `get_car` and gave the Tahoe's details (MEASURED). On Nemotron, the reply shows the model picked `confirm_booking` (INFERRED from the reply text; the worker log was not read). The rule for "yes" to an invitation skips questions with "hear" in them on purpose, so nothing caught it.
+
+Fix (`engine._decide`): with a car in focus and no booking under way, a yes ("yes", "yeah sure", "okay", "sounds good" ...) to a question containing "hear more" and not "which" goes to `get_car` for that car, by rule. "Which one would you like to hear more about?" is still handled by the existing `which_car` rule. `_PLAIN_YES` now also takes "sure" after the first word ("yeah sure"). Test: `test_inventory_db.py::test_yes_to_would_you_like_to_hear_more_gives_the_car_whatever_the_model_would_pick`, with a fake model that always says `confirm_booking`. It fails without the fix.
+
+The "Hello? Are you still there?" and the "Tap to interrupt" label on the page have one cause, and it is not in the code. The page URL given in section 57 had no `&voicemode=handsfree`, so the site ran in its default tap-to-talk mode (`site/voice.js` line 30): the microphone closes while Wazir speaks and opens only on a tap. INFERRED: the caller did not tap after the reply, and the silence prompt followed. The right URL is `http://localhost:8080/?voice=ws://localhost:8767/voice&voicemode=handsfree`.
+
+## 59. Words said over the agent that were too short to stop it now stop it when recognised (30 Oct, the owner: "sometimes it cant hear me barge in well. or its like it hears me but it continues speaking the full response, my barge in response gets printed, and then it replies to that barge in response")
+
+Cause: section 34's `BargeIn` stops the agent only after 0.3 s of caller speech at level 0.01 or more while the agent is audible. A shorter turn does not stop it, but the voice detector still ends the turn, the recogniser still writes the words, and the brain answers them once the whole reply has played. That is the owner's description exactly.
+
+MEASURED with `scripts/barge_replay.py`, which replays every recorded hands-free call in `logs/audio_dump` (60 calls, 28 to 30 Oct). It uses Silero with the worker's settings, `voice/heard.Playback` fed the recorded output chunks, and the real `BargeIn.observe`. Of 132 stretches of caller speech while the agent was audible:
+* 81 stopped the agent;
+* 4 began just before the agent was audible, so `BargeIn` never considered them;
+* 47 had too little loud speech while the agent was audible (0.00 to 0.26 s).
+
+Of those 47 (the words recognised near each one, read by hand):
+* about 22 are real caller words: "Tomorrow.", "no", "Porsche.", "Test drive.", "4 in the afternoon.", "I want to hear more about the Macan.";
+* 12 are "Yes." / "Thank you." / "Thanks for watching!";
+* about 8 look invented from echo or noise: "I'm going to drive a little bit.", "All these mirrors.", "It's a little bit of a problem.";
+* 5 had no words.
+
+Loudness does not separate the groups: real one-word answers peaked at 0.011 to 0.17 and the invented ones at 0.005 to 0.07.
+
+Fix: `voice/bargein.py` `LateBargeIn`, between the recogniser and the brain. When a turn's words arrive while the agent is still audible on the page, it asks `DealerBrain.talks_over(text)`. If yes, it keeps what the caller heard of the reply (`reply_cut`), then broadcasts an interruption: the voice and the page drop the rest, a reply still being written is abandoned, and the words are answered at once. `talks_over` is no when the words are:
+* only "yes / okay / mm-hmm / thank you" or a filler (`_GOES_ALONG`): these are still answered after the reply, as before. "Yes" said over "...would you like to hear more?" is an answer, not an interruption;
+* invented by the recogniser (`_INVENTED`);
+* the room (`_is_background`, a quarter of the caller's loudest recent turn) or too quiet to trust;
+* the agent's own reply coming back through the microphone (`echoes_agent` against the reply being played).
+
+The cost is time: the stop comes when the words are recognised, about 0.3 to 0.8 s after the caller stops, not while they are speaking. That is still better than the whole reply.
+
+Tests (`test_bargein.py`, 3 new):
+* "Tomorrow.", "no", "Porsche." and a question stop it, keeping only what was heard;
+* "Yeah.", "okay", "Thank you.", "Mm-hmm.", "um", "Thanks for watching!", the agent's own question, and a turn at background level do not;
+* nothing happens once the reply has finished playing.
+
+Not checked:
+* a live call;
+* whether the room bar catches the echo-invented sentences on the owner's set-up (their levels were not replayed through `_is_background`, only through the words).
+
+On open laptop speakers the agent's own voice can be recognised as words. With a headset, or the browser's echo cancellation working, this does not come up.
+
+## 60. A test mode where the model decides and writes everything (30 Oct, the owner: "i want to see how nemotron works alone, without the code")
+
+Why: the owner's Nemotron calls (section 57) ran at `--quality prefix`. There the code speaks the facts and Nemotron writes only a closing question, and the rules route most turns before the model is asked. So the calls showed little of Nemotron. MEASURED on the owner's transcript, replayed here: "How many owners has it had?", "What is the mileage?" and "Tell me about the Tahoe" were all routed by rule, with code-written replies.
+
+`voice.model_only` (`VA__VOICE__MODEL_ONLY=true`) used to do one thing: when the model gave nothing usable, nothing was said instead of the code's wording. In the agent engine it now also:
+* asks the model to decide every turn: no fixed rules first (`_fast_decide`), none of the code's own replies to a fragment, a cut-off phrase or a car name that sounds like one just listed, and none of the code's corrections of the model's choice (a pick from the list, a haggle, a quiet goodbye, a booking tool with nothing booked);
+* has the model write every reply at the full level, including lists, booking questions, the read-back and the goodbye. There is no "Let me check." bridge, no opener, no code completion of a cut reply, and no code question added at the end;
+* does not show the model the code's own answer: the "STANDARD WORDING" is left out of the prompt, so it writes from the facts alone;
+* lets everything the model writes be said. The fact guard and the reply checks only note what they would have stopped, in the turn's debug note ("model_only: said anyway; ... would have stopped: ...");
+* has no first-sentence deadline, so a slow model is waited for, up to the 4.5 s reply limit.
+
+Still the code's:
+* the tools themselves (the stock database, the slots, making the booking, reading names, numbers and times from the caller's words);
+* the fixed greeting;
+* the silence prompts.
+
+With `VA__VOICE__SILENT_TURN_FALLBACK=false`, a turn the model leaves empty is silent, and the page shows that it was.
+
+For the owner's test only: it says whatever the model says, unchecked. Production stays `model_only: false`.
+
+Tests: `tests/unit/test_model_only.py` (2). A turn the rules would route ("tell me about the Land Cruiser", then "yes") goes to the model. Only its words are said, a made-up price included and noted, and the prompt has no standard wording. Without the mode the same turn is the code's.
+
+Set aside, not committed: making "Do you have any reviews on this car?" say it has none ("reviews" as a topic that is always not on record). It is a fix to the code's own replies, which the owner is not testing now.
+
+## 61. In the test mode a reply has room for a list (30 Oct, the owner's first Nemotron-only call)
+
+The call (the owner's transcript):
+> I am looking for a Porsche.
+> I have a 2016 black Macan at 149,000 dirhams, Hello? Are you still there?
+
+The same happened again on the next turn. First sound came 2.5 s and 9.7 s after the caller.
+
+The cut: replayed here with the same settings on the local Qwen3-4B (free, `model_only` on, voice profile applied), the same turn stopped at the same place. MEASURED, the model's whole text was: "I have a 2016 Porsche Macan in black at 149,000 dirhams, a 2020 Porsche Cayenne in white at 285,000 dirhams, and a 2021 Porsche 911 in red at 495,". The reply token cap (`dialogue.max_reply_tokens` 70) ran out inside the list.
+
+The writer never speaks an unfinished sentence, so only the first clause was said. Outside the test mode the code finishes such a reply with its own facts and question (section 60 turned that off), which is why it was not heard before. INFERRED: Nemotron was cut the same way. Its first clause is the same, and nothing followed it.
+
+Fix (`voice/pipeline.apply_voice_profile`): with `voice.model_only` the reply cap is at least 200 tokens (`MODEL_ONLY_TOKENS`). With it, the same replay gave the whole list, all three cars really in stock, and "Which one would you like to hear more about?" (MEASURED, 3.0 s to the end of the reply on the local model). The prompt still asks for at most 30 words. Test: `test_model_only.py::test_in_the_test_mode_a_voice_reply_has_room_for_a_list`.
+
+Also seen in the replay: to "do you have any other Porsche cars?" the model said "We don't have any other Porsche models in stock." The check notes it ("says there are no porsche cars, but there are") and, in this mode, lets it through. That is the kind of sentence the checks exist for.
+
+UNKNOWN: why the second turn took 9.7 s. The worker's own log for that turn (its "stream:" and timing lines) would say; it was not read. One way it could happen (GUESS): the stream stalled until the 6 s backend timeout, then the engine's one retry.
+
+## 62. The speed test times whole replies too (30 Oct, the owner: "what model other than nemotron would be faster? only model responses tho"; then "add a whole-reply speed test for Nemotron, Gemma 4, Ministral 3 8B and Ministral 3 3B")
+
+No model had been timed writing a whole reply. Sections 54 and 56 timed the decision and the one-sentence follow-up of the prefix level only. In the test mode of section 60 a turn is a decision and then a whole reply, written from a longer prompt (the car's full spec sheet, the conversation).
+
+`scripts/bedrock_speed.py`:
+* `capture --full` runs the three captured conversations and the owner's two test calls (`OWNER_CALLS`: the Porsche call and the Tahoe call, the owner's lines only) through the agent. It uses the test mode with the voice settings, on the local model, so it is free. Every whole-reply prompt is saved to `benchmarks/bedrock_full_reply_prompts.json`: 24 prompts, up to 200 tokens each.
+* `run --full-replies N` sends N of them to each model as the agent does: streamed, with no begun reply to continue. For each it records:
+  * the time to the first speakable piece: `writer.split_point`, a sentence or a first clause of 6+ words, which is where the voice starts;
+  * the time to the end of the reply;
+  * whether the reply was finished;
+  * the reply itself.
+
+  The table gains "reply first", "reply end" and "finished" columns. One warm-up reply is not counted. `--decisions 0 --follow-ups 0` sends whole replies only.
+* Dry run of the owner's four models with 20 replies each: 21 calls a model, about 23,300 input tokens and at most 8,400 output tokens a model. INFERRED, at section 56's priority price for Nemotron: under one US cent for Nemotron. The other models' prices were not checked.
+
+Tests: `test_bedrock_speed.py`, 2 new, against the fake server:
+* a warm-up and two replies are streamed, none continuing a begun reply;
+* the first piece comes no later than the end;
+* a cut-off reply is counted as not finished;
+* a run asks for `capture --full` when the prompts are missing, and the dry run counts the calls.
+
+Seen while capturing on the local Qwen3-4B, MEASURED as the replies it gave:
+* "I've got four Toyota models: a Corolla, a Camry, and a RAV4", which names three;
+* "I don't have mileage data for any of the three cars" when the mileage was in the facts.
+
+These are the local model's. Whether the Bedrock models do better is what the replies in the results file will show.
+
+## 63. Whole replies on four Bedrock models (30 Oct, run by the owner)
+
+MEASURED with `scripts/bedrock_speed.py run --decisions 0 --follow-ups 0 --full-replies 20 --reasoning none --service-tier priority`, from this M3 Pro to `us-east-1`. Each model got the first 20 of the 24 prompts from section 62, one at a time. All four answered every call, with no errors. The network trip (`GET /models`) took about 365 to 390 ms at p50. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-10-30_165534.json`.
+
+| model | first speakable piece p50 / p90 | end of reply p50 / p90 | finished | replies with a figure or name not in their prompt |
+|---|---|---|---|---|
+| `mistral.ministral-3-3b-instruct` | **472 / 573 ms** | 475 / 573 ms | 19/20 | 3: two made-up booking times ("Wednesday at 10:00 AM", "10:15 AM tomorrow"); Markdown `**` in 3 replies, blank lines in more |
+| `nvidia.nemotron-nano-3-30b` | 819 / 1,115 ms | 945 / 1,332 ms | 20/20 | **0** |
+| `mistral.ministral-3-8b-instruct` | 917 / 1,416 ms | 989 / 1,244 ms | 20/20 | 3: "0 to 100 in under 3.5 seconds" and "60 km/h in 3.5 seconds" for the M3, a colleague named "Ahmad" |
+| `google.gemma-4-26b-a4b` | 1,113 / 1,357 ms | 1,259 / 1,432 ms | 20/20 | **0** |
+
+The check behind the last column compared every number in a reply, and a list of likely invented words, with the reply's own prompt (system and user text). It is not a full fact check. Read by hand, the replies also show:
+* **Nemotron**:
+  * to "do you have any other Porsche cars?" it offered "the details of the other Porsche models we keep on the lot", but there is only one Porsche;
+  * to "is it a good family car" it added an opinion ("the turbo engine is tuned for performance, not space");
+  * to "can I speak to someone" it tacked on the Range Rover Sport's colour and price.
+* **Gemma 4**:
+  * to "which one is the fastest" it did not answer ("I can compare the speeds of different models for you");
+  * to "the second one" it never named the car.
+
+  Otherwise its replies are plain and correct.
+* **Ministral 3 8B**: to "the second one" it answered about cheaper Toyotas instead.
+* **Ministral 3 3B**:
+  * replies are written for a screen (Markdown, line breaks);
+  * one reply was cut off mid-question;
+  * one said "Got seven seats?" to a caller asking for seven seats.
+
+These prompts carry the local model's earlier replies in their history (section 62 captured them on Qwen3-4B), including its mistakes. All four models saw the same history.
+
+What it means (INFERRED):
+* **The first piece usually arrives close to the whole reply.** On most replies, for all four models, the gap was under about 100 ms. Streaming the reply saves little on Bedrock from here.
+* **None of them fits the 1 s rule when the model writes the whole reply.** A turn is a decision and then a reply: about 0.27 s of recognition, a 0.45 to 0.5 s decision (section 56), 0.47 to 1.1 s to the reply's first piece, and the voice's start (under about 0.16 s, section 41). That gives about 1.35 s with Ministral 3 3B and about 1.75 s with Nemotron, at p50. The prefix level (code speaks the facts at once) stays the way to meet 1 s from this laptop.
+* **Ministral 3 3B is the only faster model, and it makes up booking times.** That is the one thing the owner's rules forbid outright. Of the four, Nemotron is the fastest with no figure invented. Gemma 4 is as clean and about 300 ms slower.
+
+## 64. The one-call turn: the action and the reply from one model call (30 Oct, the owner: "give Nemotron the likely facts up front so it picks the action and writes the reply in a single call. and maybe shorten the prompt too?")
+
+A setting, `voice.one_call` (`VA__VOICE__ONE_CALL=true`), used only with the test mode `voice.model_only` (section 60). It is off by default and the pipeline ignores it without `model_only`.
+
+How a turn runs (`AgentEngine._one_call` in `agent/engine.py`):
+1. **The code looks up the likely facts first, on a copy of the call** (`_one_call_candidates`, at most four):
+   * a car picked from the list just read out ("the second one");
+   * a car named alone;
+   * the car in focus;
+   * a search, when the words name a make, a filter or a cheaper car, or ask for a list;
+   * and always `none`.
+
+   Each runs through the usual tool on a deep copy of the session. MEASURED: about 1 ms a turn (p50; 3 ms at most) on the portal stock.
+2. **One short prompt** (`ONE_CALL_SYSTEM` and `_one_call_prompt`) holds:
+   * the time;
+   * the booking, if one is under way;
+   * the last four lines and the caller's words;
+   * each READY action with its facts (each fact given once, the price rule once);
+   * the other actions on one line.
+
+   The model writes `ACTION: <action>` on the first line and the reply on the next.
+3. **The action line is read as soon as it is complete.** What happens next depends on it:
+   * **A READY action:** the reply is spoken piece by piece as it comes. The prepared copy becomes the call's state only once a word is said.
+   * **One of the other actions** (a booking step, a comparison, the showroom's hours): the stream is closed, the tool runs, and the usual writer writes the reply in a second call, as before. The decision call is still saved.
+   * **A READY action with no reply after it:** the reply is written in a second call. On the local model this happened on 7 of 24 turns before the prompt said plainly which actions get a reply. Those turns were silent.
+   * **No action line, or an error before it:** the turn is decided by the usual decision call.
+4. As in section 60, nothing is replaced or added by code. The checks only add a note when they would have stopped a sentence.
+
+**Prompt size**, MEASURED in characters on the demo stock (tests), system and user text together:
+
+| turn | two calls (decision + writer) | one call |
+|---|---|---|
+| "do you have any Toyotas" | 7,552 | 2,097 |
+| "tell me about the Land Cruiser" | 7,137 | 1,890 |
+
+On the portal stock over the 24 test turns (`capture --full`), the average prompt per call was 4,408 characters with two calls and 2,950 with one. One call also sends one prompt a turn instead of two.
+
+**Speed on the local model** (Qwen3-4B on MLX, this M3 Pro, the same 24 turns), MEASURED:
+
+| | first piece said, p50 / p90 | whole turn, p50 / p90 |
+|---|---|---|
+| two calls | 1,585 / 2,349 ms | 2,219 / 3,394 ms |
+| one call | 1,755 / 2,293 ms | 2,433 / 3,693 ms |
+
+Locally, one call is no faster.
+* The local server has no network trip to save.
+* Its first token took 1,123 ms at p50. The one-call prompt is new from its first characters every turn, so the server cannot reuse earlier work (INFERRED).
+* The action line costs about 250 ms of writing before the reply starts.
+
+On Bedrock the saving is the decision's round trip: the network alone is about 370 to 390 ms (section 63), and the decision about 0.45 to 0.5 s (section 56). That saving is INFERRED and not measured. The owner's run below measures it:
+
+```
+uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 31 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
+```
+
+The run makes 49 calls: about 35,300 input and at most 7,100 output tokens, from the dry run. At the priority rates from AWS's page that is under 1 US cent (INFERRED). The prompts were captured on the local model (`capture --full --one-call`): 24 one-call prompts and 7 second calls. The report now prints the one-call answers apart from the second calls: how many had the reply in them, and their first piece. The baseline is two calls: the decision p50 from the same run plus Nemotron's whole-reply first piece from section 63 (819 ms p50).
+
+What the local model did with it, read by hand. These are Qwen3-4B's replies, not Nemotron's:
+* It picked a sensible action on most turns.
+* It wrote past 30 words on car details.
+* It once named the car in focus for "something cheaper" when the cheaper search was prepared.
+
+Tests (`tests/unit/test_model_only.py`, `tests/unit/test_bedrock_speed.py`) check that:
+* the facts are given up front and the reply is spoken from the one call, with no other call;
+* a pick from the list is understood;
+* an action without facts is written in a second call;
+* no action line goes back to the usual decision;
+* a READY action with no reply is not left silent;
+* the prompt is under half the two calls';
+* the setting is off without the test mode;
+* the speed test times a one-call answer from after its action line.
+
+## 65. The one-call turn on Nemotron: about half a second faster, but the wrong action more often (2 Nov, run by the owner)
+
+MEASURED with the section 64 command, from this M3 Pro to `us-east-1`, priority tier, no reasoning. There were no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-10-30_173116.json`.
+
+| | p50 | p90 |
+|---|---|---|
+| the decision alone (17 calls, 12/12 judged right) | 509 ms | 712 ms |
+| one call: its first piece said (24 calls, all with a reply) | 716 ms | 952 ms |
+| two calls: the reply's first piece after the decision | 819 ms (section 63), 660 ms (the owner's repeat of section 63, `..._173301.json`) | 1,115 / 936 ms |
+
+Two calls take the decision plus the reply's first piece: about 1.17 to 1.33 s, adding the p50s (INFERRED; the p50 of a sum is not the sum of the p50s). One call takes about 0.72 s. **That saves about 0.45 to 0.6 s a turn.** It brings a turn to about 1.15 s with recognition (0.27 s) and the voice's start (under 0.16 s, section 41), still over the 1 s rule.
+
+Read by hand and scored, two problems:
+* **The action was the expected one on 8 of 17 judged lines.** Wrong ones included:
+  * a car's facts read out for "I'd like to test drive it", "can I see it this weekend" and "that's all, thanks, bye";
+  * "compare_cars" for "What is the mileage?";
+  * a made-up action, "greeting".
+
+  The separate decision call got 12 of 12 on its own judged set (not the same lines).
+* **On 5 of 24 replies it repeated the instructions' example car** ("the 2019 Camry is white, with 60,000 km, at 58,000 dirhams"), which is not in stock. In the agent, two of them would have been spoken: "Yes." and "How many owners has it had?" both named a READY car.
+
+Changed (`ONE_CALL_SYSTEM`):
+* the example is gone, and a test checks that the instructions hold no year, price or car name;
+* the instructions now say how to choose: booking words go to `prepare_booking`, goodbye to `end_call`, a person to `handoff`, a question about one car to `get_car`, cars by make or type to `search_cars`, and small talk to `none`.
+
+MEASURED on the local model (Qwen3-4B, the same 17 judged lines):
+
+| version | right action |
+|---|---|
+| one call, before | 6/17 |
+| one call, after | 10/17 |
+| usual separate decision | 14/17 |
+
+One call still picks the wrong action more often than a call that only decides (INFERRED: one prompt asks for two jobs, and the prepared facts pull it toward reading them out).
+
+The speed test now records the expected action with each captured prompt and reports "right action n/m" for the one-call answers. The prompts were captured again: 24 one-call prompts and 18 second calls. To measure the new instructions on Nemotron (59 calls; about 48,000 input and at most 17,000 output tokens by the dry run, about 1 US cent at the priority rates, INFERRED):
+
+```
+uv run python scripts/bedrock_speed.py run --models nvidia.nemotron-nano-3-30b --decisions 17 --follow-ups 0 --full-replies 42 --full-prompts benchmarks/bedrock_one_call_prompts.json --reasoning none --service-tier priority
+```
+
+## 66. The one-call turn after the section 65 changes, on Nemotron: still the wrong action too often (2 Nov, run by the owner)
+
+MEASURED with the section 65 command, from this M3 Pro to `us-east-1`, priority tier, no reasoning. There were no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-11-02_091430.json`.
+
+| | p50 | p90 | right action |
+|---|---|---|---|
+| the decision alone (17 calls) | 597 ms | 1,961 ms (two calls took 2.0 and 2.2 s; the rest under 0.9 s) | 12/12 judged |
+| one call: its first piece said (21 of 24 had a reply) | 689 ms | 1,501 ms | 9/17 by name (8/17 before) |
+| a reply's first piece in a second call (14 calls) | 688 ms | | |
+
+**Speed:** two calls take the decision plus the reply: about 1.29 s, adding the p50s (INFERRED). One call takes about 0.69 s, which saves about 0.6 s.
+
+**Actions:** still not good enough. Of the 9 right by name, two had a car id that does not exist (`prepare_booking 1`, `get_car 001`); the second gave no reply. So 7/17 were fully right. Of the 8 wrong:
+* **5 had the right action unprepared:** "the second one", "I want something sporty", "Yes.", "What is the mileage?" and "can I see it this weekend". Two causes:
+  * The code's lookups do not catch everything: "sporty" is no search filter, and a pick needs a list.
+  * The captured prompts carry the local model's earlier turns (section 62). After its own wrong turns there was no list or car in focus for these lines. Part of this is the test, not the design (INFERRED).
+* **3 had it prepared and took another:** "something cheaper", "I am looking for a Porsche." and "do you have any other Porsche cars?" all named a car instead of the search. There is only one Porsche, so the first Porsche one is arguable.
+
+**Replies, read by hand:**
+* car questions still got whole fact sheets, well over the 30 words asked for;
+* to "Do you have any reviews on this car?" it repeated the earlier questions and answers;
+* to "Yes." it greeted the caller again.
+
+What it means (INFERRED): one call buys about 0.6 s and loses the decision's accuracy (12/12 against 7 to 9 of 17). A turn that does the wrong thing quickly is worse for the caller than a correct one 0.6 s later. A way to keep both: run the decision call as now and, at the same moment, start a reply call for each prepared lookup. Speak the reply whose action the decision names, and drop the others. The time is then about the slower of the two calls, not their sum. The cost is about 3 to 4 times the tokens a turn, still well under a US cent a turn at Nemotron's rates. Not built.
+
+## 67. The parallel turn: the decision and the replies for the likely lookups at the same time (2 Nov, the owner: "build the parallel turn")
+
+Section 66 found that the one-call turn is about 0.6 s faster but picks the action worse than a call that only decides. This turn keeps the decision call as it is and hides the reply's wait behind it.
+
+A setting, `voice.parallel` (`VA__VOICE__PARALLEL=true`), used only with the test mode `voice.model_only`. It is off by default. The pipeline turns it off without `model_only`, and `voice.one_call` takes the turn if both are set.
+
+How a turn runs (`AgentEngine._speculate` and `_Spec` in `agent/engine.py`):
+1. **The code looks up the likely facts on copies of the call**, as in section 64: the car in focus, a pick from the list, a car named alone, a search, and `none`. Two more, for this turn only:
+   * `prepare_booking`, when the words are about booking (`_BOOKING_CUE`, or a day or time in them);
+   * `end_call`, when they are a goodbye (`_BYE`).
+
+   The hand-off and the confirmation are never run ahead. They act outside the call (an escalation, a saved booking). A test checks that a hand-off is not among them.
+2. **A reply is written for each**, on its own thread, with exactly the input the writer would be given after the decision (`_speaking_input`). Each stream fills a queue. The decision call is made at the same moment, as before.
+3. **When the decision arrives**, the reply for the action it names is used, if the writer's input for the real call equals the one written ahead. The rest are stopped. They stop at their next sentence, and a reply never spoken is never kept.
+4. **Otherwise** (no reply ahead for that action, or the input changed), the reply is written after the decision, as before.
+
+Speaking goes through the same loop as ever: the same checks, notes and memory of the turn. Only the source of the sentences differs. Each turn's note says: `parallel: decision at N ms; replies written ahead for ...; X was used` (or `none for X`), and `parallel: first words at N ms`.
+
+Cost: a reply call for each prepared lookup, up to 5 more calls a turn than two calls (3 to 4 usually). Nemotron's rates are low, so the run below is estimated (INFERRED) at under 6 US cents for 48 turns in each of two modes.
+
+**Local check** (Qwen3-4B on MLX, this M3 Pro; `scripts/turn_speed.py`, the same 24 turns, MEASURED):
+
+| | first words p50 / p90 | turn p50 / p90 | right action | reply ready for the decision |
+|---|---|---|---|---|
+| two calls | 1,282 / 1,862 ms | 1,925 / 2,980 ms | 15/17 | |
+| parallel | 2,569 / 4,293 ms | 3,129 / 4,519 ms | 15/17 | 11 of 24 turns |
+| one call | 1,470 / 1,935 ms | 2,119 / 3,304 ms | 11/17 | |
+
+* **The parallel turn does not change what is decided.** The right action is 15/17 in both, because the decision call is the same one.
+* **The reply was ready on 11 of 24 turns (46%).** The other 13 were hand-offs, free times, comparisons, "fastest", lists of makes and the like. Their replies are written after the decision, as before, so on those turns it costs more calls and gains nothing.
+* **Locally it is slower, not faster.** The local server answers one request at a time, so the reply streams make the decision wait. With the decision's usual 1.2 s deadline, right action fell to 4/17 in the same check, because the decision timed out and the turn went on with no action (a note says so). With the deadline lifted it is 15/17. So the local server cannot show the gain, and the check says nothing about Bedrock's speed (UNKNOWN until measured).
+
+A thing to watch on Bedrock: the same deadline (`voice.decide_deadline_ms`, 1,200 ms) applies there. In section 66 two of 17 decisions took 2.0 and 2.2 s and would have run past it, with or without this setting.
+
+Expected on Bedrock (INFERRED, not measured): on a turn where the reply was ready, the first words come at about the larger of the decision (p50 about 0.5–0.6 s) and the reply's first piece (p50 about 0.7 s), against about 1.2–1.3 s for the two in a row. That saves about 0.5 s on 46% of turns, about 0.25 s on average over the 24 test turns. A wider set of lookups raises the share but also the cost.
+
+Tests (`tests/unit/test_model_only.py`, `tests/unit/test_turn_speed.py`) check that:
+* the reply written ahead is the one spoken, and the chosen lookup is not written a second time;
+* a decision with no reply ahead has its reply written after it;
+* the other replies are never spoken, and only one reply is said a turn;
+* with a 0.3 s decision and a 0.3 s reply it takes about 0.3 s, against 0.6 s;
+* booking and goodbye words get replies ahead, and a hand-off never does;
+* the setting is off without the test mode, and does nothing when one call has the turn;
+* the speed script refuses a cloud run without the key and the switch, counts its calls, and scores each turn.
+
+**To measure on Bedrock** (your terminal; the key is read from the environment and never printed). Start with one pass of each mode, which is about 192 calls and at most about 190,000 input tokens (INFERRED, from the dry run):
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```
+
+It prints first words, whole turn and right action for each mode, and saves every turn's note to `benchmarks/results/turn_speed_<time>.json` (ignored by git). Each turn is sent after the agent's own earlier replies, so these are Nemotron's own conversations, not the local model's.
+
+## 68. Five more models in the speed test (2 Nov, the owner: "add the five untested models to the speed test and test them", after the boss allowed any model on the list except OpenAI's and Anthropic's)
+
+Written, not run: a speed run costs money, so the owner runs it.
+
+The five, chosen from the key's 62-model list (section 55 and the list pasted on 30 Oct), none from OpenAI (this includes gpt-oss) or Anthropic. `run --models nov2` now expands to them (`MODEL_GROUPS` in `scripts/bedrock_speed.py`):
+
+| model | what its AWS card says (read 2 Nov) | why it was picked (GUESS where marked) |
+|---|---|---|
+| `google.gemma-4-e2b` | 2.3B effective parameters; "designed for low-latency workloads"; **takes audio input**; `/openai/v1`; priority tier; reasoning on by default, and AWS recommends `reasoning_effort` high for it so the reasoning stays out of the reply | the smallest model with reasoning; its audio input matters for the speech-in options (GUESS: quality on prices and numbers is weak) |
+| `nvidia.nemotron-nano-9b-v2` | 9B dense; `/v1`; priority tier; Legacy, ends 30 March 2027 | the same family as the cleanest model so far (GUESS: similar accuracy; it is a reasoning model, and the card shows no switch) |
+| `mistral.ministral-3-14b-instruct` | card did not load; assumed to match the 8B and 3B, which took `/v1` and priority | the next size up from the two that invented figures (GUESS: it may not) |
+| `qwen.qwen3-coder-30b-a3b-instruct` | 3B active of 30B; `/v1`; priority tier; no reasoning; Legacy, ends 30 March 2027 | the fastest kind (about 3B active, no thinking). Coding-tuned, so replies in plain speech are a GUESS |
+| `zai.glm-4.7-flash` | "optimized for fast inference and low-latency tasks"; `/v1`; priority tier; Legacy, ends 30 March 2027 | small and fast on paper (GUESS: reasoning by default, so `--reasoning none` may be refused) |
+
+Left out, GUESS from size or design: MiniMax M2.x, Kimi, DeepSeek, GLM 4.6 / 4.7 / 5, Grok 4.3, Qwen3 235B, Qwen3-Next 80B (MEASURED too slow), Mistral Large 3, Nemotron Super 120B, Gemma 4 31B (dense), Gemma 3 (27B is a base model), Magistral, the coding models, Voxtral and Palmyra.
+
+What changed in the script:
+* `MODEL_GROUPS["nov2"]`, and `--models nov2` expands to the five.
+* A reply with its reasoning in the text ("<think>", "the user wants ...") is counted per model and printed. A caller would hear it. It matters most for Gemma 4 E2B, whose card warns about it, and for Nemotron 9B v2.
+* The routes and settings were checked in a test: only Gemma goes to `/openai/v1`; `--reasoning` goes only to Gemma 4 and GLM (as `THINKS` already had it); all five get `service_tier: priority`.
+
+Tests (`tests/unit/test_bedrock_speed.py`, 3 added): the group is five models none from OpenAI or Anthropic and each goes where its card says; a group name expands and a dry run counts the calls; a reply showing its reasoning is counted.
+
+The run: the 17 decisions (12 with an expected action) and 20 whole replies, as in section 63, one call at a time. The dry run says 190 calls, about 174,000 input tokens and at most 41,000 output tokens across the five. At Nemotron's priority rates (these five models' prices not checked) that is about 3 to 4 US cents (INFERRED).
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/bedrock_speed.py run --models nov2 --decisions 17 --follow-ups 0 --full-replies 20 --reasoning none --service-tier priority
+```
+
+If Gemma 4 E2B shows its reasoning in the text with `none`, run it again with the card's recommended `--reasoning high` and compare.
+
+## 69. The five more models, measured (2 Nov, run by the owner): none is better than Nemotron Nano 3
+
+MEASURED with the section 68 command, from this M3 Pro to `us-east-1`, priority tier, `--reasoning none` where a card takes it (Gemma 4 and GLM). 190 calls, no errors. Raw file (ignored by git): `benchmarks/results/bedrock_speed_2026-11-02_101233.json`.
+
+| model | decision p50 / p90, right action | reply: first piece p50 / p90 | reply: end p50 | finished | figures or facts not in the prompt |
+|---|---|---|---|---|---|
+| `google.gemma-4-e2b` | 540 / 660 ms, 10/12 | 1,102 / 2,522 ms | 1,169 ms | 20/20 | none found |
+| `nvidia.nemotron-nano-9b-v2` | 569 / 878 ms, **0/12** | 709 / 831 ms | 1,912 ms | **4/20** | thinks aloud in the reply (see below) |
+| `mistral.ministral-3-14b-instruct` | 549 / 834 ms, 11/12 | 708 / 850 ms | 768 ms | 20/20 | **3 replies** (see below) |
+| `qwen.qwen3-coder-30b-a3b-instruct` | 491 / 674 ms, 11/12 | 681 / 783 ms | 698 ms | 20/20 | none found |
+| `zai.glm-4.7-flash` | 498 / 590 ms, 10/12 | 591 / 796 ms | 615 ms | 20/20 | none in figures; one made-up promise |
+
+For comparison, Nemotron Nano 3 in the earlier runs (sections 56, 63, 66): decision 509 to 597 ms, right action 12/12, reply first piece 660 to 819 ms (p50), nothing invented. Those runs were on other days, so the comparison is loose (UNKNOWN how much of a gap is the network).
+
+**The network was uneven in this run.** The plain trip took 243 ms for GLM and 1,114 to 1,185 ms for some samples of Qwen3-Coder and Nemotron 9B. GLM's edge of 100 to 200 ms is about the size of that difference (INFERRED), so it is not a result. The same goes for Qwen3-Coder's decision being 20 to 100 ms quicker than Nemotron's.
+
+**What each did, read by hand:**
+* **Gemma 4 E2B:** the slowest of the five, so "designed for low latency" does not show on Bedrock. Reasoning off worked, with no reasoning in the text. It took "hi there" for a search. Its replies are plain and correct.
+* **Nemotron Nano 9B v2:** unusable as set up. It thinks first, so every decision came back as "Okay" (0/12) and almost every reply starts "Okay, let's see. The customer just said..." and is cut off (4 of 20 finished). My script's reasoning check caught 9 of those 20 and the figures check 5. A reasoning-off switch exists in NVIDIA's own docs (a line in the system prompt), but the AWS card shows none, and I did not try it.
+* **Ministral 3 14B:** the most fluent, and it invents:
+  * a car that is not in stock: to "do you have any other Porsche cars?" it offered "a 2017 Porsche Cayenne, grey, 89,000 km, 198,000 dirhams". The prompt has only the Macan;
+  * a speed that is not in the prompt: "0-100 km/h in 3.4 seconds" for the M3;
+  * a price boundary that is not in the prompt ("under 62,500"), and "You're all set for Saturday" after a goodbye, when nothing was booked;
+  * Markdown bold in one reply.
+* **Qwen3-Coder 30B-A3B:** the only one that matches Nemotron on both counts: 11/12, no figure or fact outside the prompt, every reply finished. It missed some things:
+  * "which one is the fastest" listed two cars and did not say which;
+  * "the second one" did not name the car;
+  * it counted four Toyotas and named three;
+  * one reply took 2.7 s to its first piece.
+
+  It is a coding model and is Legacy until March 2027.
+* **GLM 4.7 Flash:** the quickest replies, but it took "tell me about the Land Cruiser" and "the second one" for searches, and it answered "that's all, thanks, bye" with "I'll make sure the Land Cruiser is ready for you at the showroom": a promise nobody made.
+
+What it means (INFERRED): no model on the list is faster than Nemotron by more than the run-to-run swing, which is itself 100 to 150 ms (Nemotron's first piece was 819 ms in one run and 660 ms in another). The models are not the limit. Section 63's arithmetic still holds: the fixed parts are the wait for the end of speech (about 0.2 s), recognition (about 0.27 s), the voice start (under 0.16 s) and the trip (0.25 to 0.39 s). That leaves about 0.2 s for the model if a turn is to reach 1 s, and only one call fits. The ways forward are fewer round trips (the parallel turn), a closer region, or taking recognition out (speech in, section 68's note on audio-input models). Nemotron Nano 3 stays the model for the Nemotron-only tests. Qwen3-Coder is the only one worth a second look, and only as a spare.
+
+## 70. PersonaPlex 7B (8-bit) on this laptop: too slow to talk live, and not accurate enough (2 Nov, the owner: "let's try persona-plex and qwen3-omni on our laptop before dismissing it or doing a trial for a GPU")
+
+MEASURED on this M3 Pro (36 GB), with the `speech` tool that was already installed (`speech respond`, v0.0.29, Swift and MLX; no Xcode needed). Weights `aufklarer/PersonaPlex-7B-MLX-8bit`, 9.75 GB, downloaded with the owner's go-ahead (about 13 minutes with the first run; they now sit in `~/Library/Caches/qwen3-speech`, 9.1 GB on disk). Raw figures (ignored by git): `benchmarks/results/personaplex_mac_2026-11-02.json`.
+
+**Setup.** Nine one-sentence caller lines from the speed tests, made self-contained ("Show me something cheaper than the Porsche."). They were spoken by a small local text-to-speech model (Pocket TTS), checked with the project's own Whisper (all nine came back word for word), and turned into 24 kHz mono WAV files. These are clean, synthetic callers, the easy case. The persona prompt (324 tokens) says: Wazir, AGMC; one or two short sentences; prices fixed; say when a fact is missing; never invent; and lists five cars with their facts and the free test-drive times. Voice `NATF1`; 120 generation steps (9.6 s of audio) a line.
+
+**Speed.**
+
+| | result |
+|---|---|
+| time a step takes | 205 to 216 ms, in all nine runs (8-bit) |
+| a live call needs | 80 ms or less a step (12.5 steps a second) |
+| real-time factor | 2.59 to 2.73: about 2.7 times too slow |
+| `--compile` option | 225 ms a step: no help |
+| one-off start-up (system prompt and voice) | about 3.1 s the first time, 1.4 s after |
+
+So it cannot hold a live conversation on this Mac. The reply would fall further behind while the caller talks. The tool's blog figure of 68 ms a step and the model card's 112 ms (8-bit) and 158 ms (4-bit) are both faster than what this Mac does (UNKNOWN which Mac they used). I did not try the 4-bit version (5.82 GB); its card says it degrades quality significantly.
+
+**When it starts speaking, in audio time** (from the reply's first sound):
+* On 3 lines (1, 4, 6) it waited for the caller and began 0.28 to 0.34 s after the caller stopped.
+* On the other 6 it began within about 0.2 to 0.4 s of the start of the call, over the caller, often opening with "AGMC." (its own name line) before the answer.
+
+So a delay of about 0.3 s after the caller finishes is what the model itself would add (INFERRED), if something fast enough ran it. That needs a machine about three times quicker per step than this one (UNKNOWN which).
+
+**What it said, against the facts in its prompt:**
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "...Macan. It's black, has 91000 kilometres and $149,000 dirhams. Yes, it has 340 horsepower" | facts right; "$" and "dirhams" together |
+| 2 other Porsches | "AGMC. We have the 2016 Porsche Macan, black... $149,000" | facts right; said "$"; did not say it is the only one |
+| 3 something cheaper | "The 2018 Toyota Land Cruiser is slightly cheaper, at 149000 dihrams. The Porsche is more expensive, 289000." | **wrong**: the Land Cruiser is 189,000 and the Porsche 149,000; it never offered the Civic or Corolla |
+| 4 Land Cruiser | "white, has 920000 kilometres... passed 146 of 150 checks" | **wrong**: 92,000 km |
+| 5 this weekend | "...free test drives tomorrow. There are 2 slots, 9 AM and 2 PM. It' the only Porsche. We love it here." | slots right; then unrelated lines |
+| 6 owners | "I do not have that information." then "We have a 2018 Toyota Land Cruiser..." | **right** on the unknown fact, then rambled |
+| 7 fastest | "The fastest car we have is the 2018 Toyota Land Cruiser." | **wrong**: the BMW M3, 510 horsepower |
+| 8 speak to someone | "...this is Wazir. How can I help? Sure, no problem. I'm here..." | no hand-off (it has no tools) |
+| 9 goodbye | "How can I help you today? The number's 7532014. No, it's 5..." | **invented a phone number**; not a goodbye |
+
+Of the nine, 4 gave the right facts, 4 got a figure or the car wrong (or invented a number), and 1 could not hand off. It also ran on past its answer on several, said "$" for dirhams on four, and slurred some words ("It'", "don havet") in the 8-bit version.
+
+What it means (INFERRED):
+* **For the owner's rules it fails:** prices wrong or invented in 3 of 9 lines, with every fact placed in its prompt. A speech-to-speech model says whatever it says before any check can look, so this could not be shipped as is.
+* **The speed is a Mac limit, not necessarily a model limit:** on a GPU the reply delay could be about 0.3 s. The accuracy is a model limit and a rented GPU would not change it. Adding a tool call would help only if its argument accuracy were good, which the other open model (VoiceChat) reported at 42%.
+* **Licence:** this Mac build is tagged CC-BY-NC-4.0 (non-commercial) while NVIDIA's own card says commercial use is allowed (section above). Either way, not usable commercially without settling it.
+* Not tried here: Qwen3-Omni. The Mac conversions are text-out only (no speech back), 17.2 GB, and need a manual patch for loading, so it cannot show speech-to-speech speed on a laptop. VoiceChat 11B (8.58 GB, `speech voice-chat`) also runs on this tool, with tool calls through MCP. Its model reads about the same weights a step as PersonaPlex, so I expect a similar step time here (INFERRED).
+
+## 71. NVIDIA VoiceChat 11B (int5) on this laptop: answers better than PersonaPlex, still 1.75 times too slow (2 Nov, the owner: "download VoiceChat 11B int5 and run the same nine lines with the same stock facts")
+
+MEASURED on this M3 Pro (36 GB) with `speech voice-chat` (the installed `speech` tool, v0.0.29), weights `aufklarer/VoiceChat-11B-Perception-MLX-int5` (8.58 GB; 8.0 GB on disk in `~/.cache/huggingface/hub`, about 14 minutes with the first run), licence tag openmdw-1.1. The same nine synthetic caller clips and the same stock-facts system prompt as section 70, given with `--system-prompt`, each run from a WAV file with the tool's own timeline. Raw figures (ignored by git): `benchmarks/results/voicechat_mac_2026-11-02.json`.
+
+**Speed.**
+
+| | VoiceChat 11B int5 | PersonaPlex 7B 8-bit (section 70) |
+|---|---|---|
+| time to produce 80 ms of audio, p50 over a line | 146.5 to 149.3 ms (p95 152.8 to 170.6 ms) | 205 to 216 ms |
+| real-time factor | 1.72 to 1.77 | 2.59 to 2.73 |
+| the tool's own verdict | "real time NO" in all nine | (a live call needs 80 ms or less) |
+| start of the reply after the caller stops (audio time, from the first word of its text) | 0.32 to 0.48 s on all nine lines (0.32 on five of them) | 0.28 to 0.34 s on 3 lines; it talked over the caller on the other 6 |
+| talks over the caller | never | 6 of 9 lines |
+
+So on this Mac it cannot keep up with a live call: it needs about 1.75 s of work for each second of audio, so the delay would grow while the caller talks and the reply would come about 2 s late (INFERRED; I did not run a live microphone test). On a machine that does an 80 ms frame in under 80 ms, the reply would start about 0.3 to 0.5 s after the caller stops (INFERRED from the timeline above). That is the only measured path to a first sound under 1 s that I have seen.
+
+**What it said, against the facts in its prompt.** The speech recogniser built into the model sometimes mis-heard a word ("lamb cruiser", "McCon"); the model still answered about the right car.
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "We have a black twenty sixteen Porsche Macan in stock. Would you like to schedule a test drive for tomorrow at nine AM or two PM?" | right |
+| 2 other Porsches | "No, we only have one Porsche in stock, a black twenty sixteen Porsche Macan." | right (the best answer of either model) |
+| 3 something cheaper | "The cheapest car is the Honda Civic, which is five thousand four hundred and fifty dirhams." | **wrong price**: 54,500, said as 5,450 |
+| 4 Land Cruiser | "white, has eighty thousand kilometers on it, and is equipped with four-wheel drive and eight seats" | **wrong**: 92,000 km; the rest right |
+| 5 this weekend | "The white Toyota Land Cruiser is in stock and ready for test drives. Would you like to schedule a test drive for tomorrow at nine AM or two PM?" | right (slots), though it did not say the weekend is not on offer |
+| 6 owners | "The Macan has had twenty three owners." | **invented**: the prompt has no owner count; it should say it does not have it |
+| 7 fastest | "The fastest car we have is the twenty twenty one BMW M three, with five hundred and ten horsepower." | right |
+| 8 speak to someone | "I am sorry, but I cannot provide a phone number. I am a virtual assistant... We have a variety of used cars in stock..." | **missed** the request; no hand-off (no tools given here) |
+| 9 goodbye | "You are welcome. Have a great day! What car are you interested in?" | right, but it asked a new question after a goodbye |
+
+Five of nine were right, three had a wrong or invented figure (a price a tenth of the true one, 80,000 for 92,000 km, and 23 owners out of nowhere), and one missed the request. PersonaPlex had four, four and one. VoiceChat's replies were short and finished, where PersonaPlex's often ran on.
+
+What it means (INFERRED):
+* **The speed gap is a Mac limit; the accuracy gap is the model.** Even with the stock facts in its prompt, it gave a wrong price, a wrong distance and an invented owner count in 3 of 9 lines, and a speech-to-speech model speaks before any check can see the words. That breaks the owner's rules (fixed and true prices; an unknown fact is said to be unknown).
+* **Where it would fit, if anywhere:** as a front end whose text stream is read by a monitor that cuts the audio on a bad figure, or with its tool calls doing every lookup. The model card's own tool scores are weak (42% argument accuracy, 33% pass@1), and tool calls were not tried here.
+* **To measure its real speed we need a faster machine:** a GPU (the model card lists A100, H100, H200, B100, B200 and RTX 6000) or a faster Mac. Whether a rented 80 GB GPU gets under 80 ms a frame is UNKNOWN.
+* **Licence:** openmdw-1.1 allows commercial use as written, but press reports NVIDIA labels this checkpoint research-only (section above). Not settled.
+* Qwen3-Omni was not tried: its Mac conversions are text-out only.
+
+## 72. MiniCPM-o 4.5 (Q4_K_M) on this laptop: runs faster than real time, answers worse, and is slow to start (2 Nov, the owner: "try MiniCPM-o 4.5 on the laptop ... run the same nine lines with the same stock facts")
+
+MEASURED on this M3 Pro (36 GB). Runner: OpenBMB's `llama.cpp-omni` built from source with Metal (cmake installed with pip, in a private folder, not brew). Weights `openbmb/MiniCPM-o-4_5-gguf`: the Q4_K_M language model (5.03 GB), hearing, voice, projector and speech-to-waveform pieces, 7.3 GB on disk (about 10 minutes). Licence Apache-2.0 on the weights (the runner says MIT). Raw figures (ignored by git): `benchmarks/results/minicpmo_mac_2026-11-02.json`.
+
+**Setup, and one change to the runner.** The same nine synthetic caller clips as sections 70 and 71, turned into 16 kHz and cut into 1-second chunks (what its test mode takes). The command-line tool has no way to set a system prompt, and its built-in prompt is Chinese. So in my scratch copy only (not in this repository) I replaced that prompt with an English persona that reads the same stock-facts text from an environment variable. The runs are one sample each, at the tool's default sampling, so replies vary from run to run: line 1 gave a longer, more accurate answer in a first trial ("...all-wheel drive, 91,000 kilometers, 340 horsepower, and it is the only Porsche") than in the nine-line batch.
+
+**Speed.**
+
+| step | result |
+|---|---|
+| prefill of the two 1-second input chunks | 0.24 s, then 1.15 to 1.23 s (the second chunk, in every run: slower than real time) |
+| from the start of decoding to the first text | 0.53 to 0.61 s (median 0.54) |
+| from the start of decoding to the first audio | 1.45 to 2.13 s (median 1.93) |
+| text-only mode: whole reply | 0.69 to 4.87 s (median 0.97; 23 to 133 tokens) |
+| language model speed | about 30 tokens a second (32 tokens in 1.05 s) |
+| the voice | 0.46 to 0.63 of real time: faster than playback, so audio can stream |
+
+For comparison, the runner's page reports under 650 ms to first token and 12 ms a token on an M4 Max. This M3 Pro is about 2.7 times slower on the language model (INFERRED from 30 against about 83 tokens a second).
+
+Adding it up (INFERRED): after the caller stops, the last input chunk's prefill (about 1.2 s) comes first. First text is then about 1.75 s after the caller stops, the whole text reply about 2.2 s, and the first sound about 3.1 s. That is no faster than the pipeline we have now (about 2 s) and slower than the Bedrock parallel turn. A smaller input chunk might cut the 1.2 s (UNKNOWN; not tried).
+
+**What it said, against the facts in its prompt.**
+
+| line | said | verdict |
+|---|---|---|
+| 1 Porsche | "We have a 2016 Porsche Macan, black. What other information would you like?" | right |
+| 2 other Porsches | "Yes, we have a 2016 Porsche Macan in black. It's 91,000 kilometers. It's 149,000 dirhams." | facts right; "Yes" is misleading (there is no other) |
+| 3 cheaper | "Yes, the Toyota is cheaper than the Porsche by about 50,000 dirhams. Are you interested in the Toyota?" | **wrong**: no car named, the 50,000 is made up (the Civic is 94,500 below, the Corolla 86,500) |
+| 4 Land Cruiser | "A white 2018 Toyota Land Cruiser with 92,000 kilometers and 275 horsepower for 189,000 dirhams." | right (all figures) |
+| 5 this weekend | "Yes, we have a 2018 Toyota Land Cruiser in white. It's been through 146 of 150 checks. How do you like the Land Cruiser?" | facts right; ignored the question and the free slots |
+| 6 owners | "Yes the Macan has just one previous owner." | **invented** |
+| 7 fastest | "We have a Porsche Macan, a Toyota Land Cruiser, a BMW M3, a Honda Civic, and a Toyota Corolla. Which car interests you?" | **no answer** (it is the BMW M3) |
+| 8 speak to someone | "AGMC, this is Wazir. How can I help you today?" | **missed** the request |
+| 9 goodbye | "Bye. Thank you for calling AGMC. You have reached Wazir. How may I help you?" | goodbye, then a new "How may I help you?" |
+
+Two were right, three had the right facts but missed or twisted the question, and four were wrong, invented or missed.
+
+**The three open models side by side, on this laptop** (same nine lines, same prompt):
+
+| | PersonaPlex 8-bit | VoiceChat 11B int5 | MiniCPM-o 4.5 Q4 |
+|---|---|---|---|
+| keeps up with real time | no (2.6 to 2.7 times too slow) | no (1.7 to 1.8 times too slow) | the voice does; the input prefill and decode do not (see above) |
+| reply start after the caller stops | 0.3 s of model time, but talks over the caller on 6 of 9 | 0.32 to 0.48 s of model time | about 1.75 s for text, 3.1 s for sound (INFERRED) |
+| right | 4 | 5 | 2 (3 more half right) |
+| wrong or invented | 4 | 3 | 4 |
+| licence | NVIDIA Open Model License; this build tagged non-commercial | OpenMDW 1.1; press says research only | Apache-2.0 |
+
+What it means (INFERRED): on this laptop none of the three speech models gives us a better turn than the cascade we have. MiniCPM-o's clean licence is its strength, and its Qwen3 base did not make it more truthful here: it invented an owner count and a price gap, and ignored two questions. Prompt wording, a larger quantisation (Q8 is 8.7 GB) and a faster machine could change the picture, and none was tried. Tool calling is not documented for it.
+
+## 73. The parallel turn: a matching fix and two more lookups ready ahead (2 Nov, the owner: "let's focus on the parallel run")
+
+Housekeeping first: the PersonaPlex, VoiceChat and MiniCPM-o files and the scratch build were deleted at the owner's request (about 25 GB; the small text-to-speech models and the `speech` tool were kept).
+
+**What the misses were.** Section 67's local run had the decided reply ready on 11 of 24 turns. The saved notes of the other 13 show no mismatch between a reply written ahead and the prompt the turn would have sent (every note says "prompt changed: False"). They were gaps in what is prepared:
+* **`get_car` with no id, 4 turns.** The model said `get_car` without an id ("is it reliable", "how many owners has it had", "what is the mileage"). The tool reads that as the car in focus, but the lookup key did not, so a reply that was ready ahead was not used. This was a bug of mine.
+* **No car in focus, cars shown:** the reply to "it" is the question "Which car do you mean?", which nothing prepared.
+* **Booking words:** `check_slots` was decided (the free times) and not prepared.
+* **The rest:** `compare_cars` (3), `search_cars` with no filter (3), `cancel_draft` (1) and `handoff` (1).
+
+**Changed (`agent/engine.py`).**
+* The decided `get_car` is keyed by the car the tool will use (the id, or the car in focus), the same as the prepared ones.
+* Two lookups added for the parallel turn only: `get_car` with no car, when cars were shown and none is in focus; and `check_slots`, on the same booking words as `prepare_booking`.
+* Not added: `compare_cars` and an always-on `search_cars` would give three more hits but put one more reply call on nearly every turn. The hand-off and the confirmation are still never run ahead.
+* The cap on lookups prepared ahead went from 6 to 8. In the 24 local turns it was at most 4.
+
+**Local check** (Qwen3-4B on MLX, the same 24 turns as section 67, `scripts/turn_speed.py --modes parallel`, MEASURED, one run each; the local model picks slightly different actions on each run):
+
+| | before | after |
+|---|---|---|
+| turns with the decided reply ready ahead | 11 of 24 (46%) | 14 of 24 (58%) |
+| replies written ahead per turn | 1.9 on average, at most 3 (46 in all) | 2.4 on average, at most 4 (58 in all) |
+| right action (the decision is unchanged) | 15/17 | 15/17 |
+
+So three more turns get their reply for half a reply more per turn on average: 26% more reply calls for 27% more hits (INFERRED from two single runs). Locally the speed is still worse than two calls (first words 2.8 s against 1.3 s) because the local server answers one request at a time; only Bedrock can show whether the saving is real.
+
+Tests (`tests/unit/test_model_only.py`, 3 added; one older test now uses `compare_cars` as its "nothing ready ahead" case, since `check_slots` is prepared on booking words): a `get_car` with no id is the car in focus and its reply is used; a question about "it" with cars shown and none in focus has the "which car" reply ready; booking words get the free-times reply ready, and a hand-off still never does. `pytest tests/unit`: 1,491 passed, 40 skipped.
+
+The cost estimate in `scripts/turn_speed.py` for the parallel turn is now at most 1 decision and 6 replies a turn. For the owner's run (one pass of the baseline and the parallel turn, 24 turns each) that is at most 216 calls and about 214,000 input tokens: about 2 US cents of input and under 2 more of output at Nemotron's priority rates (INFERRED; the tokens per call are estimates).
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```
+
+## 74. The parallel turn on Bedrock, measured: about 0.4 s faster at p50, no gain at p90, and a connection cost found (2 Nov, run by the owner)
+
+MEASURED with the section 73 command (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1`), from this M3 Pro to `us-east-1`, Nemotron Nano 3 on the priority tier. The same 24 turns in each mode, each sent after the agent's own earlier replies; no errors, no silent turns. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_121826.json`.
+
+| | baseline (two calls) | parallel |
+|---|---|---|
+| first words, p50 / p90 | 1,393 / 1,614 ms | **994** / 1,691 ms |
+| whole turn, p50 / p90 | 1,446 / 1,751 ms | 1,009 / 1,817 ms |
+| right action | 14/17 | 14/17 |
+| reply ready when the decision arrived | | 13 of 24 turns (54%) |
+| replies written ahead per turn | | 2.4 on average, 4 at most (57 in all) |
+
+**Per turn, parallel against baseline (first words):** faster by more than 100 ms on 16 turns, within 100 ms on 3, slower by more than 100 ms on 5. The median change is -360 ms and the mean -266 ms.
+
+| | first words, p50 |
+|---|---|
+| parallel, reply ready (13 turns) | 915 ms (baseline on the same turns: 1,367 ms) |
+| parallel, reply not ready (11 turns) | 1,281 ms (baseline on the same turns: 1,425 ms) |
+
+On the turns where the reply was ready, first words came the moment the decision came (within a few ms), so the wait was the decision alone.
+
+**What held it back: the decision was slow.**
+
+| replies being written alongside | turns | decision, p50 (range) |
+|---|---|---|
+| 0 to 1 | 3 | 404 ms (360 to 437) |
+| 2 | 13 | 878 ms (360 to 1,658) |
+| 3 or more | 8 | 894 ms (332 to 1,033) |
+
+Sent alone in earlier runs, the decision took about 500 to 600 ms (sections 56, 66). Here it took about twice that whenever 2 or more replies were in flight (INFERRED: the turns differ too, so this is a correlation). That is why the p90 did not improve (1,691 against 1,614 ms) and 5 turns got slower.
+
+The very first turn ("I'm looking for a Toyota") had its decision at 1,658 ms, past the 1.2 s limit, so the engine went on with "no decision" and the reply ready for `none`. In a live call that is the wrong action.
+
+**A likely cause, MEASURED in part: a new connection is expensive from here.** An unauthenticated request to the Bedrock endpoint, repeated three times from this Mac, showed:
+* TCP connect 0.20 to 0.38 s;
+* TLS finished at 0.60 to 0.81 s;
+* first answer at 0.79 to 1.03 s.
+
+So a request on a new connection loses about 0.6 to 0.8 s before it is even sent, against about 0.35 s on a warm one. The endpoint offers HTTP/2. In the parallel turn, every reply I stop mid-sentence has to close its connection, so the next turn's extra requests open new ones (INFERRED; not yet proved). That would also explain the slow first turn.
+
+**A second finding that affects both modes in real calls.** Our model client (httpx) closes an idle connection after 5 seconds, its default; nothing in `openai_compat.py` changes that. In this test the turns followed each other at once, so it did not show. In a live call there is usually more than 5 s between the end of one reply and the caller's next question, so the next turn's first request pays a new connection (about 0.6 to 0.8 s, INFERRED from the measurement above). This may be part of the 2 s the owner sees on calls.
+
+**Proposed, not yet built** (the owner decides):
+1. Keep connections alive longer (about 50 s), and warm one at the start of the call. No new packages.
+2. HTTP/2 for the Bedrock backend, so the decision and the replies share one connection and stopping a reply does not close it. This installs `h2` 4.4.1, `hpack` 4.2.0 and `hyperframe` 6.1.0 (about 0.1 MB in all, my estimate; the dry run resolved them).
+3. Then run the same command again and compare: the decision time with replies in flight is the thing to watch (it should fall toward 500 ms), and the p90.
+
+## 75. The connection fix: HTTP/2, a 50 s keep-alive, and a connection opened at the start of a call (2 Nov, the owner: "build the connection fix ... then I will rerun turn_speed")
+
+Section 74 found that a new connection to Bedrock costs 0.6 to 0.8 s from here, that the parallel turn probably opens new ones every turn, and that our client closes any idle connection after 5 s (httpx's default). This is the fix. It is not yet measured on a real model call; that is the owner's rerun.
+
+**Built.**
+* **Config** (`BackendCfg`): `keepalive_s` (seconds an idle connection is kept; unset means httpx's 5 s) and `http2`. Only `bedrock_nemotron` sets them: `keepalive_s: 50`, `http2: true`. Every other backend is unchanged (a test checks the local server keeps 5 s and HTTP/1.1).
+* **Client** (`nlu/openai_compat.py`): builds the httpx client with those settings. If `http2` is set but the `h2` package is missing, it falls back to HTTP/1.1 and logs a warning; nothing breaks.
+* **Dependency:** `httpx[http2]` in `pyproject.toml`, which adds `h2` 4.4.1, `hpack` 4.2.0 and `hyperframe` 6.1.0 and nothing else (the lock file diff adds exactly those three).
+* **Warm-up:** `warm_connection()` on the backend (one cheap `GET /models`, never raises), passed through `BackendChain`, and called in a background thread by `AgentEngine.opening()`, which runs at the start of every call. The greeting does not wait for it, and a backend that serves both the decisions and the replies is warmed once.
+
+**Measured on the real Bedrock endpoint, with no key sent** (the 401 answer is enough to time the connection; from this Mac, 2 Nov):
+
+| | old (HTTP/1.1, 5 s keep-alive) | new (HTTP/2, 50 s keep-alive) |
+|---|---|---|
+| first request on a cold client | 861 ms | 709 ms |
+| a warm request | 230 and 345 ms | 214 and 229 ms |
+| three requests at once | 206, 670, 670 ms (done in 671 ms) | 225, 222, 222 ms (done in 227 ms) |
+| first request after a 6.5 s pause (four trials) | 622, 621, 673, 582 ms (median 622) | 210, 193, 218, 203 ms (median 206) |
+
+* **At once:** the extra requests of the old setup each opened a connection; on HTTP/2 all three shared one. That is the parallel turn's situation.
+* **After a pause:** the old setup paid a new connection every time (a caller thinking for longer than 5 s); the new one did not. That saves about 0.4 s on the first call of such a turn, in both modes.
+* **How long Bedrock keeps an idle HTTP/2 connection:** I tried idle gaps of 1, 3, 5, 8, 12, 20 and 35 s; each next request took 200 to 280 ms, so none was dropped. A single 902 ms reading after a 6.5 s pause in a first test did not repeat in the four trials.
+* **Limits of this check:** it times the connection, not the model, and a request with no key is answered at the edge. A caller silent for more than a minute still pays once. I did not add a repeating keep-warm ping.
+
+**Tests** (`tests/unit/test_bedrock_backend.py`, 4 added; `tests/unit/test_model_only.py`, 1 added). The pool really is HTTP/2 with a 50 s keep-alive for Bedrock and 5 s HTTP/1.1 for the local server; the fallback without `h2`; `warm_connection` makes one cheap request and returns False instead of raising; the chain warms the active backend; opening a call warms once in the background without delaying the greeting. `pytest tests/unit`: 1,496 passed, 40 skipped. Lint counts unchanged on every touched file.
+
+**What to watch in the owner's rerun** (same command as section 73):
+* the decision time with 2 or more replies in flight, which was about 880 ms against about 400 ms with none (section 74) and should fall toward 500 ms;
+* the first turn, which had its decision at 1,658 ms and went on with no decision;
+* the p90 of first words (1,691 ms against 1,614 ms for the baseline);
+* the baseline too: with the new client its decisions and replies may also be quicker.
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1
+```
+
+## 76. The connection fix on Bedrock, measured: a smaller decision tail, no big gain in the back-to-back test (2 Nov, run by the owner)
+
+MEASURED with the section 75 command (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --repeat 1`), the same 24 turns, Nemotron Nano 3 on the priority tier, with HTTP/2 and the 50 s keep-alive on. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_123747.json`. The run before it (section 74) is `..._121826.json`.
+
+| | before the fix | after the fix |
+|---|---|---|
+| **baseline (two calls)** first words, p50 / p90 | 1,393 / 1,614 ms | 1,411 / 1,673 ms |
+| baseline whole turn, p50 / p90 | 1,446 / 1,751 ms | 1,476 / 2,156 ms |
+| **parallel** first words, p50 / p90 | 994 / 1,691 ms | 1,125 / 1,773 ms |
+| parallel whole turn, p50 / p90 | 1,009 / 1,817 ms | 1,287 / 1,924 ms |
+| right action (both modes) | 14/17 | 15/17 |
+| reply ready when the decision arrived | 13 of 24 | 12 of 24 |
+| replies written ahead per turn | 2.4 (4 at most) | 2.4 (4 at most) |
+
+**The fix did not make the parallel turn faster in this test.** The back-to-back turns are the case it was not meant to help (see below), and the run-to-run spread on a single pass is large: the baseline itself moved 20 to 40 ms and the parallel turn's p50 moved 130 ms. One thing did improve: **the decision.**
+
+| | before | after |
+|---|---|---|
+| decision time, parallel turns, p50 / p90 / worst | 860 / 1,030 / 1,658 ms | 762 / 918 / 1,300 ms |
+| turns that timed out on the decision ("no decision") | 1 (the first turn, 1,658 ms) | 0 (the first turn: 808 ms) |
+| decision, 0 to 1 replies in flight (3 turns) | 404 ms | 495 ms |
+| decision, 2 replies in flight (13 turns) | 878 ms | 753 ms |
+| decision, 3 or more in flight (8 turns) | 894 ms | 800 ms |
+
+**What the parallel turn does, in this run.** Per turn against the baseline on the same lines:
+
+| | turns | parallel first words, p50 | baseline, same turns, p50 | change, median |
+|---|---|---|---|---|
+| reply was ready | 12 | 828 ms | 1,473 ms | **-698 ms** |
+| reply was not ready | 12 | 1,552 ms | 1,372 ms | **+84 ms** (worst +625: "Yes.", "what would you recommend for a family of five") |
+
+So a hit saves about 0.7 s and a miss costs about 0.1 s, up to 0.6 s. With half the turns ready, the p50 of first words falls (-286 ms) and the p90 does not (+100 ms). This is the whole trade: the gain is the hit rate times 0.7 s, less the cost on misses, and 2.4 reply calls a turn (three times the calls of two).
+
+**What was ruled out.**
+* **The fix not being active:** the real backend object negotiates HTTP/2 with the endpoint (three requests: 757 ms cold, then 224 and 227 ms).
+* **Our own preparation:** building the replies ahead takes 1 to 5 ms on the main thread (24 turns, model calls stubbed). So the extra 250 to 300 ms the decision takes with 2 or more replies in flight is not our code (INFERRED: most likely the model service sharing its work between the concurrent requests; not proved).
+* **The connection limit:** `max_parallel` is 64.
+
+**Why this test could not show the fix's main benefit.** `turn_speed.py` sends the next question the moment the last reply ends. A live caller pauses; an idle connection used to be dropped after 5 s, and a new one costs 0.6 to 0.8 s (section 74). Measured against the real endpoint with no key (section 75): the first request after a 6.5 s pause took a median of 622 ms before and 206 ms after.
+
+**Changed (`scripts/turn_speed.py`).** `--pause SECONDS` waits before each follow-up question of a call (not timed), and `--set VA__NAME=value` overrides a config value for the run, so the old connection settings can be run for comparison. Tests: 2 added (the pause is taken before follow-up questions and not the first, and is not in any turn's time; overrides reach the engine; the dry run counts the waiting). The override names were checked against the config: `VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false` and `..._KEEPALIVE_S=5` give the old settings.
+
+**The next measurement (owner's run; two passes of the baseline, 48 calls each, about 3 minutes each).** The new settings first, then the old ones, both with a 7 s pause before each follow-up question:
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7 --set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false --set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__KEEPALIVE_S=5
+```
+
+I expect the first follow-up request of each call-turn to be about 0.4 s quicker with the new settings (INFERRED from the 622 and 206 ms measured above). That is the live-call saving, for both modes.
+
+**Where this leaves the parallel turn (INFERRED).** It is worth about 0.3 s at p50 for three times the model calls, and it makes the slow turns a little slower. Raising the hit rate is the lever. More lookups ready ahead raise the contention and the cost; better prediction of what the model will choose is the alternative.
+
+## 77. The connection fix with the caller's pause, measured: about 0.3 s quicker on every follow-up question (2 Nov, run by the owner)
+
+MEASURED with the two commands at the end of section 76 (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline --pause 7`, once with the new connection settings and once with the old ones), the same 24 turns, one call after another, with 7 s of silence before every question after the first of a call. Nemotron Nano 3, priority tier, the baseline (two calls) in both. The old settings were HTTP/1.1 with httpx's 5 s keep-alive, set from the command line (`--set VA__LLM__BACKENDS__BEDROCK_NEMOTRON__HTTP2=false` and `..._KEEPALIVE_S=5`). Raw files (ignored by git): new `turn_speed_2026-11-02_124640.json`, old `turn_speed_2026-11-02_124947.json`.
+
+| | old (HTTP/1.1, 5 s) | new (HTTP/2, 50 s) |
+|---|---|---|
+| first words, p50 / p90 | 1,586 / 1,896 ms | **1,248 / 1,749 ms** |
+| whole turn, p50 / p90 | 1,691 / 2,040 ms | 1,377 / 1,753 ms |
+| right action | 14/17 | 14/17 |
+
+**Split by place in the call.**
+
+| | old | new | same line, old minus new |
+|---|---|---|---|
+| follow-up questions after the pause (19), p50 / mean | 1,586 / 1,598 ms | 1,248 / 1,315 ms | median **+317 ms**; new faster by over 100 ms on 15 of 19, slower on 1 |
+| first question of a call (5), p50 / mean | 1,607 / 1,702 ms | 1,709 / 1,512 ms | median +260 ms (only 5 turns, so no reading) |
+| for comparison: new settings, no pause (section 76), follow-ups p50 | | 1,411 ms | |
+
+* **This matches the prediction.** Section 75 measured, with no key, a first request after a 6.5 s pause of a median 622 ms (old) against 206 ms (new), a difference of about 0.4 s. On real model calls the follow-up questions came out 0.32 to 0.34 s quicker (p50 and mean).
+* **A caller who pauses pays about 0.3 s for each question under the old settings.** The old numbers with a pause (1,586 ms) are about 175 ms above the same turns sent back to back with the new settings (1,411 ms), so a part of the old penalty was visible even before the pause was added.
+* **The new settings with the pause were not slower than without it** (1,248 against 1,411 ms), which is within the spread of one pass of 19 turns (about 150 ms in this series). I read that as no cost, not as a gain from pausing.
+* **The first question of a call** has only 5 turns here and the readings point both ways (p50 worse, mean better). The connection is warmed when the call opens, so I expect no difference; this test cannot show it.
+* **Stays as built:** nothing more to change in the connection. It applies to the Bedrock backend only.
+
+**Where the live call stands (INFERRED).** The status quo before this work was the old settings with two calls: 1,586 ms of first words at p50 with a pause. With the connection fix it is 1,248 ms (measured). The parallel turn then saves about a further 0.3 s at p50 for three times the model calls (section 76), which would put first words near 0.9 to 1.0 s on a call that pauses. That combination, the new settings with a pause, has not been run. Recognition (about 0.27 s), the wait for the end of speech (about 0.2 s) and the voice start (under 0.16 s) come on top of these, so the owner's 1 s rule is still out of reach on this path.
+
+To measure the combination (the owner's run, both modes with the new settings and a 7 s pause, about 7 minutes and under 5 US cents by the dry run):
+
+```
+AWS_BEARER_TOKEN_BEDROCK=... VOICE_AGENT_ALLOW_CLOUD=1 uv run python scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --pause 7
+```
+
+## 78. The parallel turn with the connection fix and a pause: about 0.3 s faster on average; the distance to the region is now the biggest piece left (2 Nov, run by the owner)
+
+MEASURED with the last command of section 77 (`scripts/turn_speed.py --backend bedrock_nemotron --modes baseline parallel --pause 7`): both modes with the new connection settings (HTTP/2, 50 s keep-alive, a connection opened at the start of a call) and 7 s of silence before each follow-up question. The same 24 turns, Nemotron Nano 3, priority tier. Raw file (ignored by git): `benchmarks/results/turn_speed_2026-11-02_130433.json`.
+
+| | baseline (two calls) | parallel |
+|---|---|---|
+| first words, p50 / p90 | 1,373 / 1,880 ms | **1,177 / 1,570 ms** |
+| whole turn, p50 / p90 | 1,428 / 1,951 ms | 1,301 / 1,790 ms |
+| right action | 14/17 | 15/17 |
+| reply ready when the decision arrived | | 12 of 24 turns |
+| replies written ahead per turn | | 2.4 on average, 4 at most (58 in all) |
+
+| | turns | parallel, p50 | baseline, same turns, p50 | change, median |
+|---|---|---|---|---|
+| reply ready | 12 | 762 ms | 1,419 ms | **-664 ms** |
+| reply not ready | 12 | 1,348 ms | 1,300 ms | **+102 ms** (worst: "which one is the fastest", +1,075 ms) |
+
+* **Per turn:** faster by more than 100 ms on 14 turns, within 100 ms on 4, slower by more than 100 ms on 6; median -372 ms, mean -356 ms.
+* **The decision.** Median 667 ms across the parallel turns (860 ms in the first run, 762 ms in the second; section 76), worst 1,222 ms, and no "no decision" turn. With 2 or more replies in flight it took 678 to 723 ms against 575 ms with none: the extra wait from sharing the service is now about 100 to 150 ms (it was 250 to 300 ms), which is a smaller version of the same effect.
+
+**The medians of parallel jump from run to run (994, 1,125, 1,177 ms) and the means do not, for a reason.** About half the turns are hits (about 760 ms) and half misses (about 1,350 ms), so the median sits on the line between the two groups and moves when one or two turns change sides. The means and the paired differences are steadier. Pooling the three runs that have both modes (72 turns, first words):
+
+| | baseline mean | parallel mean | mean change | median change | reply ready |
+|---|---|---|---|---|---|
+| run 1: old connection settings, no pause (section 74) | 1,379 ms | 1,112 ms | -266 ms | -360 ms | 13/24 |
+| run 2: new settings, no pause (section 76) | 1,445 ms | 1,187 ms | -258 ms | -186 ms | 12/24 |
+| run 3: new settings, 7 s pause (this one) | 1,478 ms | 1,122 ms | -356 ms | -372 ms | 12/24 |
+| **all three, 72 turns** | 1,434 ms | 1,140 ms | **-294 ms** | -332 ms | 37/72 (51%) |
+
+The mean saving is 294 ms with a standard error of 63 ms (about ±123 ms at 95%); faster by more than 100 ms on 44 of 72 turns, slower by more than 100 ms on 17. In run 3, the first question of a call (5 turns) went from a mean of 1,756 to 935 ms and the 19 follow-ups from 1,405 to 1,171 ms; the first-question figure rests on 5 turns, so it is not a finding.
+
+**What the parallel turn is worth, with the fix (INFERRED from the table above):** about 0.3 s of first words on average, for 2.4 extra reply calls a turn (three times the model calls, section 73), and the slow turns are not made faster. Against the starting point of this series, the old connection settings with two calls and a pause (first words p50 1,586 ms, section 77), the live-call figure is now 1,177 ms: about 0.4 s less in all, across runs on different minutes.
+
+**Where the time goes now.** On a hit, first words come with the decision; the decision costs a trip to the region (about 215 ms) plus the model's own work. Everything below was measured from this Mac, with no key, new connection each time, five tries per region (medians):
+
+| region | TCP connect | TLS done | whole request |
+|---|---|---|---|
+| us-east-1 (N. Virginia, today) | 216 ms | 649 ms | 885 ms |
+| eu-central-1 (Frankfurt) | 137 ms | 414 ms | 552 ms |
+| eu-north-1 (Stockholm) | 154 ms | 458 ms | 622 ms |
+| ap-southeast-1 (Singapore) | 100 ms | 312 ms | 407 ms |
+| **ap-south-1 (Mumbai)** | **48 ms** | **131 ms** | **177 ms** |
+| me-central-1 (UAE) | no answer from the Bedrock endpoint name | | |
+
+The TCP connect time is one trip. Mumbai is 4.5 times closer than N. Virginia: a request on a warm connection would wait about 50 ms for the trip instead of about 215 ms, and a new connection (now rare) would cost 131 ms instead of 649 ms. The Nemotron Nano 3 30B model card lists Mumbai (and Frankfurt and Stockholm) as available in-region, and the priority tier as supported. I did not call the model there: that needs a key made in that region (a long-term Bedrock key works only in the region it was made in, per the key documentation).
+
+What it would be worth (INFERRED, subtracting the difference in trip time from the measured turns): about 170 ms from each call in the critical path. That is roughly 0.17 s on a parallel hit, and about 0.34 s for the baseline's two calls in a row; first words near 1.0 s at p50 in parallel. The owner decided on 30 Oct (section 55) that the region stays `us-east-1`, because the company's key has its models there. This is the measurement behind reopening that question for this one model, and it is the owner's and the boss's call.
+
+**Then the whole turn from the end of the caller's speech (INFERRED, adding the figures from earlier sections):** about 0.2 s wait for the end of speech, 0.27 s recognition, 1.18 s first words and under 0.16 s for the voice to start: about 1.8 s today in parallel. With Mumbai and the parallel turn about 1.6 s. The owner's 1 s rule needs the fixed parts to shrink too (streaming recognition, a faster end-of-turn decision), not only the model call.
+
+## 79. Recognisers against Whisper base on the owner's turns: a faster, more accurate offline model, and a streaming one that ties Whisper (2 Nov, the owner: "download Moonshine streaming small and Nemotron streaming 160 ms and ... use the installed speech tool for Kyutai and Qwen3-ASR ... score them against the current Whisper base on my recorded turns and report accuracy and the time from end of speech to final text")
+
+MEASURED on this M3 Pro. Scripts: `scripts/asr_shootout/` (`prepare.py`, `run_*.py`, `run_all.sh`, `score.py`). The audio and results are in `benchmarks/results/asr_shootout/` (ignored by git).
+
+**The turns** (the same as the earlier scorer, section 36, `scripts/score_recognisers.py`): 252 in all, 384 seconds of audio, 1.5 s on average, 3.9 s at most.
+* **12 recorded:** the owner's two calls that have reference lines (real voices, real microphones).
+* **120 synthetic, clean** and **120 synthetic, headset mic:** 40 phrasings of the sweep, said by three Kokoro voices, the second set as a Bluetooth headset microphone sends it (telephone band, with digital silence between words).
+* **Words wrong** are counted as the agent's code reads them (numbers, spellings and "colour" against "color" do not count), the measure of `--as-read` in the earlier scorer.
+* **Time after the end of speech:** from the moment the last sample of the clip is in to the final text. Whisper and Qwen3-ASR decode the whole clip at that point. The streaming ones (Nemotron, Moonshine) were fed at real speed in 160 ms chunks, so their work during speech competed for the CPU as it would live; then the tail was closed and the wait measured.
+
+**Downloads.**
+* Nemotron streaming 160 ms int8, 632 MB on disk;
+* Moonshine streaming small through its own package, 140 MB (its quantised build, not the 561 MB research weights), in a private environment (`moonshine-voice`, MIT, 18.6 MB);
+* Qwen3-ASR 0.6B, 680 MB;
+* Kyutai STT 1B 4-bit, 1.1 GB (the largest, the one I judged borderline for "small");
+* about 2.5 GB in all. They sit in the `speech` tool's cache and the scratch folder.
+* **One unapproved download, by mistake:** I asked the local `speech-server` for a model named `whisper-1`, which it maps to Parakeet-TDT, and it fetched 611 MB. I stopped the server and deleted that folder.
+
+**Results** (words wrong / turns heard exactly / time after the end of speech, median and p90):
+
+| recogniser | recorded (12) | synthetic clean (120) | synthetic headset (120) | all 252 | after the end of speech |
+|---|---|---|---|---|---|
+| **Whisper base** (today, OpenVINO, CPU, with the live hint) | 10.3% / 8 | 11.3% / 99 | 21.0% / 87 | **15.7% / 194** | 256 / 274 ms (288 / 402 on the recorded) |
+| **Qwen3-ASR 0.6B** (offline, English hint, no context) | 14.1% / 4 | 8.7% / 96 | 7.6% / 100 | **8.6% / 200** | 70 / 86 ms |
+| **Nemotron streaming 160 ms**, 0.5 s of quiet before the speech | 10.3% / 5 | 12.1% / 81 | 13.0% / 77 | **12.4% / 163** | 80 / 104 ms |
+| Nemotron streaming 160 ms, speech from the first sample | 15.4% / 3 | 21.0% / 55 | 23.1% / 46 | 21.6% / 104 | 80 / 104 ms |
+| Moonshine streaming small, 0.5 s lead | 26.9% / 4 | 9.1% / 93 | 34.0% / 56 | 22.0% / 153 | 42 / 83 ms |
+| Kyutai STT 1B 4-bit (60 turns: all recorded, every fifth synthetic) | 15.4% / 5 | 13.8% / 20 of 24 | 12.6% / 17 of 24 | 13.9% / 42 of 60 | not measurable here |
+
+On the same 60 turns for every recogniser: Qwen3-ASR 8.7%, Nemotron with a lead 8.3%, Whisper 9.5%, Kyutai 13.9%, Moonshine 25.0%.
+
+**Things that changed a score, so they are listed.**
+* **Without the English hint** Qwen3-ASR heard "Any budget, any model" in Russian. With `--language en` it did not (8.8% became 8.6% overall).
+* **Without quiet before the speech** both streaming models drop the first word ("Looking for a Toyota", "Budget any model"; "Porsche." came back empty from Nemotron). A live stream is open before the caller speaks, so I added 0.5 s of quiet and report that as the fair figure. It took Nemotron from 21.6% to 12.4%; Moonshine barely changed.
+* **Car words (the weak spot) on the 12 recorded turns:** Qwen3-ASR without context heard "Bosch." for "Porsche.", "the machine/market" for "the Macan" and "Plan Cruiser". With a car-names context string (`speech transcribe --context`), it got them all right: **9.0% words wrong and 8 of 12 exact, level with Whisper's 10.3% and 8 of 12**. Whisper has the same vocabulary as its hint, so that is the fair comparison. Nemotron heard "Porsch", "Macin" and "And cruiser" without any hint.
+
+**Lag by clip length** (median ms after the end of speech): Whisper 249 / 263 / 273 for clips up to 1.5 s / 1.5 to 2.5 s / over 2.5 s; Qwen3-ASR 66 / 78 / 106; Nemotron 77 / 81 / 84 (flat, as a streaming model should be); Moonshine 25 / 66 / 34. The clips here are short; a longer turn would widen the gap in favour of streaming (INFERRED).
+
+**What it would take to use them.**
+* **Qwen3-ASR through `speech-server`** (installed, `/v1/audio/transcriptions`, the same API the worker's `RemoteWhisper` speaks; alias `qwen3`): a warm round trip of 69 to 95 ms for a short clip (10 calls). **But the `prompt` and `context` form fields did not change the answer** ("Bosch." both ways), so over that server the car words are not helped. The command line takes `--context`; the server, as installed, does not pass it (UNKNOWN whether a newer one does).
+* **Nemotron streaming through sherpa-onnx** (1.13.8 is already installed here): it works in Python as is. Nothing in the worker feeds a recogniser while the caller speaks yet, and no hot-word boost was tried.
+
+**What it means (INFERRED).**
+* **A faster offline recogniser is the cheap win.** Qwen3-ASR cuts the recognition after the end of speech from about 256 ms to about 70 ms (about 0.19 s a turn) and halves the words wrong overall (15.7% to 8.6%; on the headset-band audio 21.0% to 7.6%). It needs its car-name problem solved first: on real voices without a context it is worse than today's Whisper.
+* **A streaming recogniser is the larger prize, but not built.** Nemotron ties Whisper on words wrong (10.3% on the recorded turns, 12.4% overall against 15.7%) and gives its final text about 80 ms after the end, from partial words it already has during the speech. That is what lets the model's decision start before the caller stops (up to 0.2 to 0.3 s more, GUESS). It hears fewer turns exactly (5 of 12 against 8) and has no vocabulary hint.
+* **Not worth more time:** Moonshine small (22 to 25% words wrong, 34% on the headset audio) and Kyutai 4-bit (13.9% on the 60 turns, its lag cannot be measured with the tool).
+
+**Limits.** 12 real turns only, and every difference between them is one or two words; 240 synthetic turns from three Kokoro voices; short clips; one pass on one machine, one caller at a time. Whisper and the sherpa and Moonshine models ran on the CPU; Qwen3-ASR and Kyutai ran on the Mac's GPU through MLX. In the live worker the voice and other work share those cores. None of this was tried inside a live call.
+
+## 80. Qwen3-ASR into the worker: three ways to give it the car names, and the plan (2 Nov, the owner: "wire Qwen3-ASR into the worker first: plan how to get the car-names context to it ... and what to test")
+
+A plan, with the checks that choose the route. No change to the worker yet. Section 79 has the numbers this rests on: Qwen3-ASR 0.6B recognises a turn about 185 ms sooner than Whisper base (70 against 256 ms after the end of speech) and gets 8.6% of the words wrong overall against 15.7%, but on the 12 real recorded turns it needs a car-names context (14.1% without, 9.0% with, against Whisper's 10.3%).
+
+**What the worker sends today.** `RemoteWhisper` (`voice/stt.py`) posts to `{stt_url}/audio/transcriptions` with the fields `model`, `language` ("en"), `temperature`, `response_format` and `prompt`. The `prompt` is the hint `stt_prompt()` builds for the turn: digits when a phone number was asked for; "yes/no" words at the read-back; day and time words (with what the agent just said) when a time was asked for; otherwise up to 45 car names from the stock, colours, "the second one", "test drive", and the agent's last 200 characters. Turning on a remote recogniser is two settings (`voice.stt_url`, `voice.stt_remote_model`) and a timeout (`voice.stt_timeout_s`, 3 s; a slower answer counts as "not heard"). So any server that reads `prompt` is a drop-in.
+
+**Route A: the context through the installed `speech-server`.** Not possible as installed.
+* **MEASURED (2 Nov):** the `prompt` and the `context` form fields both left "Bosch." for "Porsche." unchanged.
+* **Upstream source:** the transcription handler (`Sources/AudioServer/OpenAITranscriptions.swift`) reads `file`, `language`, `response_format` and `model` and ignores `prompt` and `temperature`. The library's `transcribe --context` exists (merged 11 Apr) and the request to add hot-word biasing (issue 219) was open on 2 Nov.
+* **What a fix would take:** a few lines in the Swift server to pass `prompt` to the model as its context, and a rebuild. This Mac has only the Command Line Tools (no Xcode, no Metal toolchain), so the owner would have to install Xcode or wait for the project.
+* **Side finding:** an unknown model name falls back to Parakeet-TDT and downloads it. That is what happened with `whisper-1`.
+
+**Route B: a small server of our own around the MLX Qwen3-ASR (recommended).**
+* `mlx-audio` 0.6.3 (Python, MLX) runs Qwen3-ASR. Its `Qwen3ASRModel.generate()` takes `language`, `system_prompt` and `hotwords`; `hotwords` is merged into `system_prompt`, which is placed in the model's system message, the place Qwen3-ASR takes its context. A `context=` keyword would be silently dropped.
+* The repo already has the pattern: `scripts/canary_server.py` (166 lines, the standard-library HTTP server in a separate MLX environment, the OpenAI transcription API, for `voice.stt_url`), and `tests/unit/test_stt_server.py`. The new script is `scripts/qwen3_asr_server.py` reading the `prompt` field into `system_prompt`.
+* **Footprint:** a private environment of 38 packages (the largest: `mlx-metal` 45 MB, `scipy` 21 MB, `transformers` 10 MB), about 100 MB in all; and the community MLX weights, `mlx-community/Qwen3-ASR-0.6B-4bit` 713 MB (or 8-bit, 1,011 MB). The weights in the `speech` tool's cache are a different format and are not reused. About 0.8 GB to download for a first spike, and nothing added to the project's own dependencies.
+* **UNKNOWN until built:** the speed in Python (the Swift server's warm call was 69 to 95 ms) and whether the context fixes the car words the way the command-line `--context` did (9.0% on the 12 recorded turns).
+
+**Route C: correct the car words afterwards.** Tried offline on the 252 Qwen3-ASR transcripts from section 79 (`scripts/asr_shootout/correct_after.py`): replace a stretch of the transcript by a hot-word from `config/hotwords.txt` when it looks very like it.
+
+| | recorded 12: words wrong / exact | all 252: words wrong / exact | corrected right / made worse |
+|---|---|---|---|
+| no correction | 14.1% / 4 | 8.6% / 200 | |
+| hot-words, similarity 90 or more | 12.8% / 5 | 9.1% / 195 | 1 / 6 |
+| hot-words, similarity 80 or more | 12.8% / 5 | 9.4% / 192 | 4 / 12 |
+| hot-words, 75 or more | 12.8% / 5 | 10.9% / 186 | 4 / 27 |
+| 80 or more, plus the agent's last-line words at 55 | **10.3% / 7** | 9.2% / 194 | 6 / 12 |
+
+It fixes "Plan Cruiser" (to Land Cruiser) with the global list, and "Bosch" and "the machine" (to Porsche and Macan) only by leaning on the words the agent had just said, the same information the Whisper hint carries. "The market" for "the Macan" stays wrong. And it breaks things: "go ahead" became "go Ahmed", and the caller's "Fatma" became "Fatima". The errors that matter are real words (machine, market, Bosch), which a spelling match cannot tell from correct speech. Not a main route. The agent's existing "did you mean the X or the Y" check on cars just shown (`engine._sounds_like_shown`) stays as it is.
+
+**Recommended plan.**
+1. **Build the server (route B)** in a private environment: `scripts/qwen3_asr_server.py` on the canary pattern, with unit tests against a fake model (the `prompt` becomes the system prompt; a wrong or missing language is forced to English; the answer shape the worker reads; an empty or silent clip gives an empty text; a bad request gives an error, not a crash).
+2. **Choose the context format on the recordings, in seconds.** Through the server, score on the 252 turns: no context; the static car names; the live `stt_prompt()` hint as it is; a shorter purpose-made string; the same words through `hotwords` instead of `system_prompt`; and the state-dependent hints (digits for a phone number, day and time words). Pick by words wrong "as read" and the car words in particular.
+3. **Check the hard cases:** phone numbers (the digit style: "050 793 2546" against words), names (Fatma, Omar Hassan, Sara), one-word and two-word answers ("Porsche.", "yes go ahead"), prices said in words.
+4. **Check what it does with no speech:** silence, room noise, a Bluetooth headset's digital silence, the agent's own voice leaking back. Whisper loops on some of these ("No!!!!") and the worker has guards for that (`is_degenerate`, `clean_transcript`, `tests/unit/test_stt_guard.py`); Qwen3-ASR has not been shown to behave. Use the quiet and noisy stretches in `logs/audio_dump`.
+5. **Check speed the way the worker will use it:** warm calls for 1 to 5 s clips through the Python server; the first call after the start (it was 1.45 s on the Swift server, so the server warms itself at start); 2, 4 and 8 calls at once; with the voice (eve) running next to it.
+6. **Failure:** with `voice.stt_url` set the worker has no Whisper to fall back on. Kill the server mid-call and see what the caller hears. If it is "not heard" over and over, decide whether the worker keeps Whisper as a fallback.
+7. **A live call** with `VA__VOICE__STT_URL` and `VA__VOICE__STT_REMOTE_MODEL`, comparing the notes of the same questions with and without it.
+
+**Decision for the owner.** Go ahead with step 1 and 2, which needs the 0.8 GB download (about 100 MB of packages and 713 MB of weights), or choose another route. Expected gain when it works (INFERRED): about 0.18 s less per turn from the recogniser alone, and fewer words wrong on headset audio (21.0% to 7.6% in section 79).
+
+**Not covered here.** The production recogniser is a shared GPU server (`voice.stt_url`), not this laptop; Qwen3-ASR's speed and cost on that server, and whether it can be served there with the same `prompt` field, are UNKNOWN. A streaming recogniser (Nemotron, section 79) is a separate piece of work.
+
+## 81. The Qwen3-ASR server, and which context to give it (2 Nov, the owner: "build the Qwen3-ASR server ... write scripts/qwen3_asr_server.py with tests, then run the context A/B on the 252 turns")
+
+Built and measured; not yet used by the worker.
+
+**Built.**
+* `scripts/qwen3_asr_server.py`: Qwen3-ASR 0.6B on the Mac's GPU (MLX) behind the OpenAI transcription API, so `RemoteWhisper` talks to it unchanged (`voice.stt_url`). It follows `scripts/canary_server.py` (the standard-library HTTP server, a private MLX environment). The worker's `prompt` goes to the model as its system prompt; an extra `hotwords` field (comma separated) goes to the model as its hot-word list; the language is always forced (the worker's "en" becomes "English"; never auto-detect, which once chose Russian); recognition is one at a time behind a lock; the model is warmed at start; nothing the caller said is logged.
+* `tests/unit/test_qwen3_asr_server.py`, 9 tests, all with a fake model (no MLX needed): the upload keeps the audio bytes and the fields; any WAV becomes 16 kHz mono; the language mapping; the worker's own `RemoteWhisper` client against the real HTTP server, with the hint arriving as the system prompt; no hint, hot-words and `response_format=text`; health, unknown paths, a missing file and a bad upload all answer without taking it down and without echoing anything from the upload; a model failure is an error answer with only its type, and the next request works; the adapter passes `system_prompt`, `hotwords` and the language the way the model expects; three simultaneous callers are all answered and never inside the model together. `pytest tests/unit`: 1,507 passed, 40 skipped.
+* `scripts/asr_shootout/context_ab.py`: the A/B below.
+
+**Downloads and speed.** About 100 MB of packages into a private environment (447 MB once unpacked: `benchmarks/results/asr_shootout/qwen3-venv`, git-ignored) and the 4-bit weights `mlx-community/Qwen3-ASR-0.6B-4bit` (`model.safetensors` 708 MB, in the Hugging Face cache). MEASURED: the server is ready 7 s after it starts; a warm request takes 74 to 86 ms for a short turn, and the first call without a warm-up took 1.3 s (the server warms itself).
+
+**The Python version hears better than the Swift tool did, with no context at all.** Through this server the "Porsche." clip that the `speech` tool heard as "Bosch." is heard right. On the 12 recorded turns with no context: 10.3% words wrong and 6 exact (the Swift tool: 14.1% and 4). The pipelines differ (other weights, the English prefix forced).
+
+**The A/B** (all 252 turns, words wrong "as read" / turns heard exactly; the median time the server took):
+
+| context | recorded (12) | clean (120) | headset (120) | all 252 | median ms |
+|---|---|---|---|---|---|
+| Whisper base (today, with its hint) | 10.3% / 8 | 11.3% / 99 | 21.0% / 87 | 15.7% / 194 | 256 (after the end of speech) |
+| none | 10.3% / 6 | 8.3% / 98 | 7.4% / 101 | 8.0% / 205 | 83 |
+| the stock names as a sentence (system prompt) | 7.7% / 7 | 9.6% / 94 | 10.2% / 97 | 9.7% / 198 | 109 |
+| the worker's own hint, as it sends it (answering state, plus the agent's last line) | 11.5% / 7 | 8.1% / 98 | 7.9% / 100 | 8.2% / 205 | 113 |
+| a short list of names (system prompt) | 9.0% / 6 | 8.9% / 96 | 8.5% / 98 | 8.7% / 200 | 87 |
+| **the stock names as the model's hot-word list (`hotwords`)** | **5.1% / 9** | 8.7% / 96 | 7.9% / 100 | **8.0% / 205** | 97 |
+| the worker's hint plus the hot-words | 5.1% / 9 | 8.9% / 96 | 8.5% / 98 | 8.4% / 203 | 131 |
+
+**Hot-words are the right way to give it the car names.**
+* On the recorded turns they take it from 6 to 9 exact of 12 (5.1% words wrong against Whisper's 10.3%) and cost nothing on the other 240 turns (8.0% overall, the same as no context). A system prompt in sentences mostly does not help and sometimes hurts: with the worker's own hint, "Yes, talk about the Macan." became "...a bit more.", the model carrying on from the conversation text.
+* **The worker's state hints do not help it:** with the contact-state hint the phone numbers are 14.0% wrong (the same as none); the slot-state hint, which Whisper likes, raised the time turns from 0% to 5.6% wrong and the one- and two-word turns from 16.3% to 31.0%.
+* **Cost:** a longer system prompt adds 15 to 30 ms (113 against 83 ms); the hot-word list adds about 14 ms.
+
+**By kind of turn** (words wrong / exact):
+
+| | Whisper base (now) | Qwen3, no context | Qwen3 + hot-words |
+|---|---|---|---|
+| all 252 | 15.7% / 194 | 8.0% / 205 | 8.0% / 205 |
+| phone numbers (30) | 42.5% / 16 | 14.0% / 17 | 15.4% / 18 |
+| names ("the name is...", 18) | 14.3% / 7 | 8.3% / 11 | 8.3% / 11 |
+| a car word in it (13) | 5.5% / 12 | 10.9% / 8 | **3.6% / 11** |
+| one or two words (62) | **11.6% / 54** | 16.3% / 48 | 18.6% / 50 |
+
+**What the agent makes of the phone numbers:** its own reader (`extractors.contact` and `normalize_phone`) gets the right number from all 12 spoken numbers with all three recognisers. Qwen3-ASR writes them as words ("Zero five zero seven nine..."), and the agent reads that. So the digit gap in the table is formatting; the agent's result is the same.
+
+**Where it is worse.** Short answers.
+* **"half two" (said six times):** Qwen3 heard "um" or "Have to." every time, with every context; Whisper got it 4 of 6 ("have to" twice).
+* **"the RAV4":** Qwen3 writes "The RA V4." or "The RAV 4." (1 to 3 of 6 exact with any context); Whisper 5 of 6. The agent finds a model by its letters joined, so "RA V4" would be missed (UNKNOWN until tried).
+* **The phrases heard wrong most often on the synthetic turns** (each said six times, except where noted; hot-words on): "half two" 6 wrong; "yep book it" heard as "Yet book it." 6; "under the name Sara" written "Sarah" 6 (a spelling of a name); the spoken phone number 6 (written as words, which the agent reads correctly, see above); "the RAV4" 3 (as "RA V4"); "can I change it to 9?" heard as "...to non?" 3.
+
+**Offline policies** that lean on Whisper for these (the transcripts of both are on hand; each is words wrong / turns exact for all 252, and for the recorded 12):
+
+| | all 252 | recorded 12 | one or two words |
+|---|---|---|---|
+| Whisper only (today) | 15.7% / 194 | 10.3% / 8 | 11.6% / 54 |
+| Qwen3 + hot-words only | 8.0% / 205 | 5.1% / 9 | 18.6% / 50 |
+| Whisper when Qwen3 gives one word or a filler (4 turns) | 7.7% / 207 | 5.1% / 9 | 16.3% / 52 |
+| **Whisper when the clip is under 1.0 s (34 turns)** | **7.4% / 208** | 5.1% / 9 | 13.2% / 53 |
+| Whisper when the clip is under 1.3 s (116 turns) | 7.7% / 206 | 5.1% / 9 | 16.3% / 52 |
+| Whisper when the two disagree and Qwen3 gave two words or fewer (11 turns) | 7.3% / 208 | 5.1% / 9 | 16.3% / 52 |
+
+The gain is small (8.0% to about 7.4%) and it needs the worker to keep Whisper loaded; the cheaper fix for "RAV4" is to join the letters of a stock model name (an exact match with the spaces removed, with no fuzzy guessing).
+
+**What it means (INFERRED).** Qwen3-ASR 0.6B with the stock's names as hot-words is a better recogniser for this job than today's Whisper base on everything measured but the shortest answers: 8.0% against 15.7% words wrong overall, 5.1% against 10.3% on the owner's recordings, names and car words right, and about 170 ms sooner (97 against 256 ms). The shortest answers ("half two", "the RAV4") need a plan.
+
+**Limits.** Only 12 real turns (9 against 6 exact is three turns); 240 synthetic turns from three Kokoro voices; short clips; one pass; the hot-words are the portal stock's names, which the worker also has (its Whisper hint is built from them too). Not tried: silence, room noise and the agent's own voice leaking back (Qwen3-ASR may produce words from nothing, as Whisper sometimes does; `tests/unit/test_stt_guard.py` shows the guards the worker has), several callers at once, the voice running at the same time, a live call.
+
+**To use it in the worker (next, not done).** `RemoteWhisper` sends only `prompt`; for this server it should send the stock names as `hotwords` and no `prompt`. That is a small, tested change behind a setting (`voice.stt_hotwords_field`), so a GPU Whisper server is not sent a field it does not know. Then: the no-speech checks, the "RAV4" join, a decision on a Whisper fallback for clips under a second, and a live call.
+
+Running it by hand: `benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.py --port 8011`.
+
+## 82. The worker can send the stock's names as hot-words (2 Nov, the owner: "change RemoteWhisper to send the stock names as hotwords behind a setting, with tests, then give me the commands for a live call with the Qwen3-ASR server")
+
+**Changed.**
+* **Setting `voice.stt_hotwords_field`** (off by default; `VA__VOICE__STT_HOTWORDS_FIELD=true`). It applies only with `voice.stt_url`. A Whisper server is not sent a field it does not know, and nothing changes for any existing setup.
+* **`RemoteWhisper`** (`voice/stt.py`): with the setting on, each turn's request carries `hotwords` (the stock's names, comma separated, at most 45) and **no `prompt`**. The names come from `hotword_source()`, which the pipeline sets (`attach_stock_hotwords` in `voice/pipeline.py`) to read the inventory's vocabulary at every turn, so a car added to the stock is heard without a restart. If the source cannot be read, the configured hot-word list is sent instead and the turn goes on; with no names at all no field is sent.
+* **`stock_names()`** (`voice/prompts.py`): the make and model names as the recogniser should hear them ("Toyota", "Land Cruiser", "RAV4"), shared with the Whisper hint, which used to build them inline (a test pins the hint to its earlier text).
+* **`EchoGuard`** (`voice/services.py`): a recogniser that was never given the hint (`ignores_prompt`) is not asked a second time with another hint. The guard's two retries ("the digits hint was written down", "the agent's own question was written down") only make sense when a hint was sent; here they would repeat the same request and double the turn's time. The agent's own question coming back is still answered as "not understood" (`UNCLEAR`), without the second try.
+
+**Tests** (`tests/unit/test_stt_hotwords.py`, 12; `pytest tests/unit`: 1,519 passed, 40 skipped; lint counts unchanged on every file touched): the names' form and limit; the Whisper hint unchanged; by default the prompt is sent and no `hotwords`; with the setting the names go as `hotwords` and the hint is never sent, even when one is given; the names are read again each turn; no names means no field, and a failing source falls back to the configured list without an error; at most 45 names; the start-up check works with hot-words and a dead server still fails it loudly; the setting is off by default and the environment turns it on; the pipeline gives only a hot-words recogniser the stock, reading the inventory each time; the guard does not retry for a recogniser that ignores the hint, and still refuses an echo of the agent's question, and is unchanged for a Whisper server.
+
+**Checked end to end** (the real Qwen3-ASR server, the worker's `RemoteWhisper` and `EchoGuard`, the real portal inventory; 2 Nov): 40 names are sent from the portal stock ("Audi, A4, Q7, Bmw, 320I, 530I, ..."); on the 12 recorded turns **5.1% words wrong and 9 of 12 exact**, the same as the A/B in section 81; on the 240 synthetic turns 8.3% words wrong, 196 exact; no errors, no guard retries; a median of 124 ms per turn with the HTTP round trip included (the server alone: about 97 ms).
+
+**What is not done.**
+* **"half two" and "the RAV4"** (section 81) are unchanged; the exact-letters join and a Whisper fallback for clips under a second are not built.
+* **No Whisper fallback.** With `voice.stt_url` set the worker holds no Whisper. If the Qwen3-ASR server is down at start the worker refuses to start (`warm_up` fails loudly); if it dies mid-call the caller hears "not heard" turns until it is back.
+* **The names are the stock's, title-cased** ("Bmw" for BMW); the recogniser is not case-sensitive in a way the agent notices (it reads the words in lower case), but it is not checked how the hot-word list's spelling affects the written form.
+* **Not tried:** silence, noise and the agent's own voice leaking back into the recogniser; several callers; a live call. Over to the owner.
+
+**Running it** (two terminals; the recogniser first, because the worker checks it at start-up):
+
+```
+benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/qwen3_asr_server.py --port 8011
+```
+```
+VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+
+## 83. A live call can now be read afterwards (2 Nov, the owner: "can you see the transcripts? it's still quite slow. also, sometimes the barge in does not work, or it does work but the bot keeps speaking, and when its done, what i said to barge in appears and it replies")
+
+**What could and could not be said from the page transcript alone.**
+* **Seen:** the booking *was* saved by the worker (AG-129, the number and the Monday 6 pm slot all match the database). The red line on the page ("Unknown car_id. Search first.") comes from the site's mirror of the booking, whose `carById` does not know the 49 extra demo cars; the agent's facts all matched the database. The "Are you still there?" prompts are the 8 s quiet clock working as designed. "How many.", "um" and "Sounds like." were answered because `voice.model_only` skips the fragment checks.
+* **Not seen:** why four turns took 3.6 to 8.2 s (the rest 1.1 to 2.1 s), and why a barge-in sometimes did not stop the agent. The page shows only the total; the worker's notes stay in the owner's terminal and the audio recorder was off. A cause given now would be a guess.
+
+**Changed (the recorder only; with `VA_DUMP_AUDIO_DIR` unset nothing is written and no decision changes).** Beside the audio, `<stamp>_in.txt` now also gets:
+* **`turn`**: one JSON line per answered turn: intent, how it was decided (`via`), the state, `decision_ms`, `first_piece_ms`, `turn_ms`, the reply's word count, whether the call ended, and the engine's own note (cut to 700 characters) (`turn_trace` in `voice/pipeline.py`).
+* **`cut`** / **`over_agent`** (`BargeIn`): a cut says how many seconds of speech over the level it took and the loudest 20 ms; `over_agent` says why speech over the agent did *not* stop it (too short, too quiet, or the agent finished first), again with seconds and loudest level. This separates "the level was too high for a quiet voice" from "the detector never fired".
+* **`late_cut`** / **`late_kept`** (`LateBargeIn`): the words that arrived while the agent was still audible, and whether they stopped it. A `late_kept` of real words is the owner's "it keeps speaking and then answers what I said".
+* The quiet-spell prompts were already recorded as `said`.
+
+**Tests** (`tests/unit/test_call_trace.py`, 6; full suite `python -m pytest`: 1,652 passed, 68 skipped; lint findings on the touched files are the ones that were there before): a cut is noted with seconds and loudness; a too-short and a too-quiet speech each say so; the agent finishing first is noted; no recorder means the same decisions; late words are noted as cut or kept; a turn line carries the decision path and the three times.
+
+**Next.** The owner runs one live call with the recorder on (command in the reply), says which turns were slow and which barge-ins failed (the time on the page is enough), and the notes and audio are read against that. `scripts/barge_replay.py` can then replay the audio through the detector with other settings.
+
+## 84. Reading the live call of 2 Nov 14:59 (Qwen3-ASR, parallel turn, Nemotron alone) (the owner: "read the logs and see what went wrong. are you sure the model is the one writing the replies? it was completely unable to understand my last questions. why didnt we try parakeet?")
+
+The recorder of section 83 was on: 129 notes, 185 s of audio, 23 turns. Read with `scripts/call_latency.py`, `scripts/barge_replay.py`, and the stretches of speech re-read by Qwen3-ASR (the live hot-words and none) and by Whisper base (scratch scripts, not kept).
+
+**Waiting.** 17 turns got a reply. From the caller's last loud frame to the first sound: median 1.48 s, worst 3.64 s. Turn end 0.24 s, hearing 0.19 s, **the agent 1.08 s (median)**, voice 0.14 s. The agent part is 0.56 to 0.93 s when the reply written ahead is used, and 1.2 to 1.5 s when it was not ("none for search_cars, so its reply is written now": every "go through the rest", "what's the mileage", "Hello" and the last two turns). One decision took 2.9 s ("tell me more about the Camry"): a single slow Bedrock call; it cannot be told from the notes whether the network or the contention was the cause.
+
+**Barge-in.** 17 stretches of speech overlapped the agent. Nine were loud and the agent stopped each time at 0.30 s. Seven were quiet (loudest 20 ms frame 0.046 or less; at most 0.16 s above the level); six of them were room noise that the recogniser wrote as "um". The seventh, "How many people?", was said softly, did not stop the agent in time and was stopped by the late rule when its words arrived (0.16 s later). One began before the agent was audible. So in this call no loud barge-in failed; the reports of "keeps speaking" are not reproduced here.
+
+**What the recogniser got wrong.**
+* **The names list was cut off before Toyota.** The worker sends at most 45 names (section 82). The real stock has 95 names, in alphabetical order of make, so only Audi to Kia were sent. Land Rover, Lexus, Mazda, Mercedes, Nissan, **Porsche, Tesla, Toyota (Camry, Corolla, Fortuner, RAV4, Yaris...)**, Volkswagen never were. The test of section 81 used the 25-car portal stock (40 names). Same 252 turns, same server: recorded turns **none 10.3% wrong; the 40-name list 5.1%; the live 45-of-95 list 10.3%; all 95 names 10.3%**. The gain measured earlier does not carry to the real stock; sending all 95 does not bring it back.
+* **Noise turns.** Short stretches of room noise came back as "um" (live), as "So.", "The." (no hot-words) or as nothing useful (Whisper: "you", "the"). Replaying the same audio with the live name list, **Qwen3-ASR wrote the hot-word list itself ("Audi, A4, A6, Q5...") for three of the short noise clips**. With `voice.model_only` the fragment checks are off, so "um" was answered as a turn (once with the whole Yaris description again).
+* **Car names in real speech** ("Yaris" as "Sierras" and "cariss", "Camry" as "camera" without the list, "Toyota" as "For a data" on a clip cut short). Whisper base with the hint got "Toyota" and "Camry" right in two cases and was wrong in others ("I'm going to do more about the Yaris", "the CRS").
+* **One sentence lost.** The 3.7 s repeat "I'm asking if this Yaris has been owned by other people before" reached the agent as "um" (turn at +164 s). Replaying that audio through the real end-of-turn logic and the same server gives the whole sentence, so the cause is not found. The notes did not say which audio the recogniser was given or whether the early recognition was used.
+
+**The replies.** They are Nemotron Nano 3 30B (`nvidia.nemotron-nano-3-30b`, no fallback in the chain): the notes say `via: agent`, the non-breaking hyphens in "one‑owner" and "head‑up" and the different wording of the same list each time cannot come from a template, and the text "model_only: said anyway; the checks would have stopped" only exists when the model's own reply was spoken. What sounds off is what the disabled checks catch: **the model said "a one-owner car" and "one owner"** (one note says so; **CORRECTION, section 90: the stock does record owners, 1 for every car in the calls, so this was true, only not in the facts of the turns that reached the model through a search**), then "How many owners would you like to hear about?"; "What's the mileage?" was answered and followed by "Which day would suit you?" (the decision picked `check_slots`); "Go through the rest" gave the same three cars three times (the reply is written from the same facts; the list is not moved on).
+
+**Other findings.** "Any model, any budget." was answered with a Tesla Model Y after "I'm looking for a Toyota"; run offline with the Toyota search remembered the search keeps Toyota (Yaris, Corolla, Camry), so the cause is in what the model chose that turn, which the notes did not record. The page's red booking line is the site's own list of cars (section 83).
+
+**Changed (the recorder only).** `turn` lines now list the tools that ran with their arguments (`search_cars({'make': 'toyota'}) -> 10 match(es)`); new notes `early_stt` / `early_dropped` (the audio length and words of each early recognition, and when it was thrown away), `stt_path` (whether the words came from the early recognition or were recognised after the turn, the audio length, level, milliseconds and the words) and `stt_skipped` (too quiet). Tests in `tests/unit/test_call_trace.py` (9); `python -m pytest`: 1,655 passed, 68 skipped; lint findings on the touched files unchanged (12).
+
+**Not changed, and why.** The name list, the noise turns and the made-up facts are behaviour the owner may want to decide: `model_only` is a test of the model alone, and filtering "um" or checking facts is code beside it. Options are in the reply to the owner.
+
+**Parakeet.** It was not on the recogniser shoot-out (section 79) and nothing was run on it. It appears once in the early notes as an idea for streaming recognition, and once by mistake: the local `speech-server` mapped `whisper-1` to Parakeet-TDT and downloaded 611 MB, which was deleted (section 79). It takes no word list, so it would not fix car names by itself; it has not been measured on the 252 turns.
+
+## 85. Parakeet-TDT on the 252 turns and the live call; and why long sentences came back as "um" (2 Nov, the owner: "test Parakeet-TDT first: tell me the download size, then run it on the 252 turns and this call's speech against Qwen3-ASR and Whisper")
+
+**Download.** `mlx-community/parakeet-tdt-0.6b-v2` (NVIDIA Parakeet-TDT 0.6B v2, English, CC-BY-4.0, MLX): **2.47 GB** (one 32-bit weights file; no smaller build exists in `mlx-community`), into the Hugging Face cache, run in the private MLX environment of section 81 with no new packages. `scripts/asr_shootout/run_parakeet.py`; `score.py` reads it. Not in the project's environment and not used by the worker. (v3, multilingual, is another 2.5 GB and was not fetched.)
+
+**The 252 turns** (the same as section 79; Parakeet takes no word list or hint):
+
+| | all 252 | recorded (12) | clean (120) | headset mic (120) | after the end of speech (median / p90) |
+|---|---|---|---|---|---|
+| Whisper base + hint (now) | 15.7% | 10.3%, 8 exact | 11.3% | 21.0% | 256 / 274 ms |
+| Qwen3-ASR 0.6B, no context | 8.6% | 14.1%, 4 exact | 8.7% | 7.6% | 70 / 86 ms |
+| Qwen3-ASR 0.6B + the 40 stock names | 8.0% | 5.1%, 9 exact | | | 124 ms through the worker |
+| **Parakeet-TDT 0.6B v2** | **8.3%** | **11.5%, 5 exact** | 8.3% | 7.9% | **40 / 47 ms** |
+
+By kind of turn (words wrong, Parakeet / Whisper / Qwen3 / Qwen3 + names): **digits** 11.0 / 42.5 / 15.4 / 15.4; **car names** 9.6 / **6.8** / 19.2 / 13.7; **one or two words** 18.6 / **11.6** / 18.6 / 18.6.
+
+**Reading it.** Parakeet is as accurate as Qwen3-ASR without context (8.3% against 8.6%), about half Whisper's error overall, and the fastest (40 ms). It has no way to be told the car names and gets the same ones wrong that Qwen3 does without them: "Porsche" as "Bourse", "Macan" as "macin" or "Mackin", "Land Cruiser" as "And closer". Whisper with the hint is the best of the four on car names and on one- or two-word answers, and the worst on digits and in noise. No recogniser here is better than the others on every kind of turn. Twelve recorded turns are too few to rank on; the 240 synthetic ones are the larger sample.
+
+**This call's 23 stretches of speech** (clips cut the way the worker does, with 0.5 s before): on the speech, all four read most turns the same ("Any model, any budget.", "No, I'm looking for a Toyota car, not Tesla.", "Go through the rest." twice, "What's the mileage on this car?"). Car names: Parakeet "Cambrie" (Camry), "Yars" and "CRS" (Yaris); Qwen3 with the live list "Camry" and "Yaris" right, "Many people have owned this Yaris before." (Qwen3 with no list "yachtus"); Whisper "the Camry, the M3, the Camry" and "the CRS". On the room-noise stretches **every recogniser writes words**: Parakeet "Yeah.", "That's really good.", "And it's weak."; Qwen3 without a list "So.", "Okay."; Whisper "you", "it's not cheap."; Qwen3 with the stock names "um". Switching recogniser does not remove the noise turns.
+
+**The lost sentence is found (it was not the recogniser).** "No, I'm asking if this Yaris has been owned by other people before." (67 characters) reached the agent as "um" in the live call, and the same clip read correctly when sent straight to the server. `clean_transcript` judged the early recognition (the one made while Smart Turn holds a pause) with the clip length counted as 0 s, and `is_degenerate` calls any text over `25 x max(seconds, 1) + 40` = **65 characters** a loop, so it was replaced by `UNCLEAR` ("um"). Every sentence over 65 characters that was held by Smart Turn came out as "um", whichever recogniser wrote it; these are the long questions. The 252 test turns are all under 65 characters, so no earlier test could see it.
+
+The same rule explains the noise turns: Qwen3-ASR with a word list writes the list itself for a clip with no speech (section 84), a 300-character "loop" for a 0.7 s clip, which became "um".
+
+**Fixed.** `is_degenerate(text, None)` and `clean_transcript(text, audio_seconds=None)` judge only repeats when the length is not known; the early recognition passes the real length of the audio (`len(pcm) / 32000`). A text far longer than its audio is still a loop. `tests/unit/test_long_transcripts.py` (4); `python -m pytest`: 1,659 passed, 68 skipped; lint findings on the touched files unchanged.
+
+**Correction to section 84.** "One sentence lost: cause not found" is answered above. The noise "um" were the word list written back, turned into "um" by the same length rule.
+
+**Not done.** Parakeet on the NVIDIA server the worker would use in production (this was the MLX build on the Mac); hot-word or context biasing for Parakeet (NeMo has some; not tried); a combination (Parakeet for the sentence, Whisper for one or two words and car names); dropping a transcript that is the word list written back (now still "um"); the weights (2.47 GB in `~/.cache/huggingface`) are kept until the owner says to delete them.
+
+## 86. Parakeet wired into the worker, with the fixes (2 Nov, the owner: "wire in parakeet with the fixes")
+
+**Built.**
+* **`scripts/parakeet_asr_server.py`** (port 8012): Parakeet-TDT 0.6B v2 behind the same OpenAI transcription API as the Qwen3 server (it reuses that script's upload parsing, WAV conversion, health, error answers and no-transcripts-in-the-log), in the same private MLX environment. `prompt`, `hotwords` and `language` are accepted and ignored. Nothing in the worker changed to use it: `voice.stt_url` points at it. `VA__VOICE__STT_HOTWORDS_FIELD=true` is how the worker is told the recogniser takes no hint (it sends no `prompt` and EchoGuard does not listen a second time); the stock names it also sends are ignored by this server.
+* **The fixes that go with it.** (1) The length rule of section 85 (a sentence over 65 characters is no longer "um"). (2) **A transcript that is the hot-word list written back is no speech** (`is_word_list_echo` in `voice/stt.py`: four or more pieces, 80% or more of them names from the list that was sent). It is dropped, so it is not a turn and not "um"; this protects the Qwen3 server, where it happened; Parakeet does not do it. A caller naming two cars, or a sentence with a name in it, is not an echo.
+
+**Tests** (`tests/unit/test_parakeet_asr_server.py`, 4; 2 added to `test_stt_hotwords.py`; `python -m pytest`: 1,665 passed, 68 skipped; lint clean on the touched files): the adapter hands the model only the audio and ignores the hint, the list and the language; the worker's own client gets the text and the server names itself `parakeet`; with the setting on the guard never asks a second time; a list written back is dropped and a caller naming cars is not caught.
+
+**Checked end to end** (the real Parakeet server, the worker's `RemoteWhisper` and `EchoGuard`, the real configuration): the 12 recorded turns **11.5% words wrong, 5 exact, 48 ms median with the HTTP round trip**; the 240 synthetic turns **8.1% wrong, 199 exact**; no errors, no guard retries; the long sentence of the live call, "No, I'm asking if this Yaris has been owned by other people before.", comes through whole (59 ms). The same numbers as the offline run of section 85.
+
+**What was not done, and why.**
+* **No change to which names the Qwen3 server is sent.** The A/B of section 84 showed no gain from any list on the real 95-name stock (10.3% = no list), so a scheme for choosing names would be built on nothing. With Parakeet no names are used.
+* **No noise filter was built.** Parakeet writes words for room noise ("Yeah.", "That's really good.") as the others do. In the live call the level the worker measures (`voice.min_rms`, the loudest 0.3 s) was **0.005 to 0.032 for the eight noise stretches and 0.051 to 0.283 for the speech**. The default is 0.005. `VA__VOICE__MIN_RMS=0.04` would have removed every noise stretch of this call and kept all of the speech. It is a setting for this microphone and this speaker's volume, not a default: the note beside the setting records quiet callers (10% volume) lost at 0.012. It is in the live-call command as an option to try.
+* **Parakeet on the production GPU server, and name biasing for it,** are not done. The model, fine as it is on the Mac, has no word list here. Whisper with the hint remains the best at car names; Parakeet and Qwen3 the best overall (section 85).
+* **The fixes of section 84 that belong to `model_only` stay off:** the fact checks that would have stopped "one owner", and the fragment check that would have dropped "um".
+
+**Running it** (three terminals; the recogniser first because the worker checks it at start-up):
+
+```
+benchmarks/results/asr_shootout/qwen3-venv/bin/python scripts/parakeet_asr_server.py
+```
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8012/v1 VA__VOICE__STT_REMOTE_MODEL=parakeet VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+Add `VA__VOICE__MIN_RMS=0.04` to the second to try the noise gate.
+
+## 87. The first live calls with Parakeet (2 Nov 16:23 and 16:31) (the owner: "read the logs in audio dump")
+
+Both calls used Parakeet (every `stt_path` note is 57 to 115 ms through the server; the Qwen3 server was not running). Read with `scripts/call_latency.py` and the stretches of speech re-read by Parakeet, Qwen3-ASR (with the live 45 names and with none) and Whisper base with the hint (scratch scripts).
+
+**16:31 call (4 turns, the caller asking for a Porsche).** Heard: "I'm looking for a boss." and "Looking for a pose." Re-read: Parakeet "pose" and "pose"; Qwen3 with names "Porsche" and "bush"; Qwen3 without "bush" twice; Whisper "Yukon, Toyota, Porsche" (its own hint written back) and "post". No recogniser got both; Parakeet cannot be given the name. Because neither word was a make, the parallel turn had no search ready ("none for search_cars, so its reply is written now" on every turn): the decision took 0.75 to 1.17 s and the reply was written after it, **1.5 to 1.95 s for the agent, 1.6 to 2.8 s in all**, against a 1.1 s median for the earlier call whose words were recognised. A misheard car name costs the reply written ahead as well as the meaning.
+
+**16:23 call (13 turns, mostly fragments).** Stretches of 0.4 to 1.4 s at levels 0.01 to 0.09, read as "What about the pattern story?", "In a matter of the camera.", "Feet one.", "Okay, so I'm gonna go ahead and get a little bit of a tea." and several empty results; what was said is not known. Parakeet writes plausible English for audio it cannot read. Qwen3 with the names wrote the name list for every short clip (now dropped as no speech by the guard of section 86).
+
+**The noise gate of section 86 is withdrawn as advice.** In the first call the noise measured below 0.032 and the speech above 0.051; in these two calls real speech was at 0.02 to 0.09 and "Yeah." at 0.025 was noise or speech with no way to tell from the level. `voice.min_rms` stays 0.005.
+
+**Conclusion.** Parakeet is not better than the others on this speaker; no recogniser has been measured on enough of this speaker's speech to choose (12 recorded turns). Next: a read-aloud set of this speaker's lines (car names, numbers, times, questions) in a call with the recorder on, scored against the four recognisers.
+
+## 88. A latency table on the page, and whether Qwen3-ASR streams (2 Nov, the owner: "back to qwen3, but is qwen3 a streaming speech to text model? also, can you make a table on the frontend that shows where the latency is going ... so i can see it immediately and then diagnose what to do")
+
+**Does Qwen3-ASR stream?** The model can: its card says "Qwen3-ASR fully supports streaming inference", but "currently only available with the vLLM backend" (an NVIDIA GPU server), and with no timestamps or batching. What we run is the MLX build on the Mac (`scripts/qwen3_asr_server.py`), which takes the whole turn after the caller stops: about 70 to 125 ms for a short turn, none of it overlapped with speech. `mlx-audio` has a `stream` option, but it streams the *output* words of a clip already complete, not audio arriving. So here it is not streaming; real streaming would be a vLLM server, and the most it could take off a short turn is that 0.1 s. (Of the recognisers measured in section 79, the streaming ones were Nemotron streaming and Moonshine; neither was better on the owner's speech.)
+
+**The table.** After each reply the page now adds a row: what you said, then the seconds for each step from the end of your speech to the first sound: **silence** (the detector's wait), **turn check** (Smart Turn, and the wait for the fallback silence when it said "still going"), **hearing** (recognition), **decision** (the model choosing the action), **reply words** (the model writing the first words after the decision), **voice** (speech synthesis), **total**, and **ready ahead** (whether the reply for the chosen action was already being written when the decision came: yes saves about 0.7 s, no means the reply was written after the decision). The biggest step of each row is outlined, cells are shaded by size, the last row is the median, and a line above says which step is the biggest at the median and how many replies were not ready ahead. It sits bottom left, can be hidden (remembered), and scrolls sideways on a phone.
+
+**How.**
+* Server (`server/latency.py`): the `timing` message now carries `turn`, `wait`, `check`, `hear`, `reply`, `voice` (the turn clock's parts, which were computed but dropped), and `seconds` includes the turn check; a new `turn_detail` message carries the model's decision time, whether the reply was ready ahead, the action and the reply length. The page joins them by turn number.
+* The turn check is new: `SmartEndpointer.last_check_secs` (time from the detector's latest stop to the stop being passed on). The turn clock starts when that stop arrives, so until now the 0.2 to 0.4 s Smart Turn kept a held turn open was in no number. The call cap (`on_answer`) still follows the clock without it.
+* `TurnDebug.reply_ahead` is set where the parallel turn decides whether its pre-written reply applies.
+* The page (`bmw-portal/site/voice.js`, local-demo branch, **not committed**: that repository is not this one): the table is in `voice.js` and is also reachable as `window.WzLatency` in the console.
+
+**Tests** (`tests/unit/test_latency_messages.py`, 5; `python -m pytest`: 1,670 passed, 68 skipped; lint findings unchanged): the message carries every step and a total with the check; a missing step is None; the detail carries decision, hit and length; the turn clock's parts flow into the message; the endpointer keeps the check time for an immediate verdict and for a held one. The page was checked in the browser pane with sample rows (desktop, phone width, hide and show); **not yet with a real call**: the worker running before this change does not send the new fields.
+
+## 89. The code picks the lookup when it is certain; "any model" was a Tesla (2 Nov, the owner, after the latency table showed the decision at 0.6 s: "add a setting so the code picks the lookup when it is certain, and the model decides the rest and still writes every reply. Keep the other model_only behaviour")
+
+**Setting `voice.rules_decide`** (off by default; `VA__VOICE__RULES_DECIDE=true`; only with `voice.model_only`). The code's own routing (`_fast_decide`, the rules the production agent runs first) is asked before the model. Where it is certain, the lookup it names is run and **no model call is made for the decision**; where it is not, the model decides as before. The model still writes every reply. Everything else of the test mode is unchanged: no fragment, "cut off" or "sounds like" checks, no shedding, the checks only note, nothing is completed by code, a turn the model leaves empty is silent. A turn the code decided says so in the notes ("rules_decide: the code picked the lookup, no model call for the decision"), has `via: agent:rules`, and no replies are written ahead for it (the parallel turn only runs when the model decides: two or three reply calls saved). In the page's table the last column says "code" for these turns and the summary line counts them.
+
+**What it takes off (the replays are INFERRED, with a stand-in model that says what was really said on each turn).** The calls of 14:59 and 16:45 replayed with the real stock and the real portal configuration: **the model was asked for the decision on 7 of 21 turns instead of 21**. Not decided by code: "Go through the rest." (twice), "Does it have a previous one?", "How many people?", "What's the mileage on this car?", and "um". On a turn the code decides the decision is about 0 ms instead of about 600 ms, and the reply is written as soon as the words arrive (about 0.35 to 0.55 s), so those turns should come near 1.1 to 1.2 s instead of the table's 1.4 to 3.0 s. Measured only by a call.
+
+**A bug found on the way (and fixed): "Any model, any budget." was a Tesla.** With the code's rules in charge, the same replay sent "Any model, any budget." to `get_car AG-164`, the Tesla Model Y, and every later turn carried the Tesla as the car in focus. The cause was in the vehicle finder (`nlu/extractors.py`, `find_vehicle`): the last, fuzzy stage compared the pair of words "model any" with the stock's "model y" as one string (88%, over its 85% cut-off). It is also what the first live call of 2 Nov did (section 84, "Any model, any budget" answered with a Tesla): the model was shown a car hint for AG-164, and the replies that were written ahead were for that car. Now a fuzzy match of several words must hold word by word, and a word of two letters or fewer must be the same (`_same_words`). "Tell me about the model y", "range rover sprot" and "bentyga" are still found. `tests/unit/test_model_word_not_a_car.py` (3).
+
+**Tests** (6 added to `tests/unit/test_model_only.py`, 3 in `test_model_word_not_a_car.py`; the latency message test updated; `python -m pytest`: 1,679 passed, 68 skipped; lint findings unchanged on every file touched): the code picks the lookup it is certain of with no model call and the model's reply is the one spoken; a turn the rules cannot route is the model's as before; off by default; the rest of the test mode is kept (the checks only note, nothing completed, the model not shown the code's wording); no reply is written ahead for a turn the code decided; the setting reaches the engine only with the test mode.
+
+**What to watch in the next call.** The code's routing is production code that the test mode had switched off: if it picks a wrong lookup (the table shows "code" in the last column and the action in the cell's tooltip), that is the code's mistake and not the model's. "The brown one." now goes to a search with the colour, where the model had chosen the car itself. Not changed: the unsupported "one owner" claim (the checks that stop it are still off), "um" still reaches the model.
+
+**Running it** (the same command as section 86 with the Qwen3 recogniser, plus `VA__VOICE__RULES_DECIDE=true`):
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+
+
+## 90. The first spoken piece, what is not recorded, and trimmed prompts for the test mode; and a correction (2 Nov, the owner: "build both: a setting for the first spoken piece to end at the first comma after 3 words (default as now), and tell the model which facts are not recorded for a car so it says it does not have them ... read the prompt and see if you can trim it as well. ONLY KEEP WHATS RELEVANT AND NEEDED")
+
+**Correction first.** Sections 84 and 85 and my reply after the 17:02 call said the stock has no owner count and the model invented "one previous owner". **That was wrong.** `car_details.owners` is filled for all 74 cars (1 for the Yaris, both Camrys and the Tesla of the calls), and the spec sheet the model gets for a car in focus says "It's had 1 previous owner". What did happen: on turns the model reached through a search (not the car's own lookup) the facts had no spec sheet, so "one owner" was said from the conversation, not from that turn's facts, and the check that compares a sentence with the facts flagged it (once, in the 14:59 call). The answers that sounded off in the 17:02 call were the misheard question ("There is a previous owner.", "That it has.", "Previous owner."), a model decision of `search_cars` on a fragment that dropped the car from focus, and a reply cut by the caller speaking over it.
+
+**1. `voice.first_clause_words`** (default 6 = as before; `VA__VOICE__FIRST_CLAUSE_WORDS=3`). The reply's first spoken piece may end at a comma once it has this many words (`split_point(text, min_words)`, used by the writer and the one-call stream). With 3, "I've got ten Toyotas," is spoken as soon as it arrives instead of waiting for the 17-word clause that took 1.66 s in the 17:02 call.
+
+**2. What is not recorded.** The spec sheet's closing sentence used to be "Anything not listed here is not recorded: say you don't have it on record." It now names the things: what this car's record leaves blank among accident history, service history, number of previous owners, warranty and fuel economy (`answers.unrecorded`), then what no car's record holds (number of keys, registration expiry, finance and insurance, tyre condition), "and anything else not listed here". A blank accident field cannot now be read as "accident-free".
+
+**3. Trimmed prompts, test mode only.** Measured on the same three turns of a call, ~4 characters to a token (INFERRED token counts):
+
+| | before | after |
+|---|---|---|
+| writer instructions | 2,742 chars, ~685 tokens | **1,723 chars, ~430 tokens** (-37%) |
+| a search turn's facts | 1,024 chars, ~256 tokens | 852 chars, ~213 tokens |
+| a car-in-focus turn's facts | 1,618 / 1,823 chars | 1,697 / 1,817 chars (the not-recorded list added about 25 tokens; the duplicates removed about as many) |
+| the decision's own part, no booking | the booking-draft line always | the line only when a booking is being filled in (about 30 tokens) |
+
+What was cut, and why it is safe:
+* **Writer instructions (`SYSTEM_MODEL_ONLY`, used with `voice.model_only` on the website profile only):** the model is not shown the system's STANDARD WORDING in this mode, yet the old text told it about one, gave it as part of both examples, and told it to end with "the same question" (the turn's own part already names the question). Out: those lines, the second example, and "do not end every reply with the same closing line" (each turn's part names the last closing and forbids it). In: one example, and "If something is not recorded, say you don't have it". Every rule that keeps a sentence true is kept (pinned by a test). The production prompt, `SYSTEM_VOICE`, is not touched.
+* **Facts:** a line given twice is given once (a search turn listed its three cars as "Examples" and again as "Cars in this call"); "The caller has already heard about its about, condition" no longer says "its about"; the writer no longer adds "The system is not waiting for an answer, so you do not have to end with a question" when the facts already say "The call is not waiting for an answer: end on a statement unless a question is really needed" (both were there).
+* **Left alone, on purpose:** the other cars' name, colour and price on a car-in-focus turn (about 45 tokens: a follow-up like "the cheaper one" may need them); the decision's tool list (each line is an action the model may pick); the spec sheet itself.
+
+**Tests** (`tests/unit/test_prompt_trim.py`, 10; `python -m pytest`: 1,689 passed, 68 skipped; lint findings unchanged on the source files): the comma rule by words; the writer's first piece follows the setting; the setting reaches the writer and defaults to 6; the blank fields are listed with the never-recorded ones; the sheet carries the sentence; the trimmed prompt keeps the rules and drops STANDARD WORDING, is used only in the test mode on the website profile; no car given twice and no "its about"; the "not waiting" sentence once; the booking-draft line only with a draft.
+
+**Not measured:** how much faster the model answers on 430 instead of 685 tokens of instructions (prefill is a small part of the 0.6 s; this is a call to make), or whether it changes what the model writes.
+
+**Running it** (section 89's command plus the two settings; the first-clause setting is the only way to try 3):
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+
+## 91. "Yaris" heard as "yachtist": the name list was cut before Toyota's models; and three bogus rows in the table (2 Nov, the owner, after the 17:19 to 17:23 calls: "the answers were a bit better, but it couldnt understand me saying yaris over and over")
+
+**What the table showed.** With the code deciding (6 of 8 rows "code", decision 0.00 to 0.01 s) and `voice.first_clause_words=3`, "reply words" came down to 0.58 to 0.74 s (it was 0.62 to 1.52 s in the 17:02 call), the median total 1.37 s. Three rows were not real (below).
+
+**Why "Yaris" was not understood: my cut, from section 82, still in place.** The recogniser was sent the first 45 of the stock's 95 names, in alphabetical order of make; Toyota and its models were never in it. The 17:19 call heard "I'm looking for a yachtist.", "Yeah, I'm looking for the yacht is." and "A yacht is. I'm looking for a yacht is." (said: "...a Yaris"). Section 84 saw the cut and the A/B there (252 turns, almost none with a Toyota model) showed no gain from a longer list, so I did not change it; that was the wrong test for this speaker.
+
+**Measured on the three "Yaris" clips of that call** (Qwen3-ASR, same server, same audio):
+
+| name list sent | clip 1 | clip 2 | clip 3 | time per turn |
+|---|---|---|---|---|
+| the live 45 (no Toyota models) | "yachtess" | "Yaris" | "A yacht is. I'm looking for a yacht is." | 154 ms |
+| none | "yadis" | "Yaris" | "A yachts. I'm looking for a yachts." | |
+| **all 95 names** | "Yaris" | "Yaris" | **"A yaris. I'm looking for a yaris."** | **202 ms** |
+| Toyota and its models first, then the rest to 45 | "Yaris" | "Yaris" | "A Yaris. I'm looking for a Yaris." | |
+
+(Whisper base with the hint read all three "Yaris" and "Toyota" as "Yoda"; Parakeet "Yadis", then "Yaris" twice.) Sending all 95 costs 48 ms a turn.
+
+**Changed.**
+* **`voice.stt_hotwords_max`** (default 100, was a fixed 45): all of a 95-name stock is sent. `RemoteWhisper(hotwords_max=...)`.
+* **The makes in play go first** (`hotword_names` in `voice/prompts.py`, `makes_in_play` in `voice/pipeline.py`): the make being searched for, the makes of the cars shown, and the car in focus, with their models, then the rest of the stock in its order. With a stock bigger than the cut, what the call is about is still sent. Read afresh at each turn.
+* **Not changed:** the Whisper hint (`stt_prompt`) has the same cut at 45 names and has not been touched (the live path here is Qwen3).
+
+**The three bogus rows.**
+* **7.44 s ("How many people can this car seat?") and the earlier 7.44 s ("Did it have a previous owner?")**: room noise made the detector stop, nothing was recognised, and the next sound, the "I'll end the call here" prompt, was reported as the reply's first sound (the 7.4 s is that prompt's time from the noise's stop; the real reply's audio had gone out 0.15 s after its words). The server no longer sends a timing for a stop with no recognised words (`timing_message` returns None).
+* **10.05 s of "voice" for "What color is it?"**: the reply's audio was sent at 624.95 s, 0.13 s after its sentence, yet the clock saw no first sound until the "Hello? Are you still there?" prompt 10 s later. **Cause not found.** The recorder now notes `clock` lines (the clock's own view: each stop, recognised words, sentence and bot start or stop, with whether it was waiting for a stop), so the next occurrence can be read.
+
+**Tests** (7 added in `test_stt_hotwords.py` and `test_latency_messages.py`; `python -m pytest`: 1,694 passed, 68 skipped; lint findings on the touched files unchanged): the cap is 100 and settable; the makes in play and their models come first and a cut keeps them; the makes in play are the search, the cars shown and the car in focus; the pipeline asks for them in that order; a sound after a stop with no words is not a reply time; the clock tells the recorder what it saw once per frame.
+
+**Running it** (section 90's command; the new names setting needs nothing added, it is on by default):
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__PARALLEL=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+
+## 92. The shorter hold: the reply written while Smart Turn waits, the turn ended when the words read as finished, and the shorter settings (3 Nov, the owner: "build the Smart Turn hold changes: write the reply during the hold, a text completeness check on the early transcript, and the shorter hold settings, with tests")
+
+Built and tested; **not measured on a call** (UNKNOWN until the owner runs one). All three are off by default and change nothing until switched on. Why these three: in the 2 Nov 17:35 call the turns over 1.7 s were all held turns. "I'm looking for Hyundai." was held 0.89 s though the words are complete, and "This Santa Fe." 0.84 s. The decision and the reply only started after the hold.
+
+**1. `voice.hold_reply`** (`VA__VOICE__HOLD_REPLY=true`; only with `voice.model_only`). While Smart Turn holds a pause the speculation already recognised the turn and made the model's decision (`voice/speculate.py`). It now also writes the REPLY for that decision (`AgentEngine.prepare_reply`): the lookup is run on a copy of the call, the writer's own input is built from it, and the writer streams into a queue on its own thread, as the parallel turn's replies do. When the turn ends with no new speech, `handle_stream` takes it if the real turn names the same lookup and the writer's input is equal, so the first words are there as the turn ends. Otherwise it is stopped and the reply is written after the decision as before (a note says which: `hold: ...`).
+* **Kept and dropped as the decision is.** The caller speaking again, a new turn, a different transcript or a call that moved on all stop it (`Speculation._drop_reply`, `reply_for`).
+* **Only lookups that change nothing outside the call:** `get_car`, `search_cars`, `prepare_booking`, `check_slots`, `end_call`, `none`. Never a hand-off, a confirmed booking, a cancellation or a reschedule (a test per tool).
+* **With `voice.rules_decide`** the code-decided turns get their reply written during the hold too. There the reply used to wait for the words (0.35 to 0.55 s).
+* **Replaces the parallel turn's guesses on a held turn.** With a reply made from a known decision, the 2 to 4 replies the parallel turn writes for likely lookups are skipped (one reply call, not three).
+* **Changed on the way:** `predecide` skipped any turn the code's rules could route, which is right for production and wrong for the test mode without `rules_decide`, where the model decides those turns too. In the test mode it now makes that decision during the hold as well (a test).
+* **Cost:** one reply call for every hold that gets as far as a decision, used or not. A hold the caller resumes is a wasted call.
+
+**2. `voice.smart_text_check`** (`VA__VOICE__SMART_TEXT_CHECK=true`). When Smart Turn says "still going", the endpointer recognises the turn once (its existing peek) and ends the turn at once if the words read as a finished sentence (`voice/finished.py`, `reads_finished`):
+* ends with a full stop, question mark or exclamation mark, not a comma, a dash or "...";
+* the last word is not one that needs another (an article, a preposition, a conjunction, an auxiliary verb, a filler, a question word);
+* at least 3 words before a full stop, 2 before a question mark. A one-word answer after a question is still `answers.is_complete_answer`'s job (`voice.smart_peek`, unchanged).
+
+A rule, not a model: nothing to download, a few microseconds. **The words are not recognised twice:** the speculation takes them as they are (`Speculation.start(pcm, text)`), makes the decision and writes the reply from them, and the speech service takes them as the early recognition. Where the words do not read as finished the hold stays and the same words start the hold's speculation, so the check costs no second recognition either. A note `text_check` in the recorder says what was heard and what was decided.
+* **Expected (INFERRED):** the 17:35 call's two held turns end at about 0.1 to 0.2 s instead of 0.85 to 0.89 s, saving about 0.65 s on them.
+* **The risk is the one `smart_peek` was switched off for:** a caller who finishes a clause with a full stop in the recogniser's text, pauses for the detector's short silence and carries on ("I'm looking for a Toyota. ... Under 80,000.") has the turn ended on the first half. The recognisers punctuate a sentence's end more reliably than a pause in the middle, but this is untested on the owner's calls. The check is conservative where it can be (a word that can end a sentence but usually does not, such as "is", holds as before).
+* The check runs only when Smart Turn said "still going", so a turn Smart Turn ends itself is never touched.
+
+**3. `voice.fast_hold`** (`VA__VOICE__FAST_HOLD=true`). One switch for the shorter hold. It lowers `smart_fallback_secs` to 0.4 (from 0.6) and `smart_stop_secs` to 0.15 (from 0.2), and only ever lowers them (a value already shorter is kept). Every consumer of the settings gets them: the server, the command line, the offline scripts. Not changed: `tap_stop_secs` (tap mode: 0.2 s cut 4 to 5 sentences in 24 recordings on 27 Oct, section 32) and `early_start_secs`, which stays 0. Early start would start the decision and, with `hold_reply`, a reply on every 0.3 s pause up to three times a turn. Section 74 found concurrent calls slow the decision by 250 to 300 ms, so it is a separate experiment.
+* **Expected (INFERRED):** 0.05 s off every turn and 0.2 s off a held turn that runs to the fallback.
+* **The risk:** a pause of 0.15 s inside a sentence reaches Smart Turn. It says "still going" for most such pauses, but it is the same trade as the 0.35 s tap setting.
+
+**Tests** (`tests/unit/test_hold_changes.py`, 50; `python -m pytest`: 1,744 passed, 68 skipped; the linter is not installed in this environment, so lint was not run): the text check on 7 finished and 12 unfinished lines; the speculation writes the reply from the words and decision, has it ready before the decision is handed on, stops it when the caller speaks again (made, or still being made), when the words differ and when the call moved on, tolerates a failing hook and does not recognise known words again; the endpointer ends a turn on finished words and hands them over once, holds on unfinished ones with the same words, does not even peek when Smart Turn says complete, is unchanged without the hook, keeps the answer check apart, and keeps the hold when the peek fails; the engine uses the reply written during the hold with one decision call and one reply call, skips the parallel replies, stops a reply for another lookup, writes again when the prompt changed, never writes ahead a hand-off, confirmation, cancellation, reschedule or comparison, writes nothing for a failed decision, covers the code-decided turns with `rules_decide`, saves about a call's time (0.3 s decision + 0.3 s reply: under 0.2 s to collect), and is off by default and without the test mode; `fast_hold` is off by default, shortens both values and only ever shortens.
+
+**What to look at in the next call** (the page's table and the recorder): the `turn end` column on held turns (should fall from 0.8 to about 0.2 s), `reply words` on turns marked `ready ahead` (should be near 0), and the `text_check` notes: any turn ended on a first half is a cost of check 2. The `hold:` note in the turn's note says whether the reply written during the hold was used.
+
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__HOLD_REPLY=true VA__VOICE__SMART_TEXT_CHECK=true VA__VOICE__FAST_HOLD=true VA__VOICE__STT_URL=http://127.0.0.1:8011/v1 VA__VOICE__STT_REMOTE_MODEL=qwen3-asr VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+`VA__VOICE__PARALLEL=true` can stay on: it still guesses replies for the turns where no decision was made during a hold. To compare, drop `HOLD_REPLY`, `SMART_TEXT_CHECK` and `FAST_HOLD` one at a time.
+
+## 93. The 3 Nov live calls: the shorter hold split sentences, "go through the list" repeated itself, and some stops in the middle of a reply (3 Nov, the owner: "when i pause in between words it takes them as separate questions; barge-in is not working properly; sometimes it stops talking midway; ... it asked me to keep listing, i said go thru the list and it just kept repeating itself")
+
+Read from the 10:01 and 10:09 calls of 3 Nov (`logs/audio_dump`, the recorder's notes), with the first call's audio replayed through the real voice detector and Smart Turn (scratch scripts, not kept) and `scripts/barge_replay.py`. The calls ran with `hold_reply`, `smart_text_check` and `fast_hold` all on (section 92).
+
+**1. Pauses split into separate questions: caused by section 92's `fast_hold` and `smart_text_check`.** Replayed on the same audio, the caller's sentence "Can you tell me what cars you have?" (a pause after "me"):
+
+| setting | turns the sentence became |
+|---|---|
+| the old hold (VAD 0.2 s, fallback 0.6 s) | **one:** "Can you tell me what cars you have?" |
+| `fast_hold` (0.15 s, 0.4 s) | two: "Can you tell me?" / "What car?" |
+| fallback 0.5 s | two: "Can you tell me?" / "...all the cars" |
+| old hold plus `smart_text_check` | two: "Can you tell me?" / "What cars you have?" |
+
+So this caller's pauses inside a sentence are 0.5 to 0.6 s, and 0.6 s is the shortest fallback that keeps them whole. The text check fails a different way: the recogniser (Qwen3) writes a question mark after a fragment, and "Can you tell me?" has a question mark, four words and ends on a pronoun, so it reads as finished. A rule on the words cannot tell a pause from an end here. Over the whole 7-minute call the shorter hold added 4 turns (94 to 98 turns with words) and the text check ended 5 turns early (95). **Both stay off by default and are not recommended for this caller; the config comments say so.** With the model-only test mode every such fragment is then answered as a question, because that mode skips the fragment checks. `hold_reply` does not change where a turn ends and was not a cause. It worked: "Did it have a previous owner." had its reply written during the hold and used (`hold: the reply for get_car AG-138 was written during the hold`).
+
+**2. "Go through the list" repeated the same three cars: a bug in the search, not the follow-up handling.** The call had 74 cars. "Go through the list" and "keep listing the cars, please" both ran `search_cars` with no filters and got the first three again. Cars already read out were left out only when the caller's words contained "other", "more", "else" or the like (`ex.wants_others`), and then only the last three shown, so a third request would have gone back to the first three. The model offered "shall I keep listing?" (the engine's own offer is "shall I go through the rest?") and the code did not know what it was agreeing to. Fixed in `agent/engine.py`:
+* `_continues_list`: the agent's last line offered to go on (the rest, keep listing, hear more about), the words are short and ask to go on (go through, keep listing, continue, carry on, go on, read them, the list, the rest), and name no make, filter or car. "Tell me more" and "the next one" do not count (a test; an existing test caught "tell me more").
+* The cars read out are kept for the whole run of the list (`Session.excluded`, which only the older engine used): each "go through the list" gives the next ones, and a new question starts the list again.
+* The facts say how many were read out and how many are left; at the end of the list the model is told "that was the whole list".
+* With `voice.rules_decide` the code picks this without a model call (`agent:rules`).
+* Tests: `tests/unit/test_list_paging.py` (8): new cars each time and none twice, with and without the model deciding; the code picks it with no decision call; the facts; the end of the list; a new question; only after an offer; and the "tell me more" cases. `python -m pytest`: 1,752 passed, 68 skipped.
+
+**3. Barge-in and stops in the middle of a reply: not caused by section 92, and mostly this room and voice.** Barge-in is untouched by the hold changes. In the 10:01 call:
+* 9 stops of the agent: 4 had no words recognised afterwards (at 0.020 to 0.059 loudest): those are sounds, not the caller, and each stopped the agent in the middle of a sentence. The other 5 were the caller (0.17 to 0.32 loudest, or words recognised over the agent).
+* 30 of 48 stretches of sound over the agent were not enough to stop it. 8 of them had real words ("What's the kilometers on this?" 0.28 s of the 0.3 s needed, "Enough.", "Can you tell me?", "Keep listing the cars, please."): this caller is quiet (median level 0.004 to 0.016 over the words, peaks 0.1 to 0.3).
+* The room has speech in it (the recogniser heard "Okay, listen. There's no choice." and "Six hundred fifty minus fifteen thousand." at levels 0.013 to 0.04, and over 40 stretches of noise).
+* Could not tell echo from room noise: the microphone's loudness follows the agent's voice at about the same strength in windows with no stop (median 0.33) as in the stops (0.20 to 0.52). UNKNOWN.
+
+The replay with other settings on the three calls (`voice.barge_in_level`, `voice.barge_in_min_speech_secs`; stops that were followed by words / by none):
+
+| level | min speech | real stops | stops with no words after |
+|---|---|---|---|
+| 0.01 (now) | 0.3 s | 9 | 5 (2 are the caller, read from the notes: the loud ones) |
+| 0.01 | 0.2 s | 12 | 7 |
+| 0.02 | 0.2 s | 10 | 4 |
+| 0.05 | 0.3 s | 6 | 2 |
+
+No setting wins on both: a lower bar catches the quiet caller's "Enough." and the next step down adds noise stops. Not changed; for the owner, with a headset (so the agent is not heard) first. A real fix is hearing the agent's own voice back out of the microphone (echo cancellation), which the browser does only with the right device.
+
+**Other things in the same calls.** (a) Recognition took about 1.8 s on 35 clips of noise or very low speech and came back empty: the Qwen3 server with the stock names writes the list of names for a clip with no speech (sections 84 and 86), the worker drops it, and the server does one at a time, so a real turn behind it waits. Parakeet (port 8012) does not do this. (b) In the 10:09 call the model's decision timed out once (`BackendTimeout`, 1.2 s) and the first words took 3.8 s.
+
+**Run command until the hold is measured again:** section 92's with `VA__VOICE__SMART_TEXT_CHECK` and `VA__VOICE__FAST_HOLD` removed; `HOLD_REPLY` and `RULES_DECIDE` stay.
+
+## 94. A call is remembered until the browser closes, and a call that ended opens again (3 Nov, the owner: "when the bot ends the call, it remembers the entire [conversation] until they close the browser, and not only 15 mins")
+
+The first live calls with the section 93 fixes measured a **median wait of 1.19 s** (the owner's reading of the page's table; the recorder's notes were not read for this section).
+
+**Two things limited the memory to 15 minutes, and a third made it useless after a goodbye.**
+* **The page** (`bmw-portal/site/voice.js`, `local-demo` branch, not this repository, uncommitted): the call id was kept in `localStorage` and used only if under `KEEP_MS` = 15 minutes old. Now it is in `sessionStorage` with no time limit: the browser clears it when the tab is closed, a reload keeps it, and a new tab starts a new conversation. (`localStorage` would outlive the browser, which is not what was asked.)
+* **The server:** `voice.calls_kept_secs` was 900 s from the last turn. Now 86,400 s (a day). The server cannot see a browser close; a day is the ceiling for a tab left open, and the setting stays settable.
+* **A call that had ended came back dead.** A goodbye, a hand-off or the hang-up after a quiet spell is saved with `ended: true` and the state "goodbye". Restored as it was, every later turn answered "Goodbye." (`session already ended`). `shared/state.reopen()` now reopens the call when the visitor returns (`server/app.py`, on resume): `ended` and the hand-off are cleared, the state goes from goodbye to answering (a car or a list is in play) or interest, and **nothing else is touched**: the history, the car, the cars shown, a booking in progress, the haggling counts. "Welcome back. Where were we?" still plays if the visitor says nothing.
+
+**Not changed, and worth knowing.**
+* **A call is still cut at 15 minutes** (`max_call_secs`, 900 s, `server/app.py`). That is a different limit from the memory. The visitor reconnects and carries on, now with the conversation. Raise it only if long calls should not be cut.
+* **What the agent can see of the conversation is still short:** the session keeps the last 16 lines (`Session.history`, the older ones counted in `forgotten`) and the reply writer is shown the last 6 (`voice.history_lines`). The facts that matter outlast that (the car, the list, the booking, the filters). "The entire conversation" word for word is not kept; say so if it should be.
+* A server restart empties the in-process store (the Redis or PostgreSQL stores keep calls across restarts), so a restart means a fresh conversation.
+* The list read out so far (`Session.excluded`, section 93) is not in the saved snapshot, so after a reconnect "go through the list" starts the list again. Small, not changed.
+
+**Tests** (`tests/unit/test_call_memory.py`, 6; `python -m pytest`: 1,758 passed, 68 skipped): the server default is a day and still settable; the store is given that time; a call ended by "bye" is restored, reopened with its history, car and list intact and then answers a new question instead of "Goodbye."; a call with no car goes to interest and one that did not end is left alone; a booking in progress survives; the page uses `sessionStorage` and has no time limit. The page script was checked to parse; it was **not run in a browser** (the browser pane could not open the local server).
+
+## 95. Two ways to cut the first words: the work started after a short quiet inside every turn, and an acknowledgement the code picks (3 Nov, the owner: "okay lets try 1 and 2. now you can code")
+
+Built and tested; **not measured on a live call**. Both are off by default.
+
+**Why these two.** The table of the 3 Nov calls showed "reply words" as the biggest step, about 0.2 s of it the trip to the region. Suggestions 1 and 2 hide time instead of removing it: the reply starts earlier, or something is said while it is written.
+
+**1. Start the work after a short quiet inside every turn** (`VA__VOICE__EARLY_START_SECS=0.1`; the setting existed since 28 Oct and was off because the early reading disagreed with the full one, section 4 of the first review). After that much quiet the turn so far is recognised and, with `voice.rules_decide` or the model's decision, the reply is written (`hold_reply`, section 92) while the detector and Smart Turn finish their wait. Three changes make it safe to try:
+* **A gate** (`voice.early_start_gate`, on): the decision and the reply are started only when the words so far read as a finished sentence (`voice/finished.py`) or a complete answer to the agent's question. A half sentence is recognised and nothing more (the note `early_skipped`). Before, every pause would have cost a model call.
+* **A check** (`voice.early_start_verify`, on): the turn is still recognised in full after it ends. The early work (the decision and the reply written ahead) is used only if the full reading has the same words, ignoring case and punctuation (`same_words`); otherwise it is stopped and the turn goes on as usual. A held pause (Smart Turn said "still going") keeps its old behaviour of handing over its words. Off, the early words are used as they are, about 0.06 to 0.1 s sooner and wrong on the turns below.
+* **Up to 6 starts a turn** (was 3), because a quiet speaker's dips inside a word use them up; the gate stops those costing model calls.
+The recorder gets `early_stt` (the early words), `early_skipped`, and `early_match` or `early_mismatch` for every turn that had an early start, with both readings.
+
+**What the replay of the 3 Nov 10:01 call says (MEASURED; four stretches in real time, Parakeet, the real detector and Smart Turn; 25 turns with words).** The early reading and the full reading were the **same words on 3 of the 9 turns that had an early reading**; 16 turns had none (the gate skipped them, or no start). The matches had a **head start of 0.30 to 0.38 s of audio** between the early start and the turn end. The mismatches are the recogniser's instability between two slices of the same speech: "Porsche" against "pose", "Okay, now" against "No.", and much of it on noise clips ("Yeah." against "A bit of this."). Parakeet alone is the weak part here (it cannot be told the car names). A first replay at 5 times real speed paired early work with the wrong turn and is not used.
+So with the check on, **only about a third of the turns that start early will use it**, in this noisy room; the others pay a wasted recognition and, if the gate passed them, a wasted decision and reply call. A quieter room or a recogniser that is stable between slices (Qwen3 with the stock names was, in section 91's three clips) would hit more. UNKNOWN until a call. If the hit rate is low, turn `VA__VOICE__EARLY_START_SECS` back to 0 and keep only 2.
+
+**2. An acknowledgement the code picks, said while the model writes** (`VA__VOICE__OPENER_FIRST=true`; only with `voice.model_only`). For list, count, comparison and car-fact answers (the same turns the production opener covers) the engine says "Sure,", "Okay,", "Right," or "Alright," (or "Okay," / "Right," / "Hmm," before a no) the moment the lookup is known, then the model's own sentence, with its own "Sure," or "Great!" dropped (`_after_opener`) so it is never said twice. The words are in the voice's cache, so they play with no synthesis wait. Not said for a goodbye, small talk, a booking step or a hand-off. It breaks the rule of the model-alone test mode (only the model's words) on purpose, behind its own setting.
+* **Expected (INFERRED):** the first sound comes when the lookup is known (about 0 ms with `rules_decide`, 0.5 to 0.6 s when the model decides), not when the model's first clause arrives. The model's clause follows about 0.3 to 0.5 s later, so there is a short gap after the opener.
+* **Not done:** the car's name as the opener ("The Land Cruiser,"): it is not in the voice's cache, and the model's sentence would then repeat the name.
+* **An edge:** if the model gives nothing usable after the opener, the caller hears the opener and then silence (the test mode's silent fallback only covers the case with no words at all).
+
+**Tests** (`tests/unit/test_early_and_opener.py`, 15; `test_early_start.py` updated for 6 starts; `python -m pytest`: 1,773 passed, 68 skipped): a half sentence is recognised and nothing more is started; a finished one gets its decision and reply; the gate does not apply to a held pause; with the check on, the early words are not handed over but the early work is used for the same words and thrown away (and its reply stopped) for different ones; a held pause still hands over its words; `same_words`; the endpointer starts the gated work after 0.14 s of quiet and the turn then uses it; the settings and the pipeline wiring; the recorder's `early_match` and `early_mismatch`; the opener is said first, the model's own is dropped, it is off by default and in the hold path, it is not said for a goodbye, and the pipeline sets it only in the test mode.
+
+**Running it** (section 92's command without the two measured-harmful settings, with Parakeet as the recogniser, plus both new ones):
+```
+VA_DUMP_AUDIO_DIR=logs/audio_dump VOICE_AGENT_ALLOW_CLOUD=1 DATABASE_URL=sqlite:////Users/fatima/dev/voice-agent/data/stock.db VA__DIALOGUE__DECISION_BACKEND=bedrock_nemotron VA__LLM__FALLBACKS='[]' VA__VOICE__MODEL_ONLY=true VA__VOICE__RULES_DECIDE=true VA__VOICE__FIRST_CLAUSE_WORDS=3 VA__VOICE__SILENT_TURN_FALLBACK=false VA__VOICE__HOLD_REPLY=true VA__VOICE__PARALLEL=true VA__VOICE__EARLY_START_SECS=0.1 VA__VOICE__OPENER_FIRST=true VA__VOICE__STT_URL=http://127.0.0.1:8012/v1 VA__VOICE__STT_REMOTE_MODEL=parakeet VA__VOICE__STT_HOTWORDS_FIELD=true .venv/bin/python -m dealer_core.server --agent --quality full --hands-free --backend bedrock_nemotron --site ../bmw-portal/site --port 8767 --max-calls 4
+```
+To compare the two apart: run once with `EARLY_START_SECS` removed (opener only) and once with `OPENER_FIRST` removed (early start only). Read the call with `scripts/call_latency.py` and the recorder's `early_match` / `early_mismatch` / `early_skipped` notes.
+
+## 96. "Reply words" taken apart on the page (3 Nov, the owner: "add to the table on the frontend the breakdown for each call, the reply word part, in addition to the current table")
+
+A second table under the first, one row per reply the model wrote, with the **"reply words" step split into its parts**. Built and tested; the page was checked in the browser pane with sample rows (desktop; no console errors); **not yet seen with a real call**.
+
+**The parts, in the order they happen** (seconds; each is clipped to the stretch between "your words reached the agent" and "the first sentence went to the voice", so the parts of a row add up to its "reply words"):
+
+| column | what it is | measured how |
+|---|---|---|
+| decision | the model (or the code's rules) choosing the action | `nlu_ms`, as before |
+| lookup | the code running the tool | timed around `_run` (new) |
+| preparing | the code building the writer's input and sending the request | from the end of the lookup to the request going out (new) |
+| network (est.) | the trip to the model and back | a request with no key, answered at the edge, on the same connection, once a turn in the background; the median of the last five (new) |
+| model getting ready | the model's queue and reading the question, until its first text | from the request going out to the first text, less the network (new) |
+| first words | the model writing its first clause | from its first text to the first words that may be spoken (new) |
+| code checks | the code checking those words before handing them to the voice | the rest up to the first sentence (new) |
+| reply words | the whole step | the turn clock, as in the first table |
+
+Two more columns say **when the model call started** against the moment the words reached the agent (**negative = written ahead during the hold**, the "ready ahead" hits) and **when its first words were ready**. For a reply written ahead, most parts are 0 because the work happened before the words arrived; the model's part that is left shows what the turn still waited for. When the code says an acknowledgement first (`voice.opener_first`), the parts end at the acknowledgement and the last column shows when the model's own words came.
+
+**How.**
+* `dialogue/writer.py`: `stream()` stamps `t_sent` (the request goes out as the first piece is asked for), `t_token` (the first text from the model) and `t_first` (the first words that may be spoken) in `last_stream`. They are per thread, so a reply written ahead on its own thread carries its own.
+* `agent/engine.py`: the lookup time, the first sentence's time and the model call's stamps against the start of the turn go into `TurnDebug` (`lookup_ms`, `first_say_ms`, `writer_steps`, `trip_ms`).
+* `nlu/openai_compat.py`, `nlu/chain.py`: `ping_ms()`, a request with no key to the models route (the key is never sent: a test checks the header is empty). `voice.trip_ping` (default on; `VA__VOICE__TRIP_PING=false` stops it) is **one extra tiny request per turn**, answered at the edge, in the background; Bedrock sees a 401, no model work.
+* `server/latency.py`: `turn_detail` carries `steps`. `bmw-portal/site/voice.js` (the website repository, `local-demo` branch, **uncommitted there**) draws the table; the box is wider (1,060 px), and the new table scrolls sideways on a phone.
+
+**What it can and cannot say.** The network figure is the round trip of a request answered at the edge (about 0.2 s to Bedrock from Dubai, section 75), not the trip of the model request itself, so "model getting ready" is the model request's time to first text less that figure: it holds Bedrock's queue and the prefill, and any difference between the two paths. A turn whose first ping has not come back shows 0 for the network and the time is in "model getting ready". The split between the queue and the prefill is not visible from outside.
+
+**Tests** (`tests/unit/test_reply_breakdown.py`, 6; `python -m pytest`: 1,780 passed, 68 skipped): the writer's stamps (the model's 0.2 s to its first text is seen) and the lookup and first-sentence times; a reply written ahead shows a negative start and negative first words; the message carries the steps in seconds; the ping sends no key, is a request to the models route and returns None on a failure; the engine keeps the median of five; the setting switches the per-turn ping; the page has the table.
+
+## 97. The recogniser's hint: every make and model of the database, written properly (3 Nov, the owner: "for qwen3 you have the car brand names as a hint right? add the specific models as well like cr-v, accord, macan, etc for all the cars + brands in the database")
+
+**The models were already in the hint.** The list sent to the Qwen3 server as its hot-words (`hotword_names`, section 82) is every make AND every model of the stock: from the real database 95 names, 24 makes and 71 models ("Honda, Accord, CR-V, Civic ... Porsche, 911, Cayenne, Macan"), the makes in play first. Only the Whisper hint had the cut of 45 names. What was wrong was smaller:
+
+* **Some names were written wrongly** ("Bmw", "Gmc", "Mg", "Cr-V", "Zs", "MAZDA3", "MODEL 3", "320I", "530I"), because the list used title case for letters and upper case for any model with a digit. Now `proper_make` and `proper_model` (`voice/prompts.py`) write them as they are written: BMW, GMC, MG, CR-V, ZS, X-Trail, Mazda3, Model 3, ES 350, GLE 450, 320i, RAV4, Santa Fe, Rio. The Whisper hint (`stock_names`) is untouched (a test pins it).
+* **Only cars for sale were in it.** The list came from `vocabulary()`, which holds cars with status "available". A car that is sold or reserved was dropped, though a caller may well ask for it. `hotword_vocabulary()` (sqlite and PostgreSQL stores; the default is `vocabulary()`) has every make and model in the database whatever the status. All 74 cars are available today, so today's list is the same 95 names.
+* **The cap would have cut a bigger stock.** `voice.stt_hotwords_max` is now 200 (was 100, for 95 names): room for twice the stock. Names cost about 1 ms each and only the names that exist are sent.
+
+**Measured effect: none on the five clips** (your own, section 96's test: spoken at your level, then softer with the room as loud as it was): Qwen3 heard the car 5 of 5, 4, 2, 1 and then 0 at your level, 0.10, 0.06, 0.04 and 0.03, the same pattern as with the old hand-written list. The limit on a soft voice is the room's noise, not the list. This is a correctness and completeness change, not a speed or accuracy one.
+
+**Parakeet ignores the whole list.** It takes no hot-words (section 86), so with `VA__VOICE__STT_URL` on port 8012 none of this reaches the recogniser. The names help only with the Qwen3 server (port 8011, `VA__VOICE__STT_REMOTE_MODEL=qwen3-asr`). In the live-call command of section 95 the recogniser is Parakeet; use section 92's recogniser lines for Qwen3.
+
+**Not done.** Spoken forms ("C R V", "rav four", "Maccan") are not added: a hot-word is the written form, the recogniser decides how it sounds, and the agent's own matcher already finds a car by a close spelling ("range rover sprot", "bentyga").
+
+**Tests** (`tests/unit/test_hotword_forms.py`, 41; two older tests updated for the new cap and "BMW"; `python -m pytest`: 1,821 passed, 68 skipped): 29 models and 7 makes written properly; the Whisper hint unchanged; every make and model once; the cap covers the stock; a car marked sold is still in the hot-word vocabulary and not in the NLU's; the pipeline asks for it.
+
+## 98. More than one caller at a time: the wait is flat up to 8 callers, and the laptop runs out at 12 to 16 (3 Nov, the owner: "lets try doing with more than 1 callers to see if the latency doesnt change", then "we already have a workflow for multiple callers right?")
+
+**Method.** The existing workflow, extended a little: `scripts/load_test.py` drives synthetic callers through the real WebSocket door of a worker; it gained `--mode handsfree` (the microphone stays open and the server decides when a turn is over, as on the page), `--voice say:Samantha,say:Daniel,say:Karen` (the Mac's own voices, nothing to download), `--repeat`, and a log of every turn. The hands-free caller (`one_call_hf` in `scripts/portal_call.py`) measures from its own side (the last sample of speech sent to the first sound received) and keeps the server's `timing` and `turn_detail` messages, so the page's table steps, including section 96's breakdown, come out per turn. Tests: `tests/unit/test_load_driver.py` (6, against a fake server).
+A **second worker on port 8777** (the owner's own, on 8767, was not touched; stopped afterwards) with the live settings of section 95 less Parakeet: Qwen3 as the recogniser, `rules_decide`, `hold_reply`, `parallel`, `early_start_secs` 0.1, `opener_first`, Bedrock Nemotron; **the call cap that follows the measured replies (`voice.admission`) switched off** so every caller got in, `--max-calls 16`. Five different conversations (searches, a comparison, a booking with name and number) shared out among three voices; clean synthetic audio, so hearing is optimistic and the timing is real. The laptop also hosted the Qwen3 and Parakeet servers and the voice server.
+
+**Results** (MEASURED; the wait from the end of the caller's speech to the first sound, caller side, seconds; all callers start together unless "staggered 5 s"; 0 failed calls and 0 silent turns at every level):
+
+| callers | turns | first sound median | p90 | worst | over 2 s | hearing (server), median / p90 | CPU max | heard exactly as said |
+|---|---|---|---|---|---|---|---|---|
+| 1 (two runs) | 12 | 1.11 | 1.62 | 2.36 | 8% | 0.20 / 0.28 | 41% | 71%, 71% |
+| 2 (two runs) | 28 | 0.96 | 1.79 | 5.73 | 7% | 0.21 / 0.29 | 33% | 80%, 80% |
+| 4 (two runs) | 50 | 0.92 | 1.40 | 2.75 | 2% | 0.24 / 0.39 | 68% | 74%, 74% |
+| 8 (two runs) | 105 | 0.94 | 1.80 | 3.28 | 7% | 0.28 / 0.54 | 93% | 75%, 75% |
+| 12 | 71 | 1.18 | 2.24 | 9.02 | 15% | 0.38 / 1.39 | 100% | 76% |
+| **16 together** | 95 | **2.94** | **8.44** | 9.09 | **64%** | **0.93 / 2.27** | 100% | **51%** |
+| 8 staggered 5 s | 53 | 0.88 | 1.74 | 2.61 | 6% | 0.26 / 0.43 | 88% | 75% |
+| 16 staggered 5 s | 101 | 1.01 | 2.12 | 3.63 | 13% | 0.36 / 0.75 | 100% | 73% |
+
+With the same conversation and voice at every level (caller c1) the median of its turns is 1.11, 0.93, 0.97 and 1.15 s at 1, 2, 4 and 8 callers: flat within the run-to-run spread (single turns swing by 0.5 s and a Bedrock outlier gave 3.3 s once).
+
+**What it says.**
+* **Up to 8 callers the wait does not change** (median 0.9 to 1.1 s, p90 1.4 to 1.8 s). Hearing grows a little (median 0.20 to 0.28 s, p90 0.28 to 0.54 s): one recogniser answers one clip at a time.
+* **At 12 the tail goes** (p90 2.2 s, worst 9 s), and **16 together is past the knee** (median 2.9 s, 64% over 2 s): CPU at 100% on the laptop, hearing 0.9 s at the median, and **49% of turns not heard as said**. 16 callers one after another every 5 s is acceptable (median 1.0 s, p90 2.1 s).
+* **The model is not the limit here.** The model's first text came at about 0.4 to 0.57 s after the words at every level, 1 to 16 callers (Bedrock priority tier, one key). The requests per turn were not counted.
+* **The voice server is.** The worker log has 137 warnings from the Pocket voice server (port 8040: `ReadTimeout`), 4 during the 1 to 4 caller runs, then 21 to 35 a minute in the 8-caller second run, the 12 and 16 runs and the staggered 16 run. A timed-out sentence is said by the Kokoro fallback (the second voice server, 8020, was not running), a different voice, on the worker's own CPU, which adds to its load.
+* **A caller's first turn:** "Hello, do you have any Toyota SUVs?" was heard as "Hello." on some runs (a pause after the comma ended the turn): the first turn of those callers is not a measure (marked `overlap` or heard differently). Unrelated to the number of callers.
+
+**What it does not say.** One laptop that also runs the recognisers and the voice, so the knee (about 8 to 12 callers) is this machine's, not production's; clean synthetic voices; 16 callers is the highest level; Bedrock's own limits for a key were not reached or probed; the admission cap would have turned callers away at the higher levels (it is meant to: section 19 held the answer time by turning calls away, not by serving everyone slowly); the hearing figure at 16 callers comes from a recogniser that was queueing, and a faster server (a GPU) would not.
+
+**What would move the knee (INFERRED).** A second voice server (the voice is the first part to time out), the recogniser on a GPU or more than one copy (`voice.stt_copies` is for a local one), and the worker's own CPU (one worker process per 8 callers, as the cluster does: `run_cluster.py --workers 2` and `load_test.py --gateway`; not run).
+
+**Repeat it** (a worker with its own port; `--url` is its address):
+```
+uv run python scripts/load_test.py --url ws://127.0.0.1:8777/voice --mode handsfree --mix --voice say:Samantha,say:Daniel,say:Karen --levels 1 2 4 8 --repeat 2 --out logs/load_test_handsfree_sync.json
+```
+Per-turn logs of these runs: `logs/load_test_handsfree_sync.json`, `..._high.json`, `..._staggered.json` (git-ignored).
+
+## 99. The cluster: two workers behind the router, with the live settings; and how 100 to 200 callers would be tested (3 Nov, the owner: "so wait we did the tests without using the workers setup?", then "yes do that and then tell me how we would test 100 to 200 callers")
+
+**What section 98 had and had not covered.** One worker, memory for the call state, no router, no autoscaler, the call cap off. This section runs the workers setup of the architecture walkthrough: `scripts/run_cluster.py` starts PostgreSQL (pgserver, the shared call state and the worker registry), several workers and the router. The launcher knew only the older stack (OpenVINO, Ollama, a local server; `--prefix`, tap mode), so it gained `--backend bedrock` (the way the live calls run: `--agent --quality full --hands-free --backend bedrock_nemotron`, the cloud switch and the decision backend set) and `--set KEY=VALUE` (repeatable: the settings of section 95 for every worker). `load_test.py` now notes which worker took each call and prints the split. Tests: `tests/unit/test_run_cluster.py` (3 added; `python -m pytest`: 1,830 passed, 68 skipped).
+
+**The run (MEASURED).** 2 workers (ports 8785 and 8786; the old workers on 8765 and 8766 were left alone), 16 places each, the call cap on (the default), the live settings of section 95 with the Qwen3 recogniser, all on this laptop, the router handing out the calls (`/assign`), the callers as in section 98.
+
+| callers, all together, through the router | turns | first sound median | p90 | worst | over 2 s | hearing median | calls per worker |
+|---|---|---|---|---|---|---|---|
+| 8 | 50 | 0.94 | 1.53 | 2.46 | 4% | 0.24 | 4 and 4 |
+| 8 (second run) | 49 | 0.76 | 1.61 | 2.49 | 4% | 0.22 | 2 and 6 |
+| 16 | 97 | 2.38 | 8.48 | 10.79 | 56% | 0.80 | 10 and 6 |
+
+(One worker, section 98: 8 callers 0.94 / 1.80; 16 callers 2.94 / 8.44.) 0 failed calls, 0 silent turns.
+
+* **The router works as designed.** Both workers were seen with 16 places; calls went to both. The splits of 2 and 6, and 10 and 6, come from a burst of simultaneous callers against a registry that is up to 2 s stale (the second run started a moment after the first; the router counts what it handed out, but the workers' own reports still showed the earlier calls), not from a fault.
+* **The call cap worked.** After the 16-caller run the router's view showed worker 1 with `max` 12 of a ceiling of 16 and an answer p90 of 1,354 ms and 1,261 ms for the two workers: the measured cap (`voice.admission`, target 1,000 ms) had lowered itself, as section 19 describes. No caller was turned away in these runs, because no more than 10 reached one worker at once.
+* **Two workers did not move the knee.** 16 callers were as slow with two workers as with one (median 2.4 against 2.9 s, p90 8.5 s against 8.4 s). The shared services were the limit, as section 98 found: CPU at 100% on the 12-core laptop, hearing 0.8 s from the one recogniser, and 69 `ReadTimeout` warnings from the one voice server across the two workers. Workers share nothing that would make the limit lower.
+* **Shared state across workers works.** A call begun on worker 1 (a search for the Land Cruiser, answered), ended by the caller's goodbye, was carried on from worker 2 with the same call id: its first line was "Sorry, we got cut off for a moment. I'm back: where were we?" and "How many owners has it had?" was answered about the Land Cruiser ("it's had one owner"). That also checks section 94 (an ended call is open again) across workers. The stock was imported from the website's data.js into PostgreSQL (the cluster's database), not the 74-car file of the live calls.
+* **Not run:** the autoscaler (it is a Kubernetes object; `deploy/k8s/voice.yaml`), `scripts/failover_test.py` (a worker killed in the middle of a call; written for this cluster), 3 or more workers.
+
+### How 100 to 200 callers would be tested
+
+The aim: hold the median first sound near today's 0.9 to 1.1 s (p90 under 2 s) with 0 callers turned away outside a surge, and find which part gives out first. Not possible on this laptop: it was out of CPU at 12 to 16 callers with everything on it, and the callers themselves cost CPU.
+
+1. **Before any hardware (a day).** Count what a turn costs: Bedrock requests, recognitions and voice sentences per turn (counters on the worker; today only estimated: about 2.5 requests, 4 recognitions and 6 s of speech). Run `capacity_probe.py` on each service. Put the measured speeds into `simulate_scale.py` (it uses typed-in targets) and read the predicted knee for 100 and 200.
+2. **One service at a time (each with its own load generator).**
+   * **Voice:** how many callers one Pocket server carries (it makes one sentence at a time, 0.14 times the audio length); then 2 and 4 copies behind one address.
+   * **Recogniser:** recognitions a second, early starts included, for one Qwen3 server and for a GPU Whisper (the manifest's `stt-server`, vLLM, batched); and the clip rate that gives a queue.
+   * **Model:** Bedrock's quota for the key (ask AWS for the figures first) and requests a second before it throttles; or the manifest's vLLM. 100 callers is about 17 requests a second, 200 about 33 (estimates).
+3. **The fleet, in steps (25, 50, 100, 150, 200 callers, each held for 10 minutes).** On a staging cluster, the nearest thing to the walkthrough: `deploy/k8s/voice.yaml` (workers 3 to 4 cores each, the router, the GPU services, PostgreSQL) plus a voice service with replicas, which the manifest does not have. Workers needed: 9 at 100, 18 at 200 (70% full).
+4. **The callers.** `load_test.py --gateway` already asks the router for a worker per call. For this size:
+   * run it from 2 to 4 separate machines of 50 callers each, with the clips made once (not `say` at the start of each run);
+   * a think time of 8 to 15 s between turns, as in a real call (`--stagger` only spaces the starts today; the all-at-once start is the worst case);
+   * the ramp of the walkthrough (40 to 200 over 3 minutes, then a surge of 140 callers in 30 s) and a drop back down;
+   * real recorded turns with room noise next to the clean voices.
+5. **What is recorded.** Per level: the caller-side first sound (median, p90, p99), the page's table steps from `turn_detail` (the breakdown of "reply words" included), calls turned away and 503 answers, heard-as-said, CPU a call on a worker, the recogniser's queue, the voice server's timeouts, Bedrock throttling (429) or the vLLM requests in flight, PostgreSQL connections (`pg_stat_activity`), the autoscaler's decisions and how long a new worker took (the design says 45 s), the worker `/metrics`.
+6. **Then the failures.** A one-hour soak at 100 callers (memory, connections); `failover_test.py` with a worker killed mid-call; a scale-down with calls in progress (the drain: no call may be cut); the surge from the minimum 8 workers (128 places): in the walkthrough's own model, 200 callers arriving within 45 s leave about 72 turned away until the new workers are ready.
+7. **Passing:** median at most about 1.1 s and p90 at most 2 s at 100 and 200 callers once the services are sized; no call cut by a scale-down; the call resumed on another worker; cost per call minute written down.
+
+What was fixed in this section is only the launcher and the report. Nothing about the fleet's capacity at 100 or 200 callers is measured here.
+
+## 100. Where the CPU went at 8 and 16 callers (3 Nov, the owner: "over 8 fails because of the limitations of this laptop yeah? not because of the code or logic or structure?")
+
+Section 98 measured the whole machine's CPU, not which process used it. `load_test.py --profile` now samples each of our processes every 2 s (in cores; this laptop has 12) and prints the mean and the maximum. The same single worker, live settings, call cap off, five conversations in three voices, all callers starting together. MEASURED (`logs/load_test_profile.json`).
+
+| | 8 callers | 16 callers |
+|---|---|---|
+| first sound median / p90 (caller side) | 1.05 / 2.2 s | **2.77 / 8.4 s** |
+| hearing (server median) | 0.30 s | **0.96 s** |
+| heard exactly as said | 75% | **44%** |
+| whole machine CPU, mean / max | 35% / 98% | 58% / 100% |
+| **worker** (cores, mean / max) | 1.59 / 8.5 | **3.55 / 8.75** |
+| voice server, Pocket (cores) | 0.68 / 1.77 | 0.90 / 1.77 |
+| recogniser, Qwen3 (cores of CPU; its model runs on the GPU) | 0.17 / 0.88 | 0.47 / 1.0 |
+| the callers (this script) | 0.06 / 0.7 | 0.10 / 0.58 |
+
+* **The worker is the biggest user of CPU, and it is in line with the design.** About 0.2 core a call on average (3.55 cores for 16 calls). `deploy/k8s/voice.yaml` budgets 3 to 4 cores per worker of 16 calls. Nothing in the worker uses more than the design assumed.
+* **But a burst needs about twice the manifest's limit.** With 16 callers all speaking at the same instant the worker peaked at 8.75 cores; the manifest's limit is 4. Real traffic is not that synchronised (16 callers 5 s apart held a 1.0 s median in section 98), but a surge of calls beginning together would be throttled in Kubernetes and show up as a tail. UNKNOWN until measured under the real limit.
+* **The load generator is not the cause.** 0.1 core. It does not skew the results.
+* **The two shared servers do not grow with the callers.** The Qwen3 server makes one recognition at a time (its CPU shows about one core at the maximum: the lock, not the GPU) and the Pocket server one sentence at a time; hearing went from 0.30 to 0.96 s and heard-as-said from 75% to 44% as clips queued past the worker's 3 s limit. On this laptop each has one copy; in the design they are services to replicate.
+* **Not measured:** the GPU (the Qwen3 server runs there), the CPU the system itself used (the processes of ours add to about 5 cores of the 7 the machine reported at 16 callers), how much of the worker's CPU is the early start and the extra replies written ahead (section 95), which cost more per turn than the design assumed.
+
+Reading: the 16-caller limit is this laptop's CPU, shared with single-copy servers, not a fault in the worker or the architecture. The worker's cost per call agrees with the manifest. The test could not show the router, the autoscaler or more than one copy of a shared server at scale.
+
+## 101. What one copy of each shared service carries, and what 100 and 200 callers would need (3 Nov, the owner: "start with the per-service capacity tests on this laptop (voice server, recogniser, Bedrock)")
+
+`scripts/service_capacity.py` (tests: `tests/unit/test_service_capacity.py`, 9, against fake local servers): N clients ask again the moment they are answered, so a service is held at N requests at once for 12 to 15 s a level; per level the requests answered, errors, requests a second, the wait for the first byte (first text for the model) and for the whole answer. From the busiest level that answered everything, the callers one copy carries are worked out with the autoscaler's planning rule (a copy kept at 70% of what it can do, `deploy/k8s/voice.yaml`) and the rhythm of the recorded calls. Each service was run alone, the laptop otherwise quiet, one copy each, the Mac as in the live calls. MEASURED; the per-turn figures are assumptions, listed below.
+
+| one copy of | what it did | wait at 1 / 4 / 16 at once | callers one copy carries | copies for 100 | for 200 |
+|---|---|---|---|---|---|
+| **voice server** (Pocket "eve", CPU, one sentence at a time) | 2.26 sentences a second = **7.0 s of speech a second** whatever the number asking | first sound 0.07 s / 1.4 s / **7.1 s** | **12** (6 s of speech a turn); 7 if a turn is three sentences as long as the test's | **9** | **17** |
+| **recogniser, Qwen3-ASR** (MLX on the GPU, the worker's hot-words sent, one clip at a time) | 6.0 clips a second | 0.15 s / 0.66 s / **2.7 s** (3 connections reset at 16) | **21** (3 clips a turn); 63 (1 a turn) | **5** (or 2) | **10** (or 4) |
+| **recogniser, Parakeet** (MLX, no hot-words) | 23 clips a second | 0.045 s / 0.18 s / 0.69 s (3 resets at 16) | **80** (3 clips a turn); 240 (1 a turn) | 2 (or 1) | 3 (or 1) |
+| **the model, Nemotron on Bedrock** (HTTP/1.1, one key) | **59.6 requests a second at 48 in flight, no limit reached**, no refusals | first text 0.54 s at 1, 4, 16 and 48 at once (p90 0.6 to 0.7 s) | 250 or more (2.5 requests a turn) | the one key | the one key |
+
+* **The voice server is the first to run out, by far.** It is exactly serial: 2.1 to 2.3 sentences a second at 1, 2, 4, 8 and 16 at once, so the wait is the number waiting times 0.4 s. One copy keeps a first sound under 0.5 s for about 12 callers, and past that every caller waits behind the others. This is the 16-caller limit of section 98. 9 copies for 100 callers and 17 for 200 is a lot more than section 99's estimate (6 to 8 and 12 to 16) because that assumed 0.85 s of CPU per turn; measured, it is 0.86 s of the server's time per turn but the server cannot overlap two turns, and the 70% rule leaves the other 30% idle. The server used about 0.9 core on average and 1.8 at the peak (section 100): a copy is about 2 cores, so 100 callers is about 18 cores of voice and 200 about 34.
+* **One Qwen3 recogniser copy, 21 callers**, with a wait of 1.3 s at 8 at once and resets at 16: keep it to 4 at once (p90 0.77 s). Parakeet is four times faster and has no names. The GPU Whisper of the manifest (batched) is not measured here: these are the Mac's one-at-a-time servers.
+* **The model is not the limit.** From 1 to 48 in flight the first text stayed at 0.54 s median (p90 0.64) and the rate rose in step; no throttling (no 429) up to 60 requests a second from one client. 100 callers ask for about 17 requests a second (about 10 in flight) and 200 about 33 (about 20 in flight): both inside what was tested. The key's own quota for sustained use is not known.
+
+**A finding on the way: over HTTP/2, Bedrock drops requests when two or more share the connection.** The worker's Bedrock backend uses HTTP/2 (section 75: one connection, no new connection after a pause). In the capacity test, with the same client: 1 request at a time for 70 s, **114 requests, 0 errors**; 2 at once, 3% `RemoteProtocolError: Server disconnected`; 4 to 16 at once, 12%; 32 at once, 23%; first text also slower (0.68 s at 2, 0.93 s at 32). The same load over HTTP/1.1: **0 errors at 1 to 48 at once, and faster**. So the drops need concurrent streams on one connection, not a long-lived one. In the worker at 8 callers (the recorder on) the turn notes showed **no model error in 58 turns**, so it is not visible there: the engine asks the model again after a reply fails (`ReplyWriter` tries twice), the extra requests written ahead hide a lost one, and a worker's requests are less bunched than 4 to 16 threads asking back to back. UNKNOWN at 16 callers and more; a reason to read section 75's trade again (HTTP/2 saves 0.3 s after a pause) with a worker's real concurrency, and to try HTTP/1.1 with the connection kept warm, or HTTP/2 with a limit of streams per connection. Not changed.
+
+**The assumptions behind "callers carried", to be replaced by counts:** a turn every 15 s (the recorded calls); 6 s of speech a turn (3 Nov: 5.1 s at the median, 6.4 on average); 3 recogniser clips a turn (the early start's 2 readings plus the final: from the replay of the 10:01 call, 169 early starts for 79 turns); 2.5 model requests a turn (a guess); the utilisation target 70%. The request counts per turn (section 99's step 1) are still to be taken from the worker.
+
+**Reading for 100 and 200 callers.** The model is fine. The recogniser needs a handful of copies of the Mac's one-at-a-time kind, or one batched GPU server. The voice server needs 9 and 17 copies as built (one sentence at a time), so it is the part to rework or replicate first: copies behind one address, or one copy inside each worker (what the manifest assumes). The workers themselves, from section 100, need 3 to 4 cores for 16 calls: 9 and 18 workers.
+
+## 102. What one turn really costs the shared services (3 Nov, the owner: "do it", counting instead of assuming)
+
+Section 101 worked out the callers one copy carries from assumed per-turn costs. This section counts them. **Counters** (`shared/usage.py`, numbers only; added at the clients: the model's `openai_compat`, the recogniser's `RemoteWhisper` and the speech service, the voice's `StreamingVoice`, the early start's `Speculation`, and the brain's turn) are shown by each worker at `GET /usage`; `scripts/load_test.py` reads them before and after each level, from every worker (it asks the router who they are), and divides by the turns the worker answered. Tests: `tests/unit/test_usage_counters.py` (9: the counters, what each client counts, the endpoint, the averages). MEASURED: one worker, the live settings of section 95 (`rules_decide`, `hold_reply`, `parallel`, the early start at 0.1 s, the acknowledgement first), the call cap off, five conversations in three Mac voices, Qwen3 as the recogniser, Pocket as the voice, Bedrock as the model.
+
+**Per turn answered:**
+
+| | 1 caller (8 turns) | 4 callers (28) | 8 callers (58) | 16 callers (101) |
+|---|---|---|---|---|
+| model replies streamed | 1.5 | 1.36 | 1.24 | 1.51 |
+| ...of which stopped before their end (written ahead, not used) | | 0.14 | 0.09 | |
+| other model calls (decisions) | 0.25 | 0.18 | 0.16 | 0.56 |
+| **model requests in all** | **1.75** | **1.54** | **1.40** | **2.07** |
+| model errors | 0 | 0 | 0 | 0.02 (about 1% of the requests) |
+| input tokens to the model | 1,620 | 1,500 | 1,320 | 1,640 |
+| **recogniser clips** | **2.1** | **2.5** | **2.5** | **2.85** |
+| ...early starts / held / skipped by the gate | 1.1 / 0.1 / 0.1 | 1.5 / 0.1 / 0.2 | 1.4 / 0.1 / 0.2 | 1.6 / 0.1 / 0.3 |
+| seconds of audio sent to the recogniser | 5.4 | 7.7 | 7.3 | 8.2 |
+| **voice sentences asked of the server** | **1.6** | **1.9** | **1.5** | **2.1** |
+| ...sentences from the phrase cache instead | 0.9 | 1.1 | 1.5 | 1.2 |
+| ...sentences said by the fallback voice (the server failed) | 0 | 0.21 (11%) | 0.38 (25%) | **1.43 (69%)** |
+| **seconds of speech the voice server made** | **5.4** | **5.8** | **4.8** | 2.1 |
+| sentences said / words said | 2.4 / 21 | 2.7 / 22 | 2.7 / 23 | 2.6 / 22 |
+
+* **The assumptions of section 101 were close, a little high on the model.** The recogniser is asked for **2.5 to 2.85 clips a turn** (assumed 3): 1.4 to 1.6 early starts, 0.9 to 1.1 full readings, 0.1 held, and the gate skipped 0.1 to 0.3 (a half sentence recognised and nothing more); about 7 s of audio a turn in all. The model gets **1.4 to 1.55 requests a turn** under moderate load (assumed 2.5), 2.1 at 16 callers when the turns are slow and a decision is needed more often; and the replies written ahead and not used are only 0.09 to 0.14 a turn, about 7 to 10% of the replies. The voice server makes **5.4 to 5.8 s of speech a turn** (assumed 6) in about 1.5 to 1.9 sentences; the phrase cache said about 1 to 1.5 more sentences a turn (the acknowledgement among them).
+* **The fallback voice is the quiet finding.** When the Pocket server does not answer within `first_timeout_s` (2 s) the Kokoro voice says the sentence. That was 0 sentences at 1 caller, **11% at 4, 25% at 8 and 69% at 16**. So at 8 callers, where the wait looked flat in sections 98 and 99, a quarter of the sentences were in another voice and the worker's CPU made them. The wait stayed flat partly because the fallback rescued it.
+* **Over HTTP/2 the worker loses almost nothing.** The model errors that the capacity test of section 101 saw at 12% (4 to 16 requests at once on one connection) were 0 in the worker at 1, 4 and 8 callers and 0.02 a turn (about 1% of the requests) at 16. A worker's requests are spread and short; the test's were back to back. Not a reason to change the setting today; a reason to watch `model.error` at 16 callers and more.
+* The opening line and the quiet-spell prompts are in the voice's counts (about 0.2 sentences a turn over a call of 7 turns); the figures are per turn answered.
+
+**The callers one copy carries, with the measured costs** (section 101's tests of one copy, the 70% rule, a turn every 15 s):
+
+| one copy of | per turn | callers per copy | copies for 100 | for 200 |
+|---|---|---|---|---|
+| voice server (Pocket, 7.0 s of speech a second) | 5.5 s of speech | **13** | **8** | **16** |
+| recogniser, Qwen3 (6.0 clips a second) | 2.7 clips | **23** | **5** | **9** |
+| recogniser, Parakeet (23 clips a second) | 2.7 clips | **89** | **2** | **3** |
+| the model on Bedrock (59.6 requests a second reached, over HTTP/1.1) | 1.6 requests | 390 or more | the one key | the one key |
+
+At 100 callers that is about 100 / 15 x 1.6 = 11 model requests a second and 18 recogniser clips a second; at 200, 21 and 36. The voice server remains the first to run out, as built; one copy of Qwen3 carries 23 callers (the Mac's one-at-a-time kind), so 100 callers needs 5 of them or one batched GPU server.
+
+**`scripts/service_capacity.py` now uses these measured numbers as its defaults** (1.8 sentences or 5.5 s of speech, 2.7 clips, 1.6 requests a turn). Still assumed: a turn every 15 s (the recorded calls), the 70% target (the autoscaler's), and that real callers behave like these synthetic ones (clean audio: the recogniser's clips are not noisier, the turns not longer).
+
+**Next, as planned:** put these speeds and per-turn costs into `scripts/simulate_scale.py` in place of its typed-in targets, and read the predicted knee for 100 and 200 callers.
+
+## 103. 100 and 200 callers, simulated with the measured stack (3 Nov, the owner: "lets do the load test now for 100 - 200 callers?")
+
+**A real run cannot happen on this laptop** (it ran out at 12 to 16 callers, sections 98 to 100) and needs machines this session cannot rent. What can run now, with no hardware and no spend, is the scale simulation (`scripts/simulate_scale.py`, the real router, quality governor and call cap against stand-in servers), after it was given what was measured. Not a measurement of 100 or 200 callers: a prediction, calibrated against what was.
+
+**What was added to the simulation** (`sim/scale.py`; defaults leave every older scenario unchanged, tests in `tests/unit/test_sim_scale.py`, 15):
+* **`Serial`**: a server whose every copy does one request at a time, a request going to the copy that is free soonest. This is how the Qwen3 recogniser and the Pocket voice server behave (section 101: the wait is the number ahead times the service time). The recogniser is asked for 2.7 clips a turn, 1.7 of them early readings while the caller is still talking; the voice server for 5.5 s of speech a turn (0.17 s for the first clause, 0.62 s for the rest). A first sentence not started within 2 s is given to the fallback voice (the worker's CPU) and its speech is not made.
+* The model's reply written ahead (3 turns in 4, 0.22 s early), and the share of turns that need a model decision (1 in 5): section 102.
+* `measured_hardware(...)`, `measured_scenarios()` and `simulate_scale.py --measured`.
+
+**Calibration against the laptop's runs (section 98):**
+
+| | simulated | measured |
+|---|---|---|
+| 8 callers, the load test's rhythm (a turn every 11 to 12 s) | answer p50 0.96, p90 1.76 s, 6% over 2 s | median 0.94 to 1.05, p90 1.5 to 2.2 s, 4 to 11% over 2 s |
+| 16 callers, same rhythm | p50 1.61, p90 2.88 s, 34% over 2 s, **fallback voice 10%** | median 2.4 to 2.9, **p90 8.4 s**, 55 to 64% over 2 s, **fallback voice 69%** |
+
+The simulation **matches at 8 callers and under-predicts how badly the machine fails at 16** (it has no CPU coupling between the worker and the servers on one machine, no bursts of callers in step, and the Mac's GPU shared with the model). So its answers close to saturation are optimistic; its utilisation figures, and any scenario kept near 60% of a server's capacity, are the part to rely on.
+
+**Results** (answer = end of the caller's speech to the answer itself; protection on = the measured call cap, shedding and the 1.2 s decision deadline; the callers ramp up over 90 s and a turn comes about every 15 s; measured after 2 minutes of 10; the model server 64 requests at once, measured linear to 48; workers up to the manifest's 72):
+
+| scenario | answer p50 / p90 | over 2 s | voice server busy | recogniser busy | fallback voice | workers (max) |
+|---|---|---|---|---|---|---|
+| 100 callers, **1 voice server, 1 Qwen3 (as built)** | 36.9 / 38.5 s | 100% | 97% | 103% | 36% | 10 |
+| 100 callers, 4 voice, 2 Qwen3 | 10.9 / 11.9 s | 100% | 75% | 97% | 0 | 13 |
+| **100 callers, 8 voice, 5 Qwen3 (sized)** | **0.57 / 1.08 s** | **0%** | 61% | 62% | 0 | 14 |
+| 100 callers, 8 voice, 2 Parakeet | 0.41 / 0.95 s | 0% | 61% | 40% | 0 | 14 |
+| 200 callers, 8 voice, 5 Qwen3 (half of what it needs) | 5.7 / 6.5 s | 100% | 91% | 94% | 0 | 30 |
+| **200 callers, 16 voice, 9 Qwen3 (sized)** | **0.54 / 1.06 s** | **0%** | 59% | 67% | 0 | 28 |
+| 200 callers, 16 voice, 3 Parakeet | 0.40 / 0.93 s | 0% | 60% | 52% | 0 | 28 |
+| 200 callers, 20 voice, 9 Qwen3, a surge to 300 at 5 minutes | 0.87 / 2.43 s | 19% | 53% | 75% | 0 | 39 |
+
+(With protection off the answers are the same to within 0.05 s except for the surge, where 2% instead of 6% of callers are turned away and 25% of answers pass 2 s; the sizing, not the protection, decides these runs.)
+
+**What it says.**
+* **100 callers: 8 voice server copies and 5 Qwen3 copies (or 2 Parakeet) hold a median under 0.6 s and a p90 near 1.0 s.** A recogniser at 97% busy (2 Qwen3 copies) or a voice server past 90% turns the answer into seconds: the failure is a cliff, not a slope, and it is the recogniser and voice utilisation that mark it. As built (one of each) the run is hopeless, which is what the laptop showed.
+* **200 callers: 16 voice copies and 9 Qwen3 copies (or 3 Parakeet) hold the same.** Half of that does not.
+* **The model is not what limits** (64 slots, never short in these runs), as measured in section 101.
+* **A surge is the weak spot.** With a margin (20 voice, 9 Qwen3) and a surge from 200 to 300 callers at 5 minutes, p90 rises to 2.4 s and 6% of callers are turned away until new workers have started (45 s), as the walkthrough shows.
+* **The autoscaler runs more workers than the arithmetic** (14 at 100 callers, 28 at 200, against 9 and 18): with protection on the measured call cap falls below 16 as soon as the answers pass its 1 s target, so more workers are asked for. Cores for those workers: 3 to 4 each (section 100).
+* The call cap, shedding and the deadline are the production profile's mechanisms; the test mode that the measurements used (the model writes every reply, no code level) has none of them. The simulation applies them to the measured stack, so this is the production design run on the measured speeds, not a test of the test mode.
+
+**Not covered:** real audio, real networks, GPU batching on a real recogniser (the Mac's one-at-a-time Qwen3 is what was measured), bursts of callers in step, the early start's cost on a real GPU, Bedrock's own limits beyond 60 requests a second, the autoscaler's Kubernetes behaviour, and the voice server's copies sitting behind one address (a load balancer in front of 8 or 16 copies has not been built or measured).
+
+**To run it:** `uv run python scripts/simulate_scale.py --measured` (about 40 s; add `--only "200 callers"` to pick rows).
+
+**What the real run needs, and who provides it** (section 99's step 3): machines (about 18 cores of worker per 100 callers, the voice copies at about 2 cores each, a recogniser on a GPU or as many Mac-style servers as above; separate machines for the callers), a Linux recogniser server for Qwen3-ASR or Parakeet (the two here are Mac-only), the voice servers behind one address, and Bedrock's quota for the key. None of that exists yet and none can be rented from here.
+
+
+## 104. The voice and the recogniser on this Mac's GPU (4 Nov, the owner: "there's no way to test this from a cpu to a gpu? (on this mac) bc a gpu is what we'll switch to" and "try both then")
+
+Both were measured with scratch scripts, with every server idle, on the M3 Pro (12 cores: 6 performance, 6 efficiency). Nothing in the repo was changed.
+
+**Voice (Pocket-TTS "eve"), the 10 real sentences of section 101, PyTorch on the CPU against PyTorch on the Mac's GPU (MPS):**
+
+| | speech made per second of work | first chunk, median | first chunk, worst |
+|---|---|---|---|
+| CPU | 7.8 s | 35 ms | 43 ms |
+| GPU (MPS) | 4.4 s | 164 ms | 294 ms |
+
+The GPU is slower on every measure (the audio is the same: same loudness, valid). The same result as section 40's CoreML try. The reason: the model makes its sound a small piece at a time, one sentence at a time, and every piece is many tiny steps. A GPU is fast at big steps and loses time starting each small one. The package also only generates one sentence at a time (its state is fixed at batch size 1), so the one thing that makes a GPU pay, doing many sentences in one step, is not there to use. Keep the voice on the CPU here. On an NVIDIA card the same small-step problem exists (CUDA graphs reduce it) and a card is not expected to beat a CPU core by much for one stream; where it can win is several voices at once, which needs the model's generation loop changed to batch. That has not been done or measured.
+
+**Recogniser (Qwen3-ASR 0.6B, MLX, on the Mac's GPU), 8 real spoken clips (0.5 to 3.8 s, mean 2.2 s), the worker's 95 hot-words (about 330 prompt tokens), decoded one at a time against together in one batch:**
+
+| clips together | one at a time | together | gain |
+|---|---|---|---|
+| 1 | 0.130 s | 0.110 s | 1.18x |
+| 4 | 0.666 s | 0.555 s | 1.20x |
+| 8 | 1.352 s | 1.052 s | 1.29x |
+| 16 | 2.675 s | 2.180 s | 1.23x |
+
+Batching helps a little (1.2 to 1.3x) and the texts were the same on every clip. About 6 clips a second one at a time, about 7.5 together. The gain is small because most of a clip's time is reading its prompt (the audio plus the hot-word text), which is real computation that a batch does not share. Without the hot-words the same 8 clips take 0.50 s together (prompt 67 tokens), against 1.13 s with them.
+
+**The prefix cache, tried:** the part of the prompt before the audio (the system text with the hot-words) is the same for every clip, so its attention state was computed once and each clip started from a copy. Same 8 clips, one at a time:
+
+| | per clip | clips a second |
+|---|---|---|
+| hot-words, whole prompt every clip (what the server does now) | 165 ms | 6.1 |
+| hot-words, prefix reused | 102 ms | 9.8 |
+| no hot-words at all | 96 ms | 10.4 |
+
+The reused prefix gave the same text as the whole prompt on 8 of 8 clips and is 1.6x faster, close to having no hot-words. Without hot-words one of the 8 differs in wording (numbers spelled out); only three of the clips name a car (Porsche, Santa Fe, Land Cruiser), so this is not an accuracy test of make and model names. The prefix is built once per hot-word list, so a list that changes every call would lose the gain (today it is the whole stock list). Correction: an earlier version of this section said 1,240 prompt tokens, no batching gain and a 3x prefix gain. That run passed the hot-words as one string, so they were split into single letters. The numbers above are with the real list.
+
+**In the server (4 Nov):** `scripts/qwen3_asr_server.py` now keeps the beginning of the prompt (up to 8 distinct hint or hot-word texts) and starts each clip from a copy; `--no-prefix-cache` gives the old behaviour, and if the fast path fails once it switches itself off and the model's own `generate` takes over. Checked on 68 clips (60 spoken make and model questions in 3 voices, short answers, a phone number, silence and noise) with the worker's 95 hot-words: 195 ms a clip with it off, 129 ms with it on, and the text exactly the same on 66 of 68. The two that differ are silence and noise, where the model repeats the hot-word list back (both ways; the kept path stops at 256 new tokens, the old path at the end of the list). That repeat is an existing behaviour worth knowing: a clip with no speech in it costs a long answer. A server that is already running keeps the old code until it is restarted.
+
+**What this means for a GPU:**
+* The worker's own two small models are not a reason to use a GPU: the speech detector costs about 0.5% of a core per call and the turn model about 1% (measured, 4 Nov), against about 20% of a core per call for the whole worker. The rest is Python moving audio and messages. A GPU does not run that, so the worker stays on CPU cores (about 200 for 1000 calls).
+* A GPU helps the shared services. For the recogniser the prefix cache is worth about 1.6x here and batching across callers about 1.2 to 1.3x; a vLLM-style server does both. The ratios may carry over to an NVIDIA card and the absolute speeds will not.
+* Section 101's per-copy numbers for the recogniser stand (they were measured through the server).
+
+**Not covered:** the Parakeet recogniser on the GPU in batches (its server was not run), an NVIDIA card (none here), several voices decoded together, and the effect of the prefix cache on make and model accuracy over many clips.
+
+
+## 105. 1000 callers: what one machine can show, and what it cannot (4 Nov, the owner: "try redesigning to a gpu then, and then test 1000 callers")
+
+**No redesign of the worker for a GPU.** The worker's two small models cost little: the speech detector about 0.5% of a core per call and the turn model about 1% (microbenchmarks, project environment). The rest of a worker's cost is Python moving audio and messages, which a GPU does not run. The GPU change that pays is in the shared services: section 104 (prefix cache in the Qwen3 server, 1.6x; batching across callers 1.2 to 1.3x). Correction to what was said earlier today: the Mac has 12 cores (6 performance, 6 efficiency), not 6.
+
+**What was built:** `scripts/stub_services.py` (a stand-in recogniser, 130 ms, and a stand-in voice, first sound after 35 ms and then 7.8 times real time, neither limited to one request at a time) and `scripts/soak_test.py` (holds N callers connected through the router, with an optional quiet-line rate, and measures real conversations before and while they are connected). The model stayed real (Bedrock). Tests: `tests/unit/test_stub_services.py`. The stand-ins mean these runs say nothing about the real recogniser and voice; section 101 and 103 do that.
+
+**Run 1: 1000 connected calls with quiet lines (one 20 ms frame a second), 4 workers of up to 270 calls each, the router, PostgreSQL, the stand-ins, all on this Mac.**
+
+| | result |
+|---|---|
+| Calls held open at once | 1000 of 1000 (none refused, none dropped, all heard their greeting) |
+| Router answer (`/assign`) | median 1 ms, worst 23 ms |
+| Open the WebSocket to "ready" | median 62 ms, worst 219 ms |
+| Memory of the workers | 2.7 GB empty, about 6.2 GB with 1000 held (about 3.5 MB a call); 4.6 GB after they left (not given back) |
+| Worker processor while held | about 1.3 cores in all (about 0.13% of a core a call) |
+| Machine processor | busiest 35% of 12 cores |
+| 4 real conversations, wait to first sound, alone then with 1000 connected | median 0.48 s then 0.52 s; 90th percentile 1.22 s then 1.43 s; none over 2 s |
+
+So the router, the workers' connection handling and the database hold 1000 calls here, as long as the lines are quiet.
+
+**Run 2: the same with an open microphone (50 frames a second per call, silence).** This is what a real page sends all the time, and it is the cost that counts.
+
+| callers | workers (4) in cores | per call | driver | machine |
+|---|---|---|---|---|
+| 100 | 3.2 | 3.2% of a core | 0.18 | 41% |
+| 200 | 4.9 | 2.4% of a core | 0.40 | 57% |
+| 400, 4 real conversations on top | 4.6 | 1.2% of a core | 0.81 | 60% |
+
+At 400 the 4 real conversations went from a median of 0.45 s to 7.2 s (90th percentile 14.3 s). The processor was not full (60%): the cause is that each worker is one Python process, and 100 open microphones in one process is more than it can handle (the plan's 16 calls a worker is 6 times less). Workers also kept 11 to 17 GB after this overload (frames queued, memory not given back); not investigated whether any of it is a leak.
+
+**What this says about 1000 real callers.** A quiet open microphone costs about 2.5% of a core (runs 2), a call in constant conversation about 20% (section 100), so 1000 callers need roughly 25 cores (all quiet) to 200 cores (all talking constantly) of workers; a real mix is in between. Workers must be kept near 16 calls each (63 or more workers); a machine with 12 cores and 36 GB cannot hold that many processes, each about 0.6 GB with the speech models they load. The memory is not the limit (3.5 MB a call); the processor and the number of processes are.
+
+**Simulation extended to 1000** (`uv run python scripts/simulate_scale.py --measured --only "1000 callers"`; same method and caveats as section 103, 72 workers at most as in the deployment plan):
+
+| 1000 callers | first sound p50 | answer p90 | answers over 2 s | voice busy | recogniser busy |
+|---|---|---|---|---|---|
+| 80 voice servers, 45 Qwen3 | 0.49 s | 0.97 s | 0% | 57% | 64% |
+| 80 voice servers, 15 Parakeet | 0.37 s | 0.84 s | 0% | 57% | 50% |
+| 40 voice servers, 22 Qwen3 (half) | 8.3 s | 9.0 s | 100% | 76% | 89% | 
+
+What that is in machines: about 80 voice-server copies (about 160 cores), the recogniser as 45 Qwen3 copies or 15 Parakeet copies on Macs, or a GPU server that batches (sections 104 and 101), 72 workers, and Bedrock quota for about 100 requests a second (1000 callers, a turn about every 15 s, 1.4 to 1.55 model requests a turn, section 102). Half of that collapses.
+
+**Not covered:** real audio from 1000 callers, the real recogniser and voice under that load, workers at 16 calls each (63 processes), the router with 63 workers, Bedrock beyond 60 requests a second, and a run on rented machines. The routes to those are in section 99.
+
+
+## 106. A script with different kinds of user at once (4 Nov, the boss: "make a python script with different task agents (browsing the webpage, talking to the agent, booking a test drive etc) * N and then run that python script")
+
+`scripts/user_journeys.py` runs three kinds of simulated person together: **browse** (opens the site's pages with a 2 to 8 s pause to read each, loading a page's own files on the first visit only, like a browser with an empty then warm cache), **talk** (calls the agent with one of the load test's conversations, hangs up, browses, calls again) and **book** (a call whose day, time, name and number are made fresh each time, the number always starting 05599, ending in a yes; counted as booked only when the server sends its booking message). Counts of each are set with `--browse --talk --book`. The report is per kind: page and file times and failures, calls completed, refused or failed, the wait from the end of the caller's words to the first sound, bookings made, the most calls open at once, and processor and memory of our processes. Tests: `tests/unit/test_user_journeys.py`. `scripts/portal_call.py` now also records a booking message from the server.
+
+**Why it is a better picture than a connection count.** On a real site most people only browse. 1000 people on the site is 1000 browsers and a few dozen calls open at the same moment, not 1000 calls.
+
+| | Run 1: real recogniser, voice and model | Run 2: stand-in recogniser and voice, real model |
+|---|---|---|
+| People | 308 (300 browsing, 4 talking, 4 booking) | 1000 (970 browsing, 20 talking, 10 booking) |
+| Time | 20 s to arrive, 180 s of use | 90 s to arrive, 240 s of use |
+| Page requests / failed | 11,578 / 0 (median 5 ms) | 56,147 / 0 (median 3 ms, 99th percentile 62 ms) |
+| Files requested / failed | 4,597 / 0 | 14,951 / 0 |
+| Calls completed / refused or failed | 19 / 0 | 110 / 0 |
+| Most calls open at once | 8 | 30 |
+| Wait to first sound, talk calls | median 1.00 s, 90th percentile 1.68 s, over 2 s 3% | median 0.44 s, 90th percentile 1.21 s, over 2 s 1.3% |
+| Wait to first sound, booking calls | median 0.87 s, 90th percentile 1.51 s, over 2 s 3% | median 0.44 s, 90th percentile 1.17 s, over 2 s 1.4% |
+| Test drives booked | 8 of 9 booking calls | 0 of 32 (the stand-in recogniser answers canned words, so no booking can complete) |
+| Machine processor, average | 27% of 12 cores | 41% of 12 cores |
+| Workers (3 or 4), memory | up to 3.6 GB | up to 6.1 GB |
+
+Run 1 shows the real things work together (a booking really completes) and run 2 shows the rest of the system holds a 1000-person site with 30 calls open at once. Run 2's waits are shorter than run 1's because the stand-ins answer faster than the real recogniser and voice; compare only within a run.
+
+**Found on the way:** a first version used the same name, number and time for every booking call and the server correctly refused all but the first as a duplicate ("You already have a test drive for this car"); the booking calls are now unique. Test drives booked by these runs are in the local cluster database (numbers starting 05599, plus a few earlier test numbers).
+
+**Not covered:** more than 30 calls at once (the Mac's limit with the real services is about 8 to 12; with the stand-ins about 30 to 40), the real recogniser and voice under the 1000-person run, browsing against a deployed site (the local site server is a single small program and answered in about 3 to 5 ms), bookings under load with the real recogniser, and anything beyond one machine.
+
+**To run it:** `.venv/bin/python scripts/user_journeys.py --browse 970 --talk 20 --book 10 --ramp-secs 90 --duration-secs 240` with the cluster (`run_cluster.py`) and the site running.
+
+
+## 107. The workers' load reports and call snapshots in Redis (5 Nov, the boss: "better to have it in Redis instead of PostgreSQL")
+
+The code already had a Redis store (`RedisStore` in `shared/state.py`; the worker and the router take `--state-url redis://...`), so nothing in the workers or the router changed. What was missing was a way to run and deploy with it:
+* `scripts/run_cluster.py --redis` starts a local `redis-server` (port 6390, nothing saved to disk) and gives its address to every worker and the router as the state; `--redis-url redis://host:6379/0` uses one you have. Bookings and stock stay in PostgreSQL (`DATABASE_URL`). Without either flag nothing changes.
+* `deploy/k8s/voice.yaml`: workers and router read `STATE_URL` from its own key in the secret (`redis://redis.internal:6379/0`, a placeholder for a managed Redis); `DATABASE_URL` stays for bookings and stock.
+* `pyproject.toml`: `redis` in the cluster extra, `fakeredis` in the dev group (the Redis tests in `test_shared_state.py` ran for the first time here: 9 passed).
+* Redis was installed on this Mac with `brew install redis`.
+
+**Checked live** (3 workers, the router, the stand-in recogniser and voice, a short mixed run of 50 browsing and 4 talking people, all calls fine): each worker's report is a key `worker:<id>` that expires after 6 s and is renewed every 2 s; the router lists all three; deleting one key removes that worker from the router's list within 1 s and it comes back within 3 s; `/assign` answers in about 2 ms; a call with a call id leaves a key `call:<id>` of about 1 KB with a 24 hour expiry.
+
+**What it changes and what it does not.** (Superseded the same day by section 108: Redis is now the launcher's default.) The router never read the database per call (it reads the worker list every 0.5 s into memory), so the assign time is the same as with PostgreSQL. What moves is the write load of the workers' reports and call snapshots (a few dozen small writes a second at 500 calls) off the database that holds the bookings. The cost: a Redis to run, and snapshots are lost if Redis restarts without persistence (a returning visitor then starts a fresh conversation); turn on Redis's append-only file if a day of call memory must survive a restart. Not measured: Redis at 1000 or more calls, a managed Redis across machines, a Redis failover.
+
+`docs/voice_call_walkthrough.html` now names Redis for the worker list and call snapshots (it is uncommitted with the other report files).
+
+
+## 108. Redis as the default, conversations remembered, and the model deciding every turn (5 Nov, the boss)
+
+**Redis is now the default** for the workers' load reports and the call snapshots: `scripts/run_cluster.py` starts a local Redis unless `--no-redis` (back to PostgreSQL) or `--redis-url` (one you already have) is given, and the deployment file already points at one. The reason given: the database that holds the stock and bookings should not also hold what callers said. PostgreSQL now holds only stock and bookings. (Bookings still carry a caller's name and number; that stays in PostgreSQL.)
+
+**The conversation is remembered** for a day (`calls_kept_secs`) and now also across a restart of Redis: the local Redis keeps an append-only file in `data/redis` (written once a second; the folder is ignored by git). Checked with the real recogniser and voice and the model: a caller asked about Toyota SUVs and the Land Cruiser on one worker and hung up; coming back with the same call id on the other worker, "how much was that one again?" was answered "189,000 dirhams, white with 92,000 kilometres"; Redis was then stopped, the launcher started it again, and on the first worker "what colour was that one again?" was answered "white". Not done: Redis's own password and encryption for a managed Redis (use `rediss://` and an auth secret in the deployment); the local one listens on 127.0.0.1 only.
+
+**The engine as a model: what exists and what was measured.** Today the model already writes every reply (`model_only`). The code decides which look-up to run (cars, counts, a car's facts, booking steps) in about 4 of 5 turns (`rules_decide`), so the model's own decision is skipped. Switching that off (`VA__VOICE__RULES_DECIDE=false`) makes the model decide the look-up on every turn too. The booking, the stock look-ups themselves and the checks that stop an invented car or price are still code. Measured on the laptop, the live test settings, the real recogniser, voice and model (Bedrock), 4 callers together, two runs each, 26 turns each:
+
+| | the code picks the look-up (live) | the model picks it every turn |
+|---|---|---|
+| Wait to first sound, median | 0.79 s and 0.76 s | 1.28 s and 1.25 s |
+| 90th percentile | 1.57 s and 1.44 s | 2.00 s and 1.77 s |
+| Over 2 s | 4% and 0% | 12% and 8% |
+| Reply-words step | 0.25 s and 0.21 s | 0.39 s and 0.64 s |
+| Model decision | 0.004 s | 0.22 s |
+| Model requests per turn (replies plus other calls) | 1.8 and 1.9 | 2.8 and 3.3 |
+| Input tokens per turn | about 1,370 to 1,480 | about 2,130 to 2,560 |
+
+So letting the model decide everything costs about half a second at the median and about 60% more model input, and makes the model requests per turn about 60 to 70% higher. With 1 caller (6 turns each) the medians were 1.1 s and 1.37 s.
+
+**What it gains** (one call, six off-script questions, both settings): both answered a hybrid against diesel, instalments, washing the car and the capital of France. The model-decides setting answered the comparison "which is better for a family of five, the Land Cruiser or the RAV4?" (the code-decides setting heard only "The Land Cruiser or the Rav 4" there, an early cut in the recogniser, and then asked for repeats) and answered "Paris" for the last question where the code-decides setting said "I don't have that info". **Both settings invented policy:** "we can arrange instalments" and "we wash every car before delivery" are not in the stock or policy data. That is the writer's, not the decider's, and it is a risk for a dealership to look at (a hand-written list of what the dealership does and does not offer, in the writer's facts, would close it).
+
+**Not covered:** many callers with the model deciding (about 60 to 70% more model requests per turn than the 1000-caller sizing in section 105 assumed), whether the model's own decisions pick the wrong look-up more often than the rules (the six questions are not a measurement), and the model-decides setting with the real booking flow.
+
+
+## 109. The model suggests and asks: the `advise` tool (5 Nov, the owner: the model should look in the stock for a named car, and for "I am looking for a car" ask what they need or suggest cars for different requirements, as conversational as it can be within limits)
+
+**What was already true.** In the model-decides setting (section 108) the model names a tool (`search_cars` for a named car or a type, `get_car`, `compare_cars` ...) and code runs it against the stock, so a named car already went to the database. What was missing was the middle: a caller who describes a need and names no car ("something for the family", "something sporty", "what do you recommend?", "a long road trip with the kids") was sent to `search_cars`, which has nothing to filter on, and the same list came back or the reply was made up ("quick and fun", "perfect for family trips").
+
+**The change.** A new tool `advise <need>` (`agent/advice.py`, `_t_advise` in `agent/engine.py`). The model says that this is a need and which one (family, sporty, economy, luxury, budget, trip, or any when they have not said). Code then picks up to three cars by recorded figures from the stock and the site's spec sheets: seats and boot for a family or a trip, horsepower and 0 to 100 for sporty, hybrid or electric then litres per 100 km for economy, price and year for luxury and budget, one per model. Each car goes to the model as true facts with a "why it fits" built from those figures, and the price against the market reference when it is lower. For `any` the model is told not to list cars but to ask one question (what they will use it for, how many people, their budget) and give at most one example. The model is told to recommend at most two, give the reason in the same sentence, ask one narrowing question, and never to call a car popular, a best seller, great, reliable or comfortable. There are no sales figures in the stock, so "best seller" cannot be said truthfully; to allow it the dealership would have to supply a sales or featured flag.
+* The model's need is trusted only when the caller's words (or the last few customer lines) bear it out; otherwise the words decide, and an open request becomes `any`. The first version let the model call "I am looking for a car" a family need and skipped the question.
+* The cars shown are remembered, so "the second one" or "tell me about the first" work, and a make looked at earlier does not limit a need (a price or a type still does).
+* The suggestion is prepared ahead like a search (it is a candidate when the words carry a need or an open request), so its reply can be written while the model decides.
+* Two gaps of the model-decides setting found on the way: `best_of` was missing from the model's tool list (so "the cheapest one you have" went to a search limited to the BMW just discussed; it is now listed, and "you have", "your cars", "in stock" mean the whole stock), and the stock in the local PostgreSQL was the old 24-car seed with no spec sheets, so nothing about seats, power or boot could be said. It was brought up to the 74 cars of the SQLite stock with their spec sheets (`inventory import ../bmw-portal/site/data.js`, then `data/demo_extra_cars.csv --keep-missing`).
+
+**What it did, live** (one worker, the real recogniser and model, the live test settings with the model deciding): "I am looking for a car" got "What kind of car are you after, and how many people will be riding with you?"; "something good for a family" the Kia Carnival and the Chevrolet Tahoe (seven seats); "something sporty and fast" the Mercedes G 63 and the Range Rover Sport; "I need seven seats for my family" the Carnival and the Tahoe; "the cheapest one you have" the Kia Rio at 39,000.
+* The wait to first sound on a suggestion turn was about 1.4 to 2.1 s (median near 1.6 s), against about 1.0 s for a turn that names a car and about 1.25 s across all turns in this setting. The prompt is longer (three cars with their figures) and the model writes more.
+* **Still wrong sometimes:** the model adds praise the figures do not give ("both great for families", "also quick"); it reads a single car's whole spec sheet aloud when one car is found (more so now that the stock has spec sheets); "which one fits your budget?" is asked too often. The checks that drop invented numbers and names do not catch an adjective.
+
+**Not covered:** many callers with this tool, an accuracy count of how often the model picks the right need, and a hand-written list of what the dealership does and does not offer for the writer.
+
+## 110. "The model writes every answer": what the quality governor does then, and what it takes at 1,000 callers (5 Nov, the owner: no code or prefix answers)
+
+**The change.** A fifth governor mode, `observe` (`dialogue.quality = observe`, `agent/governor.py`). It never lowers a turn's level (always `full`), never sheds a decision to the code, and keeps measuring: the probe, the decision time and the first-sentence time still feed `/metrics`, the call cap and the alerts. New: the gauge `voice_model_decide_ms`; the alert `ModelSlowForCallers` (`deploy/alerts.yml`); a `model-server` autoscaler (`deploy/k8s/voice.yaml`, `maxReplicas 24`) that keeps about 64 requests per server (`model_requests_per_replica`, rule in `deploy/prometheus-adapter.yaml`, needs vLLM's `/metrics` scraped); the switch in the worker's environment is in the manifest, commented out, until it is chosen. In the test mode (`model_only`) the governor was already bypassed for the level; `observe` also stops the shedding, and is the setting for the production flags with the same rule.
+
+**Simulation** (`python scripts/simulate_scale.py --model-only`, 1,000 callers, 80 voice servers, 45 Qwen3, up to 72 workers; the model deciding every turn plus one more request a turn nobody waits for, from section 108). Answer time, 10 simulated minutes after the ramp:
+
+| model GPUs (64 requests at once each, ASSUMED) | callers told busy | answer median | 90th | 99th | model requests at once, peak |
+|---|---|---|---|---|---|
+| 1 | 58% | 7.3 s | 10.6 s | 13.0 s | 737 |
+| 2 | 0% | 1.26 s | 1.50 s | 1.72 s | 147 |
+| 3, 4, 8 | 0% | 1.26 s | 1.50 s | 1.72 s | 150 |
+
+* **The model needs about 150 requests at once for 1,000 callers**, so 3 GPUs at the assumed 64 each, 4 to survive one failing. Fewer than that is not slow: with 1 GPU nearly every answer is over 2 s. More than that changes nothing. The 64 per GPU is NOT measured on a real card; it is the figure that has to be measured first. (The earlier 1,000-caller sizing needed fewer, because 4 turns in 5 had the code choose the lookup.)
+* **Nothing is better than 1.26 s at the median**, even with unlimited GPUs: that is the unloaded cost of deciding then writing (recognition 0.2 s, decision 0.23 s, first sentence 0.65 s, voice 0.07 s, minus the reply already written ahead for half the turns). It matches the 1.25 s measured live in section 108. 93% of answers are over 1 s, none over 2 s.
+* **The call cap works against this rule at its present setting.** It shrinks when the 90th percentile passes 1 s, and here it is 1.5 s with an idle model, so no capacity can cure it: with the target at 1 s, 41% of callers were told busy for nothing (4 GPUs). With the target at 2 s, 0%. If the model must answer every turn, the target in `server/admission.py` has to be what the model can do (2 s), or the cap throws callers away.
+* **The cap cannot rescue calls already in.** With 1 GPU the answers were 7 s and still 42% got through: the callers arrived within 90 s, before the first slow answers were measured, and a cap only stops new calls. The model servers must be sized, or scaled ahead, for the callers expected, not after they are in. The model GPUs take minutes to load, so the autoscaler on them (above) would be late for a sudden crowd.
+
+**Not covered:** the 64 requests per GPU (assumed), vLLM's real queueing, the model-server autoscaler and the new alert on a real cluster, what is said when the model is down (nothing replaces it: the owner has to choose between one fixed line and refusing the call), the production flags (`MODEL_ONLY=false` still completes a reply the model left short with the code's facts; "no code answers at all" needs `MODEL_ONLY=true`, a test setting whose checks only note), and the cost of the extra GPUs.
+
+## 111. A call is no longer cut at 15 minutes (5 Nov, the owner: calls go on until the caller stops them)
+
+**Before.** `ServerState.max_call_secs` was a fixed 900 s in `server/app.py`, not settable, and a timer cancelled every call at that time, drain or not. The page reconnected once (same call id, the conversation from Redis) with "Sorry, we got cut off". Nothing in the repo says why it was 15 minutes.
+
+**A correction to what I said earlier.** I said the pipeline's `idle_timeout_secs=None` meant there was no idle check and the 15-minute cap was the only safety net for a forgotten open tab. That was wrong. The brain has its own check (`still_there_secs` 8 s, then `hang_up_secs` 7 s: "Are you still there?", then the goodbye and `silent_end`), so a quiet call ends itself in about 15 s. `idle_timeout_secs=None` is a different Pipecat feature. So the cap was not needed for forgotten tabs, and I did not add a 2 to 3 minute idle check: the existing one is shorter and is the owner's own setting; it is unchanged.
+
+**The change.** `voice.max_call_secs` (config, default 7200 s = 2 hours, 0 = none) is the only limit now, a hard stop for a call that never ends (a noisy room that keeps the call alive). The state is kept (`calls_kept_secs`, 24 h), so a call cut at the limit carries on through the page's reconnect.
+
+**The grace period (`deploy/k8s/voice.yaml`) stays at 900 s.** It used to equal the call limit, so no call could outlast it. Now a call still running 15 minutes after its worker was told to stop is cut when the pod stops, and reconnects (a second or two, the sentence in progress lost). Raising it keeps draining pods (and their cost) longer; it is a choice, written in the manifest's comment.
+
+**Tests:** `tests/unit/test_call_limit.py` (the default, the quiet-call timings, the wiring). Not tested: a real call over 15 minutes, and the cut at 2 hours (the page's single reconnect, then nothing).
+
+**Not covered:** whether a call that hits the 2 hour stop should say something first, and the page's reconnect allowing only one retry per call (so a second cut ends it).
+
+## 112. Does every caller get only their own conversation? A cross-talk test across two workers (5 Nov, the owner: "how would it know it is the same request?")
+
+**The question.** Earlier tests (soak, user journeys) showed many calls working at once, but none put a different, known detail into each caller's mouth and checked that nothing came back on the wrong connection. `scripts/crosstalk_test.py` does (tests: `tests/unit/test_crosstalk.py`, 5).
+
+**What it does.** N booking calls at once through the router, on a two-worker cluster (`run_cluster.py --workers 2`, Bedrock Nemotron, the real Qwen3 recogniser, Pocket voice). Each caller has a full name, a phone number (05599 and five digits nobody else has), a day and time, and its own call id. It then checks: (1) what came back on a caller's connection (what the server heard, what the agent said, the booking message) for any OTHER caller's name or number; (2) each caller's saved conversation in Redis (`call:<id>`) the same way; (3) that finished calls open again on the OTHER worker with the same call id say `resumed`, and that a call id nobody used says it is not.
+
+**Result, three runs on 5 Nov (16, 20 and 20 callers; 56 placed, 52 connected, 4 sent away by the router as busy in the last run).**
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Calls by worker | 8 / 8 | 11 / 9 | 9 / 7 (4 told busy) |
+| Bookings, and whose number | 11, all the caller's own | 2, own | 6, own |
+| Another caller's details heard, said, booked or saved | 0 | 0 | 0 |
+| Saved conversations holding the caller's own details | 16 of 16 | 20 of 20 | 16 of 16 (4 never connected) |
+| Reopened on the other worker: resumed | 4 of 4 | 4 of 4 | 4 of 4 |
+| A call id nobody used: resumed | no | no | no |
+
+* **No mix-up in 52 calls.** Not one booking carried another caller's number, and no caller's heard words, agent words or saved conversation contained anyone else's name or number. The agent's lines checked: 275 in run 2 and 253 in run 3 (run 1 checked the heard words and the saved conversations).
+* **What this shows and not:** a request's answer comes back on its own connection, so it does not need to be matched; a call's conversation is found by its call id in Redis, and any worker can open it. It does not show that nothing could ever mix: it is 52 calls with details I planted, on one machine, in a booking conversation.
+* **"Different places":** where a caller is does not matter to this: nothing uses an address or a place, only the connection and the call id. The test callers all come from this one Mac, so different networks and browsers were not tried (the page keeps its call id in the tab, so another browser starts a new call).
+* **Two flaws in my test, found by running it.** (1) My first check treated the number the server saves (`+971559996030` for `0559996030`) as different, and reported correct bookings as "misheard"; it now compares the last nine digits. (2) A second run gave every caller the same days and times as the first, and 15 of 18 calls with no booking were told "That slot isn't free."; each run now picks its own slots, and the report counts refused slots (9 in run 3, from the earlier runs' bookings).
+* **A recogniser finding on the way:** the number was heard right in every booking (19 of 19), but the name only in 4 (misheard: Malik as Muley, Karim as Kareem, Aziz as "Gazez", Noor as "New"). These callers are the Mac's own `say` voices, so it may be easier or harder than real people. Names are not given to the recogniser as hot-words.
+* **Load:** at 20 callers on this one Mac, 4 callers in run 3 were told busy by the router (the call cap shrinking, as designed).
+
+**Not covered:** callers from different networks or browsers; a worker being replaced mid-call (resume was tested by opening the call again on the other worker, not by stopping one); content other than the booking conversation; real people instead of synthetic voices.

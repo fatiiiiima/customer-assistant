@@ -11,6 +11,13 @@ background. Then:
   * the caller speaks again: both results are dropped; the next hold starts over on the whole turn.
 The cost is the wasted work when the caller carries on; the decision is skipped when the governor says the model has no room.
 
+REPLY AHEAD (`prepare`, voice.hold_reply, ARCH_REVIEW section 92): once the decision is made, the engine also starts WRITING the reply for it, so when the turn ends the first
+words are already there. It is kept and dropped exactly as the decision is, and the model's writer is stopped when it is dropped.
+EARLY STARTS (`start_early`, voice.early_start_secs): the same work, started after a short quiet inside the turn. Two guards (ARCH_REVIEW section 95): the `gate` (the words must read as
+finished, or the model is not called: a half sentence would only waste a decision and a reply), and `verify_early` (the turn's words are recognised again after it ends and the early
+work is used only if they are the same words; the early recognition was wrong on about one turn in four with Whisper, section 4 of the first review).
+KNOWN WORDS: the endpointer's text check recognises the turn once, to judge whether it reads as finished; `start(pcm, text)` hands those words over so they are not recognised twice.
+
 One Speculation per call. `start` / `resumed` / `confirm` are called by the endpointer (voice/endpoint.py) on the event loop;
 `transcript` by the recognizer service; `decision_for` by the brain.
 """
@@ -18,58 +25,136 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import re
 from collections.abc import Callable
+
+from ..shared import usage
+
+
+def same_words(a: str, b: str) -> bool:
+    """The same words, whatever the punctuation and case ("Do you have a Santa Fe?" and "do you have a Santa Fe")."""
+    return re.findall(r"[a-z0-9']+", (a or "").lower()) == re.findall(r"[a-z0-9']+", (b or "").lower())
 
 
 class Speculation:
     def __init__(self, transcribe: Callable[[bytes], str], decide: Callable[[str], dict | None] | None = None,
-                 version: Callable[[], int] | None = None) -> None:
+                 version: Callable[[], int] | None = None, prepare: Callable[[str, dict | None], object | None] | None = None) -> None:
         self.transcribe = transcribe              # (pcm16) -> text, blocking (runs in a thread)
         self.decide = decide                      # (text) -> the decision, or None when there is nothing to prepare; blocking
+        self.prepare = prepare                    # (text, decision or None) -> a reply being written ahead (an object with .cancel()), or None; blocking, quick
+        self._reply: concurrent.futures.Future | None = None
+        self.reply_used = 0
+        self.gate: Callable[[str], bool] | None = None         # early starts only: (words so far) -> worth spending a model call on?
+        self.verify_early = False                              # early starts: the final recognition still runs, and the early work is used only when its words are the same
+        self._early_origin = False                             # the start in progress was an early one (not a held pause)
+        self.skipped = 0
         self.version = version or (lambda: 0)     # changes whenever the call moves on (the session's history length)
         self._text: asyncio.Future | None = None
         self._decision: concurrent.futures.Future | None = None
         self._at_version = 0
         self._gen = 0
         self.valid = False                        # the held turn ended with no new speech: the results describe exactly this turn
+        self.on_event = None                      # diagnostics only (the call recorder): (kind, text) for each early recognition and what became of it
         self.started = self.used = self.dropped = 0
 
-    def start(self, pcm16: bytes) -> None:
-        """A stop was held: start on the turn so far (replaces any earlier start for this turn)."""
-        self._gen += 1
+    def start(self, pcm16: bytes, text: str | None = None) -> None:
+        """A stop was held: start on the turn so far (replaces any earlier start for this turn). `text`: the words are already known (the endpointer's peek), so they are not recognised again."""
+        self._start(pcm16, text, early=False)
+
+    def start_early(self, pcm16: bytes) -> None:
+        """A short quiet inside the turn: start on the turn so far, behind the gate (see the module note)."""
+        self._start(pcm16, None, early=True)
+
+    def _start(self, pcm16: bytes, text: str | None, early: bool) -> None:
+        self._gen += 1                                        # first: a reply still being made for the earlier start sees the change and stops itself
+        self._drop_reply()
         gen, self.valid, self.started = self._gen, False, self.started + 1
+        self._early_origin = early
+        usage.add("spec.start_early" if early else "spec.start_hold")
         self._at_version = self.version()
         self._decision = concurrent.futures.Future() if self.decide else None
-        decision = self._decision
+        self._reply = concurrent.futures.Future() if self.prepare else None
+        decision, reply = self._decision, self._reply
         words: concurrent.futures.Future = concurrent.futures.Future()
+        if text is not None:
+            words.set_result(text)
         loop = asyncio.get_running_loop()
 
         def work() -> None:
-            text = ""
-            try:
-                text = self.transcribe(pcm16)
-                words.set_result(text)                        # the recognizer can have the words now, while the decision is still being made
-            except Exception as e:
-                words.set_exception(e)
-            if decision is not None:                          # the decision follows the words, in the same thread
+            got = text or ""
+            if text is None:
                 try:
-                    decision.set_result(self.decide(text) if text and gen == self._gen else None)
+                    got = self.transcribe(pcm16)
+                    if self.on_event:
+                        self.on_event("early_stt", f"{len(pcm16) / 32000:.2f} s of the turn so far, got {got!r}")
+                    words.set_result(got)                         # the recognizer can have the words now, while the decision is still being made
+                except Exception as e:
+                    words.set_exception(e)
+                    got = ""
+            if early and self.gate is not None and got:
+                try:
+                    worth = bool(self.gate(got))
                 except Exception:
-                    decision.set_result(None)
+                    worth = False
+                if not worth:                                     # a half sentence: recognised, nothing more is spent on it
+                    self.skipped += 1
+                    usage.add("spec.skipped")
+                    if self.on_event:
+                        self.on_event("early_skipped", f"the words so far {got!r} do not read as finished: no decision and no reply were started")
+                    if reply is not None:
+                        reply.set_result(None)
+                    if decision is not None:
+                        decision.set_result(None)
+                    return
+            made = None
+            if decision is not None:                              # the decision follows the words, in the same thread
+                try:
+                    made = self.decide(got) if got and gen == self._gen else None
+                except Exception:
+                    made = None
+            if reply is not None:                                 # ...and the reply for it, written before the decision is handed on (a few milliseconds of lookups)
+                handle = None
+                try:
+                    handle = self.prepare(got, made) if got and gen == self._gen else None
+                except Exception:
+                    handle = None
+                if handle is not None and gen != self._gen:       # the caller spoke again while it was being made
+                    handle.cancel()
+                    handle = None
+                reply.set_result(handle)
+            if decision is not None:
+                decision.set_result(made)
 
         self._text = asyncio.wrap_future(words, loop=loop)
         loop.run_in_executor(None, work)
 
+    def _drop_reply(self) -> None:
+        """Stop a reply that was written ahead and will not be used."""
+        r, self._reply = self._reply, None
+        if r is not None and r.done():
+            try:
+                handle = r.result()
+            except Exception:
+                handle = None
+            if handle is not None:
+                handle.cancel()
+
     def resumed(self) -> None:
         """The caller spoke again: what was started describes a turn that is not over."""
+        self._gen += 1
+        self._drop_reply()
         if self._text is not None:
             self.dropped += 1
+            usage.add("spec.dropped")
+            if self.on_event:
+                self.on_event("early_dropped", "the caller spoke again: the early recognition is thrown away")
         self._gen += 1
         self._text, self._decision, self.valid = None, None, False
 
     def clear(self) -> None:
         """A new turn begins: nothing from an earlier one may be used (it may have ended without its words being asked for)."""
         self._gen += 1
+        self._drop_reply()
         self._text, self._decision, self.valid = None, None, False
 
     def confirm(self) -> None:
@@ -80,6 +165,8 @@ class Speculation:
         """The words of the turn that just ended, if they were already being recognised; None means recognise them now."""
         if not self.valid or self._text is None:
             return None
+        if self._early_origin and self.verify_early:
+            return None                                       # recognise the whole turn as usual; the early work is kept for `decision_for` / `reply_for`, which compare the words
         self.valid = False                                    # handed out once: a later turn never gets these words
         try:
             text = await self._text
@@ -94,8 +181,37 @@ class Speculation:
         if d is None or self._at_version != self.version() or self._text is None or not self._text.done():
             return None
         try:
-            if self._text.result() != text:
+            if not same_words(self._text.result(), text):
                 return None
         except Exception:
             return None
         return d
+
+    def reply_for(self, text: str) -> concurrent.futures.Future | None:
+        """The reply written ahead for these words (its Future holds the handle, or None), if it still applies: same words, the call has not moved on."""
+        if self._early_origin and self.on_event and self._text is not None and self._text.done():       # for the call recorder: did the early reading match the full one?
+            try:
+                early = self._text.result()
+            except Exception:
+                early = None
+            if early is not None:
+                self.on_event("early_match" if same_words(early, text) else "early_mismatch", f"early reading {early!r}, full reading {text!r}")
+        r, self._reply = self._reply, None
+        ok = r is not None and self._at_version == self.version() and self._text is not None and self._text.done()
+        if ok:
+            try:
+                ok = same_words(self._text.result(), text)
+            except Exception:
+                ok = False
+        if not ok:
+            if r is not None and r.done():
+                try:
+                    handle = r.result()
+                except Exception:
+                    handle = None
+                if handle is not None:
+                    handle.cancel()
+            return None
+        self.reply_used += 1
+        usage.add("spec.reply_used")
+        return r

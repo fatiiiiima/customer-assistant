@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: 1000 people on the site</title>
+<style>
+:root{--text:#1f1e1d;--muted:#5f5e5a;--bg:#ffffff;--panel:#f6f4ee;--line:rgba(31,30,29,.16);--ok:#1D9E75;--warn:#C98A12;--bad:#D85A30;--accent:#3b5bdb;--okbg:#e7f5ef;--warnbg:#fbf1da;--badbg:#fbe9e2}
+@media (prefers-color-scheme: dark){:root{--text:#f1efe8;--muted:#b4b2a9;--bg:#1f1e1d;--panel:#2c2c2a;--line:rgba(241,239,232,.18);--okbg:#17352b;--warnbg:#3a3015;--badbg:#3d2219}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.55;font-size:15px}
+main{max-width:900px;margin:0 auto;padding:28px 18px 48px}
+h1{font-size:26px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:18px;font-weight:600;margin:34px 0 8px;padding-top:10px;border-top:1px solid var(--line)}
+h3{font-size:15px;font-weight:600;margin:18px 0 6px}
+p{margin:6px 0}
+.sub{color:var(--muted);margin:0 0 18px}
+.box{background:var(--panel);border-radius:10px;padding:14px 16px;margin:14px 0}
+.box ul{margin:6px 0 0;padding-left:20px}.box li{margin:5px 0}
+.tw{overflow-x:auto;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:620px}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--muted);font-size:12.5px;background:var(--panel)}
+th:first-child,td:first-child{text-align:left}
+td.l{text-align:left}
+tr.ok td:last-child{background:var(--okbg)}tr.warn td:last-child{background:var(--warnbg)}tr.bad td:last-child{background:var(--badbg)}
+td.s{font-weight:600;text-align:left;white-space:nowrap}
+.ok .s{color:var(--ok)}.warn .s{color:var(--warn)}.bad .s{color:var(--bad)}
+.note{font-size:12.5px;color:var(--muted);margin-top:6px}
+.kv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}
+.kv div{background:var(--panel);border-radius:10px;padding:10px 12px}
+.kv b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.kv span{font-size:12.5px;color:var(--muted)}
+figure{margin:12px 0}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:4px}
+svg text{fill:var(--text);font-size:11px}svg .m{fill:var(--muted)}
+ol,ul{padding-left:20px}li{margin:4px 0}
+.tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+@media (max-width:640px){.kv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{body{font-size:12px}main{padding:0}h2{break-after:avoid}table,figure,.box{break-inside:avoid}.tw{overflow:visible}table{min-width:0}}
+</style>
+</head>
+<body>
+<main>
+<h1>Voice agent: 1000 people on the site</h1>
+<p class="sub">A script with several kinds of user at once: browsing, talking to the agent, booking a test drive. 4 November 2026.</p>
+
+<div class="box"><b>In short</b>
+<ul>
+<li>1000 simulated people used the site at the same time: 970 browsing, 20 talking to the agent, 10 booking a test drive. <b>No page failed, no call was refused or failed</b>, and 30 calls were open at once at the peak.</li>
+<li>The wait for an answer stayed <b>under half a second at the median</b> (0.44 s) and 1.2 s at the 90th percentile, with 1.3% of answers over 2 s.</li>
+<li>A smaller run with the <b>real recogniser and voice</b> (308 people) completed <b>8 of 9</b> test-drive bookings end to end, with a median wait of about 1 s.</li>
+</ul></div>
+
+<div class="kv">
+<div><b>1000</b><span>people on the site</span></div>
+<div><b>0</b><span>pages or calls failed</span></div>
+<div><b>30</b><span>calls open at once, at most</span></div>
+<div><b>0.44 s</b><span>median wait for an answer</span></div>
+</div>
+
+<h2>How the script works</h2>
+<ul>
+<li><b>Browse:</b> opens the site's pages one after another with a 2 to 8 second pause to read each. A first visit also loads the page's scripts and pictures, later visits only the page.</li>
+<li><b>Talk:</b> calls the voice agent with a microphone left open, asks questions, hangs up, browses, then calls again.</li>
+<li><b>Book:</b> the same, with a conversation that ends in a test-drive booking. Each call has its own day, time, name and phone number. It counts as booked only when the server confirms the booking.</li>
+</ul>
+<p>The numbers of each kind are set on the command line, so the mix can be changed to test other situations.</p>
+
+<h2>Results</h2>
+<div class="tw"><table>
+<tr><th></th><th>Run 1: real recogniser, voice and model</th><th>Run 2: 1000 people, stand-in recogniser and voice</th></tr>
+<tr><td>People</td><td>308 (300 browsing, 4 talking, 4 booking)</td><td>1000 (970 browsing, 20 talking, 10 booking)</td></tr>
+<tr><td>Page requests, failed</td><td>11,578, none failed (median 5 ms)</td><td>56,147, none failed (median 3 ms)</td></tr>
+<tr><td>Calls completed, refused or failed</td><td>19, none</td><td>110, none</td></tr>
+<tr><td>Most calls open at once</td><td>8</td><td>30</td></tr>
+<tr><td>Wait for an answer, talking</td><td>median 1.00 s, 90th percentile 1.68 s</td><td>median 0.44 s, 90th percentile 1.21 s</td></tr>
+<tr><td>Wait for an answer, booking</td><td>median 0.87 s, 90th percentile 1.51 s</td><td>median 0.44 s, 90th percentile 1.17 s</td></tr>
+<tr><td>Answers over 2 s</td><td>3%</td><td>1.3%</td></tr>
+<tr class="ok"><td>Test drives booked</td><td>8 of 9 booking calls</td><td class="l">not tested: the stand-in recogniser cannot understand words</td></tr>
+<tr><td>Laptop processor, average</td><td>27% of 12 cores</td><td>41% of 12 cores</td></tr>
+</table></div>
+<p class="note">Run 2 waits are shorter than run 1 because the stand-in recogniser and voice answer faster than the real ones. Compare within a run, not across.</p>
+
+<h2>What this does and does not show</h2>
+<div class="box"><ul>
+<li><b>Shows:</b> the website, the router, the call-handling workers, the database and the booking flow cope with 1000 people when most only browse, as on a real site.</li>
+<li><b>Does not show:</b> 1000 people all talking. Only 30 calls were open at once. Real talking calls on this laptop reach their limit at about 8 to 12 callers, because the voice and recogniser handle one request at a time. The forecast for 1000 simultaneous talkers is in the earlier report: about 80 voice servers, a batching recogniser and 60 or more workers on rented machines.</li>
+<li><b>One laptop:</b> everything ran on one machine, including the callers. The website server here is a small local program, so page times say little about a deployed site.</li>
+</ul></div>
+</main>
+</body>
+</html>

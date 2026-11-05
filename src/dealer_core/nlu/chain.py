@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Iterator
 
-from ..config import BackendCfg, Config, LlmCfg
+from ..config import ALLOW_CLOUD_ENV, BackendCfg, Config, LlmCfg
 from ..dialogue.states import State
 from .backend import BackendError, BackendTimeout, IntentResult, NluBackend
 
@@ -13,7 +14,10 @@ log = logging.getLogger("dealer.nlu")
 
 
 def make_backend(name: str, b: BackendCfg, llm: LlmCfg, model_dir: Path) -> NluBackend:
-    """Instantiate a backend from its config entry. Imports stay lazy so unused runtimes need not be installed."""
+    """Instantiate a backend from its config entry. Imports stay lazy so unused runtimes need not be installed.
+    A cloud backend (the caller's words, and name and phone once given, leave the company) is refused unless VOICE_AGENT_ALLOW_CLOUD=1."""
+    if b.cloud and os.environ.get(ALLOW_CLOUD_ENV) != "1":
+        raise BackendError(f"backend {name!r} is a third-party cloud service: it needs {ALLOW_CLOUD_ENV}=1 (dev only)")
     if b.runtime == "ollama":
         from .ollama_backend import OllamaBackend
 
@@ -82,6 +86,14 @@ class BackendChain:
     @property
     def name(self) -> str:
         return self.backends[self.active].name
+
+    def warm_connection(self) -> bool:
+        """The active backend's connection, opened ahead of a call's first request (see NluBackend.warm_connection)."""
+        return bool(getattr(self.backends[self.active], "warm_connection", lambda: False)())
+
+    def ping_ms(self) -> float | None:
+        """The active backend's network round trip (see OpenAICompatBackend.ping_ms); None for a backend that cannot say."""
+        return getattr(self.backends[self.active], "ping_ms", lambda: None)()
 
     def _call(self, fn: Callable[[NluBackend], object]):
         last: Exception | None = None

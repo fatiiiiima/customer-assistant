@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: 1000 connected calls</title>
+<style>
+:root{--text:#1f1e1d;--muted:#5f5e5a;--bg:#ffffff;--panel:#f6f4ee;--line:rgba(31,30,29,.16);--ok:#1D9E75;--warn:#C98A12;--bad:#D85A30;--accent:#3b5bdb;--okbg:#e7f5ef;--warnbg:#fbf1da;--badbg:#fbe9e2}
+@media (prefers-color-scheme: dark){:root{--text:#f1efe8;--muted:#b4b2a9;--bg:#1f1e1d;--panel:#2c2c2a;--line:rgba(241,239,232,.18);--okbg:#17352b;--warnbg:#3a3015;--badbg:#3d2219}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.55;font-size:15px}
+main{max-width:900px;margin:0 auto;padding:28px 18px 48px}
+h1{font-size:26px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:18px;font-weight:600;margin:34px 0 8px;padding-top:10px;border-top:1px solid var(--line)}
+h3{font-size:15px;font-weight:600;margin:18px 0 6px}
+p{margin:6px 0}
+.sub{color:var(--muted);margin:0 0 18px}
+.box{background:var(--panel);border-radius:10px;padding:14px 16px;margin:14px 0}
+.box ul{margin:6px 0 0;padding-left:20px}.box li{margin:5px 0}
+.tw{overflow-x:auto;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:620px}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--muted);font-size:12.5px;background:var(--panel)}
+th:first-child,td:first-child{text-align:left}
+td.l{text-align:left}
+tr.ok td:last-child{background:var(--okbg)}tr.warn td:last-child{background:var(--warnbg)}tr.bad td:last-child{background:var(--badbg)}
+td.s{font-weight:600;text-align:left;white-space:nowrap}
+.ok .s{color:var(--ok)}.warn .s{color:var(--warn)}.bad .s{color:var(--bad)}
+.note{font-size:12.5px;color:var(--muted);margin-top:6px}
+.kv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}
+.kv div{background:var(--panel);border-radius:10px;padding:10px 12px}
+.kv b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.kv span{font-size:12.5px;color:var(--muted)}
+figure{margin:12px 0}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:4px}
+svg text{fill:var(--text);font-size:11px}svg .m{fill:var(--muted)}
+ol,ul{padding-left:20px}li{margin:4px 0}
+.tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+@media (max-width:640px){.kv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{body{font-size:12px}main{padding:0}h2{break-after:avoid}table,figure,.box{break-inside:avoid}.tw{overflow:visible}table{min-width:0}}
+</style>
+</head>
+<body>
+<main>
+<h1>Voice agent: 1000 connected calls</h1>
+<p class="sub">Does the wait for an answer change when 1000 calls are connected? Test results, 4 November 2026.</p>
+
+<div class="box">
+<b>In short</b>
+<ul>
+<li>With <b>1000 calls connected at once</b> on one Apple M3 Pro laptop, none was refused or dropped, and the wait for an answer barely changed: the median went from <b>0.48 s to 0.52 s</b>.</li>
+<li>So the latency <b>did not drop and did not get worse in any way that matters</b>: it stayed the same, as it should when the system is healthy.</li>
+<li>This shows the router, the call-handling workers and the database cope with 1000 connections. It does <b>not</b> show 1000 people talking at once. That needs rented machines (last section).</li>
+</ul>
+</div>
+
+<div class="kv">
+<div><b>1000 / 1000</b><span>calls held open, none refused</span></div>
+<div><b>0.48 to 0.52 s</b><span>median wait, alone then with 1000 connected</span></div>
+<div><b>1 ms</b><span>router answer, median</span></div>
+<div><b>3.5 MB</b><span>memory per connected call</span></div>
+</div>
+
+<h2>What was tested</h2>
+<p>The real router, 4 real call-handling workers, a real PostgreSQL database and the real model (Nemotron on Amazon Bedrock), all on one laptop. The speech recogniser and the voice were replaced by fast stand-ins, so this test measures everything except those two services (they were measured separately, 3 November).</p>
+<ol>
+<li><b>Baseline:</b> 4 real conversations (computer voices speaking to the server through its WebSocket, microphone open, five different conversations) with nothing else connected.</li>
+<li><b>Ramp:</b> 1000 more callers connect over 150 seconds. Each asks the router for a worker, opens the line, hears the greeting, and stays on the line sending a short burst of silence every second.</li>
+<li><b>Hold:</b> with all 1000 connected, the same 4 real conversations run again.</li>
+</ol>
+
+<h2>Result: the wait for an answer</h2>
+<p>Time from the end of the caller's last word to the first sound of the answer, measured on the caller's side.</p>
+<div class="tw"><table>
+<tr><th>4 real conversations</th><th>Turns</th><th>Median</th><th>90th percentile</th><th>Worst</th><th>Over 2 s</th></tr>
+<tr><td>Alone (baseline)</td><td>26</td><td>0.48 s</td><td>1.22 s</td><td>1.49 s</td><td>0%</td></tr>
+<tr class="ok"><td>With 1000 calls connected</td><td>26</td><td>0.52 s</td><td>1.43 s</td><td>1.77 s</td><td>0%</td></tr>
+</table></div>
+<figure>
+<svg viewBox="0 0 520 150" width="100%" role="img" aria-label="Median and 90th percentile wait, alone and with 1000 connected">
+<g class="m"><text x="8" y="24">Median</text><text x="8" y="94">90th percentile</text></g>
+<rect x="110" y="10" width="154" height="18" rx="3" fill="#3b5bdb" opacity=".55"/><text x="270" y="24">0.48 s alone</text>
+<rect x="110" y="34" width="167" height="18" rx="3" fill="#1D9E75"/><text x="283" y="48">0.52 s with 1000 connected</text>
+<rect x="110" y="80" width="391" height="18" rx="3" fill="#3b5bdb" opacity=".55"/><text x="300" y="94">1.22 s alone</text>
+<rect x="110" y="104" width="458" height="18" rx="3" fill="#1D9E75"/><text x="300" y="118">1.43 s with 1000 connected</text>
+</svg>
+<figcaption>The stand-in recogniser and voice answer faster than the real ones, so the absolute waits are lower than the live system's. The comparison alone against connected is what this test is for.</figcaption>
+</figure>
+
+<h2>Result: the 1000 connected calls</h2>
+<div class="tw"><table>
+<tr><th>Measure</th><th>Result</th></tr>
+<tr><td>Calls held open at once</td><td>1000 of 1000, none refused, none dropped, all heard their greeting</td></tr>
+<tr><td>Router answer (which worker takes the call)</td><td>median 1 ms, worst 23 ms</td></tr>
+<tr><td>Open the line to ready</td><td>median 62 ms, worst 219 ms</td></tr>
+<tr><td>Memory of the workers</td><td>2.7 GB empty, about 6.2 GB with 1000 held (about 3.5 MB per call)</td></tr>
+<tr><td>Worker processor while held</td><td>about 1.3 cores in total</td></tr>
+<tr><td>Whole laptop</td><td>busiest 35% of its 12 cores</td></tr>
+</table></div>
+
+<h2>What this does not show</h2>
+<div class="box">
+<ul>
+<li><b>The callers were quiet.</b> They sent one short burst of silence a second. A real browser microphone sends 50 a second, which costs the worker far more. With open microphones the same laptop managed 200 callers (about 2.4% of a core each), and at 400 the wait for 4 real conversations rose from 0.45 s to 7.2 s, because one worker process cannot hold about 100 calls at once. Production allows 16 calls per worker for this reason.</li>
+<li><b>The recogniser and voice were stand-ins.</b> The real ones handle one request at a time and ran out at 12 to 16 talking callers on this laptop (report of 3 November).</li>
+<li><b>One laptop, not a deployment.</b> Real traffic across 60 or more workers, a managed database and real networks has not been tested.</li>
+</ul>
+</div>
+
+<h2>The forecast for 1000 talking callers</h2>
+<p>A simulation built from the measured speeds (same method as the 100 and 200 caller forecast). It is a model, not a test.</p>
+<div class="tw"><table>
+<tr><th>Callers</th><th>Hardware</th><th>Answer median</th><th>90th percentile</th><th>Over 2 s</th></tr>
+<tr><td>100</td><td>8 voice servers, 5 Qwen3 recognisers</td><td>0.57 s</td><td>1.08 s</td><td>0%</td></tr>
+<tr><td>200</td><td>16 voice servers, 9 Qwen3</td><td>0.54 s</td><td>1.06 s</td><td>0%</td></tr>
+<tr class="ok"><td>1000</td><td>80 voice servers, 45 Qwen3</td><td>0.51 s</td><td>0.97 s</td><td>0%</td></tr>
+<tr class="ok"><td>1000</td><td>80 voice servers, 15 Parakeet recognisers</td><td>0.38 s</td><td>0.84 s</td><td>0%</td></tr>
+<tr class="bad"><td>1000</td><td>40 voice servers, 22 Qwen3 (half)</td><td>8.4 s</td><td>9.1 s</td><td>100%</td></tr>
+</table></div>
+<p>Latency stays about the same from 100 to 1000 callers only when the hardware grows with the callers. With half the hardware it collapses.</p>
+
+<h2>What 1000 to 2000 talking callers needs</h2>
+<ul>
+<li>Call-handling workers: about 63 to 72 processes at 16 calls each, roughly 180 processor cores for 1000 callers (twice that for 2000).</li>
+<li>Voice servers: about 80 copies, roughly 160 cores, for 1000 callers.</li>
+<li>Speech recognition: a GPU server that batches requests, or 15 to 45 copies of the recognisers measured here.</li>
+<li>The model on Bedrock: about 100 requests a second at 1000 callers.</li>
+<li>Separate machines to generate the callers, and a managed database and router.</li>
+</ul>
+<p class="note">Why not this laptop: it has 12 processor cores and its voice and recogniser servers handle one request at a time. The voice is slower on the laptop's GPU than on its processor (4.4 against 7.8 seconds of speech per second of work), and the workers are ordinary program code that a GPU does not run. Rough rental cost of a 4 to 6 hour test: about $100 to $200 for machines at 1000 callers, plus the model's token charges, which are the main unknown.</p>
+</main>
+</body>
+</html>
