@@ -3352,3 +3352,29 @@ So letting the model decide everything costs about half a second at the median a
 **Tests:** `tests/unit/test_call_limit.py` (the default, the quiet-call timings, the wiring). Not tested: a real call over 15 minutes, and the cut at 2 hours (the page's single reconnect, then nothing).
 
 **Not covered:** whether a call that hits the 2 hour stop should say something first, and the page's reconnect allowing only one retry per call (so a second cut ends it).
+
+## 112. Does every caller get only their own conversation? A cross-talk test across two workers (5 Nov, the owner: "how would it know it is the same request?")
+
+**The question.** Earlier tests (soak, user journeys) showed many calls working at once, but none put a different, known detail into each caller's mouth and checked that nothing came back on the wrong connection. `scripts/crosstalk_test.py` does (tests: `tests/unit/test_crosstalk.py`, 5).
+
+**What it does.** N booking calls at once through the router, on a two-worker cluster (`run_cluster.py --workers 2`, Bedrock Nemotron, the real Qwen3 recogniser, Pocket voice). Each caller has a full name, a phone number (05599 and five digits nobody else has), a day and time, and its own call id. It then checks: (1) what came back on a caller's connection (what the server heard, what the agent said, the booking message) for any OTHER caller's name or number; (2) each caller's saved conversation in Redis (`call:<id>`) the same way; (3) that finished calls open again on the OTHER worker with the same call id say `resumed`, and that a call id nobody used says it is not.
+
+**Result, three runs on 5 Nov (16, 20 and 20 callers; 56 placed, 52 connected, 4 sent away by the router as busy in the last run).**
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Calls by worker | 8 / 8 | 11 / 9 | 9 / 7 (4 told busy) |
+| Bookings, and whose number | 11, all the caller's own | 2, own | 6, own |
+| Another caller's details heard, said, booked or saved | 0 | 0 | 0 |
+| Saved conversations holding the caller's own details | 16 of 16 | 20 of 20 | 16 of 16 (4 never connected) |
+| Reopened on the other worker: resumed | 4 of 4 | 4 of 4 | 4 of 4 |
+| A call id nobody used: resumed | no | no | no |
+
+* **No mix-up in 52 calls.** Not one booking carried another caller's number, and no caller's heard words, agent words or saved conversation contained anyone else's name or number. The agent's lines checked: 275 in run 2 and 253 in run 3 (run 1 checked the heard words and the saved conversations).
+* **What this shows and not:** a request's answer comes back on its own connection, so it does not need to be matched; a call's conversation is found by its call id in Redis, and any worker can open it. It does not show that nothing could ever mix: it is 52 calls with details I planted, on one machine, in a booking conversation.
+* **"Different places":** where a caller is does not matter to this: nothing uses an address or a place, only the connection and the call id. The test callers all come from this one Mac, so different networks and browsers were not tried (the page keeps its call id in the tab, so another browser starts a new call).
+* **Two flaws in my test, found by running it.** (1) My first check treated the number the server saves (`+971559996030` for `0559996030`) as different, and reported correct bookings as "misheard"; it now compares the last nine digits. (2) A second run gave every caller the same days and times as the first, and 15 of 18 calls with no booking were told "That slot isn't free."; each run now picks its own slots, and the report counts refused slots (9 in run 3, from the earlier runs' bookings).
+* **A recogniser finding on the way:** the number was heard right in every booking (19 of 19), but the name only in 4 (misheard: Malik as Muley, Karim as Kareem, Aziz as "Gazez", Noor as "New"). These callers are the Mac's own `say` voices, so it may be easier or harder than real people. Names are not given to the recogniser as hot-words.
+* **Load:** at 20 callers on this one Mac, 4 callers in run 3 were told busy by the router (the call cap shrinking, as designed).
+
+**Not covered:** callers from different networks or browsers; a worker being replaced mid-call (resume was tested by opening the call again on the other worker, not by stopping one); content other than the booking conversation; real people instead of synthetic voices.
