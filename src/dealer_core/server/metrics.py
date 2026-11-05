@@ -6,6 +6,7 @@
   voice_turn_level_total{level}  turns answered at full / prefix / code quality
   voice_model_in_flight          turns waiting on the model right now
   voice_model_first_ms           the governor's estimate of the model's time to a first sentence
+  voice_model_decide_ms          ... and to name the tool
   voice_answer_seconds           end of the caller's speech -> the answer itself starts (a "Let me check." said first does not count)
   voice_call_cap                 how many calls this worker takes now (measured: server/admission.py)
   voice_reply_p90_seconds        90th percentile of the recent replies (what the cap follows)
@@ -35,6 +36,7 @@ class Metrics:
         self.level = Counter("voice_turn_level_total", "turns by quality level", ["level"], registry=self.registry)
         self.in_flight = Gauge("voice_model_in_flight", "turns waiting on the model", registry=self.registry)
         self.model_ms = Gauge("voice_model_first_ms", "model's estimated time to a first sentence (governor)", registry=self.registry)
+        self.decide_ms = Gauge("voice_model_decide_ms", "model's estimated time to name the tool (governor)", registry=self.registry)
         self.answer = Histogram("voice_answer_seconds", "end of the caller's speech to the start of the answer itself",
                                 buckets=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 10.0), registry=self.registry)
         self.cap = Gauge("voice_call_cap", "calls this worker takes now", registry=self.registry)
@@ -69,6 +71,7 @@ class Metrics:
             snap = governor.snapshot()
             self.in_flight.set(snap["in_flight"])
             self.model_ms.set(snap["full_first_ms"])
+            self.decide_ms.set(snap["decide_ms"])
             for level, n in snap["turns"].items():                 # the governor counts; publish the increase since last time
                 new = n - self._levels_seen.get(level, 0)
                 if new > 0:

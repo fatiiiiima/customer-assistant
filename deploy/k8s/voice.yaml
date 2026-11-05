@@ -44,6 +44,21 @@ spec:
 # Speech recognition for every worker, batched on a GPU. 500 callers end ~5-10 turns a second between them; one GPU transcribes far more than
 # that with large-v3-turbo. Any server with POST /v1/audio/transcriptions works (vLLM below; speaches / faster-whisper-server too): confirm the
 # exact serving flags for the vLLM version you pin, then measure with scripts/capacity_probe.py.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: model-server }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: model-server }
+  minReplicas: 2                                      # one can fail
+  maxReplicas: 24                                     # a GPU each; raise with the callers (see ARCH_REVIEW section 110 for the sizing)
+  metrics:
+    # requests held per model server (running + queued): 64 is where the measured server stopped being linear in the simulation's terms (ASSUMED for the GPU: measure it with a load test on the real card)
+    - type: External
+      external: { metric: { name: model_requests_per_replica }, target: { type: Value, value: "64" } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Percent, value: 100, periodSeconds: 60 }] }      # a new GPU pod loads the model for minutes: ask early
+    scaleDown: { stabilizationWindowSeconds: 600, policies: [{ type: Pods, value: 1, periodSeconds: 300 }] }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: stt-server }
@@ -80,7 +95,10 @@ spec:
       labels: { app: voice-worker }
       annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8765", prometheus.io/path: /metrics }
     spec:
-      terminationGracePeriodSeconds: 900            # let calls in progress finish on a redeploy (a call lasts up to 15 min)
+      # Calls in progress finish on a redeploy, up to 15 minutes. A call has no such limit of its own (voice.max_call_secs: 2 hours; a quiet one ends itself in about 15 s), so one still
+      # running then is cut when the pod stops, and the page reconnects it to another worker with the conversation from Redis (about a second, the sentence being said is lost).
+      # Raise this only if that is not acceptable: a longer grace keeps draining pods (and their cost) around longer.
+      terminationGracePeriodSeconds: 900
       containers:
         - name: worker
           image: agmc/voice:RELEASE_TAG
@@ -92,6 +110,9 @@ spec:
             - { name: VA__VOICE__STT_URL, value: "http://stt-server:8000/v1" }        # recognition on the GPU service, not in the worker
             - { name: VA__VOICE__STT_REMOTE_MODEL, value: "openai/whisper-large-v3-turbo" }
             - { name: VA__VOICE__MODEL_ONLY, value: "false" }      # production: never a test mode (a short model turn is completed by code)
+            # "The model writes every reply": uncomment. The governor then only measures (never code or prefix answers, never sheds a decision); the call cap turns callers away and
+            # the model-server HPA below adds capacity. A model that is down still cannot answer: decide what the caller hears (the fixed line + end the call, or a refused call).
+            # - { name: VA__DIALOGUE__QUALITY, value: "observe" }
             - { name: VA__DIALOGUE__DECISION_BACKEND, value: "gpu_server" }   # the tool decisions go to the same vLLM as the replies (--backend below); the default is the Intel-GPU model
           command: ["sh", "-c"]
           args: ["python -m dealer_core.server --agent --prefix --backend gpu_server --host 0.0.0.0 --port 8765 --max-calls 16

@@ -3319,3 +3319,36 @@ So letting the model decide everything costs about half a second at the median a
 * **Still wrong sometimes:** the model adds praise the figures do not give ("both great for families", "also quick"); it reads a single car's whole spec sheet aloud when one car is found (more so now that the stock has spec sheets); "which one fits your budget?" is asked too often. The checks that drop invented numbers and names do not catch an adjective.
 
 **Not covered:** many callers with this tool, an accuracy count of how often the model picks the right need, and a hand-written list of what the dealership does and does not offer for the writer.
+
+## 110. "The model writes every answer": what the quality governor does then, and what it takes at 1,000 callers (5 Nov, the owner: no code or prefix answers)
+
+**The change.** A fifth governor mode, `observe` (`dialogue.quality = observe`, `agent/governor.py`). It never lowers a turn's level (always `full`), never sheds a decision to the code, and keeps measuring: the probe, the decision time and the first-sentence time still feed `/metrics`, the call cap and the alerts. New: the gauge `voice_model_decide_ms`; the alert `ModelSlowForCallers` (`deploy/alerts.yml`); a `model-server` autoscaler (`deploy/k8s/voice.yaml`, `maxReplicas 24`) that keeps about 64 requests per server (`model_requests_per_replica`, rule in `deploy/prometheus-adapter.yaml`, needs vLLM's `/metrics` scraped); the switch in the worker's environment is in the manifest, commented out, until it is chosen. In the test mode (`model_only`) the governor was already bypassed for the level; `observe` also stops the shedding, and is the setting for the production flags with the same rule.
+
+**Simulation** (`python scripts/simulate_scale.py --model-only`, 1,000 callers, 80 voice servers, 45 Qwen3, up to 72 workers; the model deciding every turn plus one more request a turn nobody waits for, from section 108). Answer time, 10 simulated minutes after the ramp:
+
+| model GPUs (64 requests at once each, ASSUMED) | callers told busy | answer median | 90th | 99th | model requests at once, peak |
+|---|---|---|---|---|---|
+| 1 | 58% | 7.3 s | 10.6 s | 13.0 s | 737 |
+| 2 | 0% | 1.26 s | 1.50 s | 1.72 s | 147 |
+| 3, 4, 8 | 0% | 1.26 s | 1.50 s | 1.72 s | 150 |
+
+* **The model needs about 150 requests at once for 1,000 callers**, so 3 GPUs at the assumed 64 each, 4 to survive one failing. Fewer than that is not slow: with 1 GPU nearly every answer is over 2 s. More than that changes nothing. The 64 per GPU is NOT measured on a real card; it is the figure that has to be measured first. (The earlier 1,000-caller sizing needed fewer, because 4 turns in 5 had the code choose the lookup.)
+* **Nothing is better than 1.26 s at the median**, even with unlimited GPUs: that is the unloaded cost of deciding then writing (recognition 0.2 s, decision 0.23 s, first sentence 0.65 s, voice 0.07 s, minus the reply already written ahead for half the turns). It matches the 1.25 s measured live in section 108. 93% of answers are over 1 s, none over 2 s.
+* **The call cap works against this rule at its present setting.** It shrinks when the 90th percentile passes 1 s, and here it is 1.5 s with an idle model, so no capacity can cure it: with the target at 1 s, 41% of callers were told busy for nothing (4 GPUs). With the target at 2 s, 0%. If the model must answer every turn, the target in `server/admission.py` has to be what the model can do (2 s), or the cap throws callers away.
+* **The cap cannot rescue calls already in.** With 1 GPU the answers were 7 s and still 42% got through: the callers arrived within 90 s, before the first slow answers were measured, and a cap only stops new calls. The model servers must be sized, or scaled ahead, for the callers expected, not after they are in. The model GPUs take minutes to load, so the autoscaler on them (above) would be late for a sudden crowd.
+
+**Not covered:** the 64 requests per GPU (assumed), vLLM's real queueing, the model-server autoscaler and the new alert on a real cluster, what is said when the model is down (nothing replaces it: the owner has to choose between one fixed line and refusing the call), the production flags (`MODEL_ONLY=false` still completes a reply the model left short with the code's facts; "no code answers at all" needs `MODEL_ONLY=true`, a test setting whose checks only note), and the cost of the extra GPUs.
+
+## 111. A call is no longer cut at 15 minutes (5 Nov, the owner: calls go on until the caller stops them)
+
+**Before.** `ServerState.max_call_secs` was a fixed 900 s in `server/app.py`, not settable, and a timer cancelled every call at that time, drain or not. The page reconnected once (same call id, the conversation from Redis) with "Sorry, we got cut off". Nothing in the repo says why it was 15 minutes.
+
+**A correction to what I said earlier.** I said the pipeline's `idle_timeout_secs=None` meant there was no idle check and the 15-minute cap was the only safety net for a forgotten open tab. That was wrong. The brain has its own check (`still_there_secs` 8 s, then `hang_up_secs` 7 s: "Are you still there?", then the goodbye and `silent_end`), so a quiet call ends itself in about 15 s. `idle_timeout_secs=None` is a different Pipecat feature. So the cap was not needed for forgotten tabs, and I did not add a 2 to 3 minute idle check: the existing one is shorter and is the owner's own setting; it is unchanged.
+
+**The change.** `voice.max_call_secs` (config, default 7200 s = 2 hours, 0 = none) is the only limit now, a hard stop for a call that never ends (a noisy room that keeps the call alive). The state is kept (`calls_kept_secs`, 24 h), so a call cut at the limit carries on through the page's reconnect.
+
+**The grace period (`deploy/k8s/voice.yaml`) stays at 900 s.** It used to equal the call limit, so no call could outlast it. Now a call still running 15 minutes after its worker was told to stop is cut when the pod stops, and reconnects (a second or two, the sentence in progress lost). Raising it keeps draining pods (and their cost) longer; it is a choice, written in the manifest's comment.
+
+**Tests:** `tests/unit/test_call_limit.py` (the default, the quiet-call timings, the wiring). Not tested: a real call over 15 minutes, and the cut at 2 hours (the page's single reconnect, then nothing).
+
+**Not covered:** whether a call that hits the 2 hour stop should say something first, and the page's reconnect allowing only one retry per call (so a second cut ends it).

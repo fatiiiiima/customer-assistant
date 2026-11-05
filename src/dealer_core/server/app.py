@@ -44,7 +44,7 @@ class ServerState:
     parts: VoiceParts
     cfg: Config
     max_calls: int = 2
-    max_call_secs: float = 900.0
+    max_call_secs: float = 7200.0         # a hard stop for a call that never ends (voice.max_call_secs); 0 = none
     stop_secs: float = 0.35               # the VAD silence (short when smart_turn is on)
     smart_turn: bool = False
     barge_in: bool = True
@@ -388,10 +388,11 @@ async def run_call(state: ServerState, ws: WebSocket) -> None:
         await send({"type": "line", "who": "agent", "turn": 0, "text": "Sorry, we got cut off for a moment. I'm back: where were we?"})
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
-    limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel()))
+    limit = asyncio.get_running_loop().call_later(state.max_call_secs, lambda: asyncio.create_task(worker.cancel())) if state.max_call_secs > 0 else None
     try:
         await runner.run()
     finally:
-        limit.cancel()
+        if limit is not None:
+            limit.cancel()
         if saver is not None:
             await saver.flush()

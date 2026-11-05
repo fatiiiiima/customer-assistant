@@ -143,3 +143,19 @@ def test_the_new_fields_are_off_by_default_so_the_older_scenarios_are_what_they_
 
     hw = Hardware("x", model_slots=1, decide_ms=1, first_ms=1)
     assert (hw.decide_share, hw.ahead_share, hw.stt_copies, hw.tts_copies) == (1.0, 0.0, 0, 0)
+
+
+def test_model_only_scenario_never_answers_by_code_and_waits_for_the_model():
+    from dataclasses import replace
+
+    from dealer_core.sim.scale import Scenario, model_only_hardware, run
+
+    hw = model_only_hardware("tiny", 4, 3, model_slots=4)                 # far too little model for 30 callers: the answers get slow ...
+    sc = Scenario("30 callers, 4 slots, model-only", hw, [(0, 30)], duration_s=240.0, measure_from_s=60.0, model_only=True, min_workers=4, max_workers=4,
+                  think_s=(1.0, 2.0), agent_speaks_s=(3.0, 5.0))
+    r = run(sc)
+    assert r["by code %"] == 0 and r["shed %"] == 0                        # ... but never a code answer and never a shed turn
+    assert r["model full/prefix/code %"] == "100/0/0"
+    assert r["answer p90"] > 1.0 and r["turns"] > 0
+    fast = run(replace(sc, hardware=model_only_hardware("big", 4, 3, model_slots=400), name="400 slots"))
+    assert fast["answer p90"] < r["answer p90"]                            # more model capacity is the remedy

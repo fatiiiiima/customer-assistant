@@ -14,6 +14,10 @@ groups:
         expr: sum(rate(voice_turn_level_total{level="code"}[5m])) / clamp_min(sum(rate(voice_turn_level_total[5m])), 1e-9) > 0.2
         for: 5m
         annotations: { summary: "More than 20% of turns are answered without the model: the model servers are overwhelmed or failing. Add GPU capacity." }
+      - alert: ModelSlowForCallers                  # the observe mode (the model writes every reply; nothing steps down): the model itself is the signal
+        expr: max(voice_model_first_ms) > 1000 or max(voice_model_decide_ms) > 700
+        for: 3m
+        annotations: { summary: "The model takes too long to name the tool or to start a reply, and nothing replaces it: callers wait, then are turned away. Add model servers (deploy/k8s/voice.yaml model-server HPA) or check them." }
       - alert: WorkerCapsShrinking                  # the measured caps fall: workers are slow because of their own load
         expr: sum(voice_call_cap) < 0.6 * count(voice_call_cap) * 16
         for: 10m

@@ -29,6 +29,8 @@ svg{width:100%;height:auto;display:block;margin-top:8px}
 .gl{fill:var(--text-secondary);font-size:10px}
 .lk{fill:none;stroke:var(--border-strong);stroke-width:1.1;marker-end:url(#ar)}
 .lk.on{stroke:#1D9E75;stroke-width:2.2;marker-end:url(#ag)}
+.lk.two{marker-start:url(#ar)}
+.lk.two.on{marker-start:url(#ag)}
 .lk.dash{stroke-dasharray:3 3}
 .lt{fill:var(--text-secondary);font-size:9px}
 .gantt{position:relative;margin-top:14px}
@@ -59,6 +61,9 @@ ol.life{margin:6px 0 0;padding-left:20px;font-size:13.5px}ol.life li{margin:3px 
 .stage .h{font-weight:500;font-size:15px;margin-bottom:4px}
 .stage .fl{font-size:12.5px;color:var(--text-secondary);margin:2px 0 6px;font-variant-numeric:tabular-nums}
 .stage .fl b{color:var(--text-primary);font-weight:500}
+.how{font-size:12.5px;color:var(--text-secondary);margin-top:8px;line-height:1.5}.how b{color:var(--text-primary);font-weight:500}
+.bd circle{fill:var(--surface-0);stroke:var(--border-strong);stroke-width:1}.bd text{fill:var(--text-secondary);font-size:9px;font-weight:500}.bd.on circle{fill:#1D9E75;stroke:#1D9E75}.bd.on text{fill:#fff}.bd.warn.on circle{fill:#D85A30;stroke:#D85A30}
+.lt{paint-order:stroke;stroke:var(--surface-0);stroke-width:3px;stroke-linejoin:round}
 .dots{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:4px}
 .dots i{width:9px;height:9px;border-radius:50%;background:var(--border-strong);cursor:pointer;display:inline-block}
 .dots i.on{background:#1D9E75}
@@ -86,9 +91,9 @@ main{max-width:820px}
 <body>
 <main>
 <h1>How the workers scale up and down</h1>
-<p class="sub">What sends what to where, step by step, and then a burst of callers played minute by minute with the real autoscaler rules.</p>
+<p class="sub">What sends what to where, step by step.</p>
 
-<h2>Part 1: who tells whom</h2>
+<h2>Who tells whom</h2>
 <div class="bar">
 <button onclick="prev()">Back</button>
 <button id="pp" onclick="toggle()">Pause</button>
@@ -96,52 +101,24 @@ main{max-width:820px}
 <span class="dots" id="dots"></span>
 </div>
 <div class="stage" id="stage"></div>
-<svg viewBox="0 0 760 410" role="img" aria-label="The router, the workers, Redis and the autoscaler, and what each sends to the others">
+<svg viewBox="0 0 800 440" role="img" aria-label="The router, the workers, Redis and the autoscaler, and what each sends to the others">
 <defs>
-<marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#888780"/></marker>
-<marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1D9E75"/></marker>
-<marker id="ao" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#D85A30"/></marker>
+<marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#888780"/></marker>
+<marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#1D9E75"/></marker>
+<marker id="ao" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#D85A30"/></marker>
 </defs>
-<rect class="grp" x="190" y="118" width="388" height="164" rx="10"/>
-<text class="gl" x="200" y="133">Workers: 8 to 72 pods, up to 16 calls each</text>
-<rect class="grp" x="596" y="118" width="156" height="164" rx="10"/>
-<text class="gl" x="606" y="133">Shared services (GPU)</text>
+<rect class="grp" x="200" y="122" width="400" height="176" rx="10"/>
+<text class="gl" x="210" y="137">Workers: 8 to 72 pods, up to 16 calls each</text>
 <g id="links"></g>
 <g id="nodes"></g>
+<g id="badges"></g>
 </svg>
 <div class="key">
 <span><i class="sw" style="background:#1D9E75"></i>Active in this step</span>
-<span><i class="sw" style="background:#7F77DD"></i>A shared service</span>
+<span><i class="sw" style="background:#7F77DD"></i>A separate server, used by every worker</span>
 <span><i class="sw" style="background:#D85A30"></i>Scaling down</span>
 </div>
-
-<h2>Part 2: a burst of callers, minute by minute</h2>
-<p class="sub">Callers wanting a call rise from 100 to 700 within two minutes, stay there for five minutes, then fall to 150 (the chart is capped at a ratio of 4, and the first minutes go higher). The autoscaler follows the rules in <code>deploy/k8s/voice.yaml</code>: target 0.7, between 8 and 72 pods, at most double every 15 seconds going up, 2 pods a minute going down after 5 quiet minutes. A pod takes 90 seconds to load its speech models and start taking calls (an assumed figure: the launcher says "a minute or two"). This is an illustration of the rules, not a measurement of a real cluster.</p>
-<div class="bar">
-<button id="pp2" onclick="toggle2()">Pause</button>
-<button onclick="restart2()">Restart</button>
-<select id="sp2" onchange="speed2=+this.value"><option value="20">20×</option><option value="60" selected>60×</option><option value="120">120×</option></select>
-<input type="range" id="scrub2" min="0" max="2699" step="1" value="0" style="flex:1;min-width:120px" oninput="seek2(+this.value)">
-<span class="clk" id="clk2">0:00</span>
-</div>
-<div class="now" id="now"></div>
-<div class="ch"><svg id="c1" viewBox="0 0 720 150" aria-label="Callers wanting a call against the calls the pods can take"></svg></div>
-<div class="ch"><svg id="c2" viewBox="0 0 720 100" aria-label="The demand ratio the autoscaler watches"></svg></div>
-<div class="key">
-<span><i class="sw" style="background:#3b5bdb"></i>Callers wanting a call</span>
-<span><i class="sw" style="background:#1D9E75"></i>Calls the ready pods can take</span>
-<span><i class="sw" style="background:#D85A30"></i>Turned away (text chat instead)</span>
-<span><i class="sw" style="background:#C98A12"></i>Pod loading its models</span>
-<span><i class="sw" style="background:#D85A30;opacity:.7"></i>Pod draining</span>
-</div>
-<div class="pods" id="pods"></div>
-<div class="stats">
-<div class="s"><b id="s1">0</b><span>Pods (ready + loading)</span></div>
-<div class="s"><b id="s2">0</b><span>Ready, taking calls</span></div>
-<div class="s"><b id="s3">0</b><span>Turned away now</span></div>
-<div class="s"><b id="s4">0</b><span>Demand ratio (target 0.7)</span></div>
-</div>
-<div class="log" id="log"></div>
+<div class="how"><b>How to read the arrows.</b> The number on an arrow is the step in the list above. The arrowhead points to where the information goes. A <b>solid</b> arrow means the sender starts it: it sends, or it calls. A <b>dashed</b> arrow means the receiver asked for it: it reads or pulls. The words on the arrow say what travels. The number is the first step that uses the arrow: the report to Redis (3) is also part of steps 5, 11 and 12, and the Kubernetes arrow (10) is also used in step 12.</div>
 
 <h2>What each part does</h2>
 <div class="tw"><table>
@@ -152,11 +129,14 @@ main{max-width:820px}
 <tr><td>Worker</td><td>Its id, address, calls now, call cap, draining</td><td>Redis</td><td class="t">every 2 s, and when a call starts or ends</td><td>The entry expires after 6 s, so a dead worker drops out by itself</td></tr>
 <tr><td>Router</td><td>(reads) the whole worker list</td><td>from Redis</td><td class="t">every 0.5 s</td><td>Kept in memory, so an assignment never waits for Redis</td></tr>
 <tr><td>Worker</td><td>Its own call cap, from its own reply times</td><td>Redis, in the report</td><td class="t">adjusted every 5 s</td><td>Slow answers (90th percentile over 1 s) cut the cap to 75%; fast ones raise it by one, up to 16</td></tr>
-<tr><td>Worker</td><td>Audio to words, and words to a reply</td><td>Whisper and vLLM, shared</td><td class="t">every turn</td><td>If the model is overloaded the quality governor answers some turns with shorter code-written replies</td></tr>
+<tr><td>Worker</td><td>The caller's audio, to get words</td><td>The recogniser: its own server, Qwen3-ASR or Parakeet on the Mac's GPU (plan, never run: Whisper on a cloud GPU)</td><td class="t">every turn</td><td>One clip at a time per copy: about 23 callers per Qwen3 copy, about 89 per Parakeet copy</td></tr>
+<tr><td>Worker</td><td>The question, to get a decision and a reply</td><td>The model: Nemotron on Amazon Bedrock, run by AWS (plan, never run: vLLM with Qwen3-14B on our own GPUs)</td><td class="t">every turn</td><td>If this worker's own requests to the model get slow, the quality governor steps down to code-written facts, or skips the model for a share of turns</td></tr>
+<tr><td>Worker</td><td>The text to say, to get speech</td><td>The voice: its own server, Pocket-TTS on the Mac's CPU (plan, never run: the voice inside each worker)</td><td class="t">every sentence</td><td>One sentence at a time per copy</td></tr>
+
 <tr><td>Prometheus</td><td>(asks for and reads) calls in progress, call cap, reply times; callers turned away in the last 30 s</td><td>from every worker and the router, on their /metrics pages</td><td class="t">every 15 s</td><td>Callers who were told "busy" are invisible to the workers, so the router counts them</td></tr>
 <tr><td>Metrics adapter</td><td>Demand ratio = (calls + turned away) / all caps</td><td>Autoscaler</td><td class="t">on request</td><td>One number for "how full are we, counting those we refused"</td></tr>
 <tr><td>Autoscaler</td><td>A new number of pods</td><td>Kubernetes</td><td class="t">every 15 s</td><td>Target ratio 0.7: add pods above it (at most double every 15 s, up to 72), remove below it (2 a minute, after 5 minutes, down to 8)</td></tr>
-<tr><td>Kubernetes</td><td>Start a pod, or stop one (SIGTERM)</td><td>Workers</td><td class="t">as asked</td><td>A stopping worker marks itself draining, finishes its calls (up to 15 minutes) and exits</td></tr>
+<tr><td>Kubernetes</td><td>Start a pod, or stop one (SIGTERM)</td><td>Workers</td><td class="t">as asked</td><td>A stopping worker marks itself draining, finishes its calls (it waits up to 15 minutes; a call still going then is cut and carries on from Redis on another worker) and exits</td></tr>
 </tbody></table></div>
 <p class="note">From <code>deploy/k8s/voice.yaml</code>, <code>deploy/prometheus-adapter.yaml</code>, the router (<code>gateway/__main__.py</code>), the worker (<code>server/app.py</code>, <code>server/admission.py</code>, <code>agent/governor.py</code>) and the alerts in <code>deploy/alerts.yml</code>. The scaling rules here have not been run on a real cluster: the deployment file is untested end to end, and the simulation of section 103 of the architecture notes models the same rules against measured speeds.</p>
 </main>
@@ -164,43 +144,51 @@ main{max-width:820px}
 const SVG = "http://www.w3.org/2000/svg";
 function mk(tag, attrs, parent) { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
 
-// ---------------------------------------------------------------- part 1: the diagram
+// ---------------------------------------------------------------- the diagram
 // id, x, y, w, h, title, subtitle, kind (0 ours, 1 shared service, 2 stack of copies)
 const NODES = [
-  ["page", 10, 20, 120, 60, "Caller's page", "browser · WebSocket", 0],
-  ["router", 200, 20, 130, 60, "Router (2 copies)", "GET /assign · in memory", 0],
-  ["redis", 400, 20, 160, 60, "Redis", "worker list · call memory", 0],
-  ["worker", 205, 145, 170, 48, "Worker pod", "calls · VAD · engine", 2],
-  ["cap", 205, 225, 170, 44, "Call cap", "p90 over 1 s: cap × 0.75", 0],
-  ["gov", 395, 225, 170, 44, "Quality governor", "model busy: shorter replies", 0],
-  ["model", 608, 145, 134, 44, "vLLM model", "Qwen3-14B, 2+ GPUs", 1],
-  ["stt", 608, 225, 134, 44, "Whisper STT", "GPU, batched", 1],
-  ["prom", 170, 330, 130, 54, "Prometheus", "scrapes /metrics", 0],
-  ["adapter", 325, 330, 130, 54, "Metrics adapter", "demand ratio", 0],
-  ["hpa", 480, 330, 130, 54, "Autoscaler (HPA)", "target 0.7 · 8 to 72", 0],
-  ["k8s", 635, 330, 115, 54, "Kubernetes", "starts / stops pods", 0]
+  ["page", 10, 20, 110, 60, "Caller's page", "browser · WebSocket", 0],
+  ["router", 230, 20, 130, 60, "Router (2 copies)", "GET /assign · in memory", 0],
+  ["redis", 470, 20, 170, 60, "Redis", "worker list · call memory", 0],
+  ["worker", 215, 150, 360, 48, "Worker pod", "calls · speech detector · turn model · engine", 2],
+  ["cap", 215, 238, 170, 46, "Call cap", "p90 over 1 s: cap × 0.75", 0],
+  ["gov", 410, 238, 165, 46, "Quality governor", "model busy: shorter replies", 0],
+  ["model", 662, 146, 124, 40, "Model", "Bedrock · AWS runs it", 1],
+  ["stt", 662, 196, 124, 40, "Recogniser", "Qwen3 / Parakeet", 1],
+  ["tts", 662, 246, 124, 40, "Voice", "Pocket-TTS server", 1],
+  ["prom", 150, 350, 120, 56, "Prometheus", "scrapes /metrics", 0],
+  ["adapter", 330, 350, 120, 56, "Metrics adapter", "demand ratio", 0],
+  ["hpa", 510, 350, 120, 56, "Autoscaler (HPA)", "target 0.7 · 8 to 72", 0],
+  ["k8s", 690, 350, 100, 56, "Kubernetes", "starts / stops pods", 0]
 ];
+// id, path, pull (dashed: the receiver asks for it), step number, badge x, y, [label lines: text, x, y, anchor], warn (orange in the scale-down step)
 const LINKS = [
-  ["l_ask", "M130,38 L200,38", 0, "GET /assign", 165, 31],
-  ["l_addr", "M200,64 L130,64", 0, "worker or busy", 165, 76],
-  ["l_call", "M30,80 L30,167 L205,167", 0, "the call (WebSocket)", 112, 160],
-  ["l_report", "M300,145 L300,106 L470,106 L470,80", 0, "reports every 2 s", 385, 100],
-  ["l_read", "M400,50 L330,50", 0, "reads 0.5 s", 365, 43],
-  ["l_cap", "M290,225 L290,193", 0, "", 0, 0],
-  ["l_gov", "M470,225 L375,188", 0, "", 0, 0],
-  ["l_model", "M375,160 L608,160", 0, "audio, words", 495, 154],
-  ["l_stt", "M375,180 L608,236", 0, "", 0, 0],
-  ["l_sw", "M385,282 L385,306 L235,306 L235,330", 0, "Prometheus asks /metrics", 392, 296],
-  ["l_sr", "M215,80 L215,104 L150,104 L150,357 L170,357", 1, "router /metrics, 15 s", 78, 300],
-  ["l_p2a", "M300,357 L325,357", 0, "", 0, 0],
-  ["l_a2h", "M455,357 L480,357", 0, "", 0, 0],
-  ["l_h2k", "M610,357 L635,357", 0, "", 0, 0],
-  ["l_k8s", "M670,330 L545,282", 0, "start / stop pods", 640, 298, 1]
+  ["l_ask", "M120,38 L230,38", 0, 1, 175, 38, [["asks for a worker", 175, 28, "middle"]]],
+  ["l_addr", "M230,62 L120,62", 0, 1, 175, 62, [["address, or busy", 175, 78, "middle"]]],
+  ["l_call", "M40,80 L40,174 L215,174", 0, 2, 40, 128, [["the call:", 48, 118, "start"], ["audio in,", 48, 128, "start"], ["speech out", 48, 138, "start"]]],
+  ["l_report", "M330,150 L330,110 L555,110 L555,80", 0, 3, 440, 110, [["reports its load, every 2 s", 440, 102, "middle"]]],
+  ["l_read", "M470,50 L360,50", 1, 4, 415, 50, [["reads the list", 415, 40, "middle"], ["every 0.5 s", 415, 69, "middle"]]],
+  ["l_cap", "M300,238 L300,198", 0, 5, 300, 218, [["new cap,", 308, 214, "start"], ["every 5 s", 308, 224, "start"]]],
+  ["l_gov", "M492,238 L492,198", 0, 6, 492, 218, [["quality level", 500, 218, "start"]]],
+  ["l_model", "M587,158 L662,162", 0, 6, 618, 160, [["question, reply", 618, 150, "middle"]]],
+  ["l_stt", "M587,174 L662,214", 0, 6, 618, 194, [["audio, words", 598, 177, "start"]]],
+  ["l_tts", "M587,190 L662,264", 0, 6, 618, 227, [["text, speech", 626, 252, "end"]]],
+  ["l_sw", "M400,298 L400,326 L210,326 L210,350", 1, 7, 305, 326, [["Prometheus asks /metrics", 410, 313, "start"], ["every 15 s: calls, cap, times", 410, 323, "start"]]],
+  ["l_sr", "M250,80 L250,104 L125,104 L125,378 L150,378", 1, 7, 125, 250, [["router /metrics", 117, 232, "end"], ["every 15 s", 117, 242, "end"]]],
+  ["l_p2a", "M270,378 L330,378", 1, 8, 300, 378, [["stored", 300, 360, "middle"], ["numbers", 300, 370, "middle"]]],
+  ["l_a2h", "M450,378 L510,378", 1, 9, 480, 378, [["demand", 480, 360, "middle"], ["ratio", 480, 370, "middle"]]],
+  ["l_h2k", "M630,378 L690,378", 0, 10, 660, 378, [["new pod", 660, 360, "middle"], ["count", 660, 370, "middle"]]],
+  ["l_k8s", "M730,350 L590,298", 0, 10, 665, 324, [["start or stop pods", 668, 307, "middle"]], 1]
 ];
-const linkEl = {}, nodeEl = {}, textEl = {};
-LINKS.forEach(([id, d, dash, label, lx, ly, warn]) => {
-  linkEl[id] = mk("path", { d, class: "lk" + (dash ? " dash" : "") + (warn ? " warn" : ""), id }, document.getElementById("links"));
-  if (label) { const t = mk("text", { x: lx, y: ly, class: "lt", "text-anchor": "middle" }, document.getElementById("links")); t.textContent = label; textEl[id] = t; }
+const TWO = new Set(["l_call", "l_model", "l_stt", "l_tts"]);     // arrows that carry something both ways: arrowheads at both ends
+const linkEl = {}, nodeEl = {}, textEl = {}, badgeEl = {};
+LINKS.forEach(([id, d, pull, n, bx, by, labels, warn]) => {
+  linkEl[id] = mk("path", { d, class: "lk" + (pull ? " dash" : "") + (warn ? " warn" : "") + (TWO.has(id) ? " two" : ""), id }, document.getElementById("links"));
+  textEl[id] = labels.map(([text, x, y, anchor]) => { const e = mk("text", { x, y, class: "lt", "text-anchor": anchor }, document.getElementById("links")); e.textContent = text; return e; });
+  const g = mk("g", { class: "bd" }, document.getElementById("badges"));
+  mk("circle", { cx: bx, cy: by, r: 7.5 }, g);
+  mk("text", { x: bx, y: by + 3, "text-anchor": "middle" }, g).textContent = n;
+  badgeEl[id] = g;
 });
 NODES.forEach(([id, x, y, w, h, t, s, kind]) => {
   const g = mk("g", { class: "nd" + (kind === 1 ? " ext" : "") }, document.getElementById("nodes"));
@@ -210,17 +198,14 @@ NODES.forEach(([id, x, y, w, h, t, s, kind]) => {
   mk("text", { x: x + 9, y: y + 33, class: "s" }, g).textContent = s;
   nodeEl[id] = g;
 });
-textEl["l_sw"].setAttribute("text-anchor", "start");
-textEl["l_sw2"] = mk("text", { x: 392, y: 306, class: "lt", "text-anchor": "start" }, document.getElementById("links"));
-textEl["l_sw2"].textContent = "every 15 s: calls, cap, times";
-mk("text", { x: 400, y: 168, class: "gl" }, document.getElementById("links")).textContent = "× 8 to 72 copies of this pod";
+mk("text", { x: 565, y: 140, class: "gl", "text-anchor": "end" }, document.getElementById("links")).textContent = "× 8 to 72 copies";
 
 // every stage: title, from -> to, the text, nodes on, links on, (scaling down = orange nodes)
 const STAGES = [
   { t: "1. A caller asks for a worker", fl: "<b>Page → Router</b>  GET /assign   ·   <b>Router → Page</b>  the address of one worker, or \"busy\"",
     d: "Once per call. The router answers from a list it already holds in memory, so it never waits for a database. It draws two workers that have room, gives the call to the emptier one, and counts that call against the worker for 3 seconds so a burst does not all go to the same one. If every worker is full it answers 503 busy and the page offers text chat.",
     nodes: ["page", "router"], links: ["l_ask", "l_addr"] },
-  { t: "2. The call goes straight to the worker", fl: "<b>Page → Worker</b>  WebSocket: the microphone's audio in, the agent's speech out",
+  { t: "2. The call goes straight to the worker", fl: "<b>Page ⇄ Worker</b>  WebSocket: the microphone's audio to the worker, the agent's speech back to the page",
     d: "The page connects to the address it was given (through the ingress, to that one pod). Audio never passes through the router, so the router is never the bottleneck and can run as several copies. The call stays on this worker for its whole length.",
     nodes: ["page", "worker"], links: ["l_call"] },
   { t: "3. Each worker reports its load", fl: "<b>Worker → Redis</b>  id, address, calls now, call cap, draining   ·   every 2 s, and when a call starts or ends",
@@ -232,9 +217,9 @@ const STAGES = [
   { t: "5. Each worker sets its own cap", fl: "<b>Call cap → Worker</b>  a new number of calls it will take, reported in step 3",
     d: "Every 5 seconds the worker looks at the 90th percentile of its recent answer times. Slower than 1 second: the cap drops to 75% (calls already running are never dropped, new ones go to other workers). Faster than 0.9 seconds while the cap is what limits it: the cap rises by one, up to 16. If a cut does not make replies faster, it is undone, because the slowness is somewhere else.",
     nodes: ["worker", "cap", "redis"], links: ["l_cap", "l_report"] },
-  { t: "6. What a worker asks the shared services", fl: "<b>Worker → Whisper</b>  the caller's audio   ·   <b>Worker ⇄ vLLM</b>  the question, the reply   ·   every turn",
-    d: "Recognition and the model run on GPU servers shared by every worker, not inside the worker. If the model is overloaded, the quality governor answers some turns with shorter, code-written replies instead of waiting, and an alert fires when more than 20% of turns are answered that way.",
-    nodes: ["worker", "gov", "model", "stt"], links: ["l_gov", "l_model", "l_stt"] },
+  { t: "6. What a worker asks the three servers", fl: "<b>Worker ⇄ recogniser</b>  the caller's audio out, the words back   ·   <b>Worker ⇄ model</b>  the question out, the reply back   ·   <b>Worker ⇄ voice</b>  the text out, the speech back   ·   every turn",
+    d: "The model, the recogniser and the voice are three separate servers, each its own thing on its own machine or service, and none of them is inside a worker. Each one is used by every worker: a worker does not have a copy of its own. They are not one GPU service. As the system runs today: the model is Nemotron on Amazon Bedrock, which AWS runs (we cannot add servers to it, only stay within the request limits our account is given); the recogniser is Qwen3-ASR or Parakeet on the Mac's GPU, one clip at a time (about 23 or 89 callers per copy); the voice is Pocket-TTS on the Mac's CPU, one sentence at a time. In the deployment file (never run) the model and the recogniser would instead be vLLM (Qwen3-14B) and Whisper on cloud GPUs, and the voice would run inside each worker. Each arrow to these servers has a head at both ends: the worker sends a request and gets the answer back. The speech from the voice comes back to the worker, and the worker passes it to the caller's page over the call (step 2); it does not go from the voice straight to the page. The quality governor in each worker cannot see those servers. It watches how long the model takes to answer that worker's own requests: the time to a decision, and the time to the first sentence of a reply. If the first sentence takes longer than 0.7 seconds, turns step down: code says the facts at once and the model adds only a short follow-up. If decisions take longer than 0.45 seconds, a growing share of turns, up to 90%, skip the model and are answered by code. A small test request every 20 seconds shows when the model has recovered. An alert fires when more than 20% of turns over 5 minutes were answered by code. A slow network looks the same as a slow model.",
+    nodes: ["worker", "gov", "model", "stt", "tts"], links: ["l_gov", "l_model", "l_stt", "l_tts"] },
   { t: "7. Prometheus collects the numbers", fl: "<b>Prometheus asks every worker and the router for /metrics, every 15 s</b>   ·   the answer: calls in progress, call cap, answer times; from the router, callers turned away in the last 30 s",
     d: "Nothing is sent to Prometheus: it pulls. Every 15 seconds it makes a plain web request to each pod's /metrics page and stores what comes back with a timestamp. The workers and the router do not know it exists. The workers cannot see the callers they refused, because those never reached a worker. The router counts every \"busy\" it answers, and that count is what makes the autoscaler react before callers pile up.",
     nodes: ["worker", "router", "prom"], links: ["l_sw", "l_sr"] },
@@ -251,7 +236,7 @@ const STAGES = [
     d: "From its first report the pod is in the list. Within half a second the router can give it calls, and the power-of-two draw sends it a share at once because it is the emptiest. Nobody has to register it.",
     nodes: ["worker", "redis", "router"], links: ["l_report", "l_read"] },
   { t: "12. Scaling down: a pod drains", fl: "<b>Kubernetes → Worker</b>  stop (SIGTERM)   ·   <b>Worker → Redis</b>  draining   ·   <b>Redis → Router</b>  skip this one",
-    d: "The worker marks itself draining and tells Redis at once. The router stops giving it new calls, but the calls in progress go on. Kubernetes waits up to 15 minutes for them to finish before the pod is removed, so scaling down never cuts a caller off. This is also why it shrinks slowly: calls last minutes.",
+    d: "The worker marks itself draining and tells Redis at once. The router stops giving it new calls, but the calls in progress go on. Kubernetes waits up to 15 minutes for them to finish before the pod is removed. Most calls are over by then, because a quiet call ends itself within about 15 seconds. A call still going at 15 minutes is cut when the pod stops; the page reconnects it to another worker within a second or two, and the conversation carries on from Redis (the sentence being said is lost). A call has no time limit of its own except a hard stop at 2 hours. This is also why it shrinks slowly: calls last minutes.",
     nodes: ["k8s", "worker", "redis", "router"], links: ["l_k8s", "l_report", "l_read"], warn: true }
 ];
 let stage = 0, playing = true, timer = null;
@@ -261,7 +246,12 @@ function show() {
   const s = STAGES[stage];
   document.getElementById("stage").innerHTML = '<div class="h">' + s.t + '</div><div class="fl">' + s.fl + '</div><div>' + s.d + '</div>';
   for (const id in nodeEl) nodeEl[id].setAttribute("class", "nd" + (["model", "stt"].includes(id) ? " ext" : "") + (s.nodes.includes(id) ? " on" : "") + (s.warn && s.nodes.includes(id) ? " warn" : ""));
-  for (const id in linkEl) { const on = s.links.includes(id); linkEl[id].setAttribute("class", "lk" + (LINKS.find(l => l[0] === id)[2] ? " dash" : "") + (id === "l_k8s" && s.warn ? " warn" : "") + (on ? " on" : "")); if (textEl[id]) textEl[id].setAttribute("class", "lt" + (on ? " on" : "")); if (id === "l_sw") textEl["l_sw2"].setAttribute("class", "lt" + (on ? " on" : "")); }
+  for (const id in linkEl) {
+    const on = s.links.includes(id), pull = LINKS.find(l => l[0] === id)[2], warn = id === "l_k8s" && s.warn;
+    linkEl[id].setAttribute("class", "lk" + (pull ? " dash" : "") + (id === "l_k8s" ? " warn" : "") + (TWO.has(id) ? " two" : "") + (on ? " on" : ""));
+    textEl[id].forEach(e => e.setAttribute("class", "lt" + (on ? " on" : "")));
+    badgeEl[id].setAttribute("class", "bd" + (on ? " on" : "") + (warn && on ? " warn" : ""));
+  }
   [...dotsEl.children].forEach((d, i) => d.className = i === stage ? "on" : "");
 }
 function next() { stage = (stage + 1) % STAGES.length; show(); restartTimer(); }
@@ -270,87 +260,6 @@ function restartTimer() { clearInterval(timer); if (playing) timer = setInterval
 function toggle() { playing = !playing; document.getElementById("pp").textContent = playing ? "Pause" : "Play"; restartTimer(); }
 show(); restartTimer();
 
-// ---------------------------------------------------------------- part 2: the burst, run with the autoscaler's rules
-const T = 2700, PER = 16, TARGET = 0.7, MINR = 8, MAXR = 72, START = 90, DRAIN = 60, SYNC = 15, DOWNWIN = 300, DOWNPER = 60, DOWNPODS = 2;
-function demand(t) { if (t < 60) return 100; if (t < 180) return 100 + 600 * (t - 60) / 120; if (t < 480) return 700; if (t < 600) return 700 - 550 * (t - 480) / 120; return 150; }
-const sim = { wanted: [], cap: [], turned: [], ratio: [], replicas: [], ready: [], pods: [], events: [] };
-(function run() {
-  const slots = Array.from({ length: MAXR }, () => null);            // {state, since}
-  for (let i = 0; i < 9; i++) slots[i] = { state: 2, since: -999 };
-  const recs = []; let lastDown = -999, firstTurn = null, turning = false;
-  const ev = (t, text) => sim.events.push({ t, text });
-  const count = s => slots.filter(p => p && p.state === s).length;
-  ev(0, "9 pods are running and 100 callers want a call: ratio 0.69, just under the 0.7 target.");
-  for (let t = 0; t < T; t++) {
-    let becameReady = 0;
-    slots.forEach((p, i) => { if (!p) return; if (p.state === 1 && t - p.since >= START) { p.state = 2; p.since = t; becameReady++; } else if (p.state === 3 && t - p.since >= DRAIN) slots[i] = null; });
-    if (becameReady) ev(t, becameReady + " pod" + (becameReady > 1 ? "s have" : " has") + " loaded its models, reported to Redis and is taking calls.");
-    const ready = count(2), starting = count(1), draining = count(3);
-    const D = demand(t), cap = ready * PER, active = Math.min(D, cap), turned = Math.max(0, D - cap);
-    const ratio = (active + turned) / (Math.max(1, (ready + draining) * PER));
-    if (turned > 0 && !turning) { turning = true; ev(t, "Every ready pod is full: callers are being turned away (they get text chat). The router counts them, and the ratio rises."); }
-    if (turned === 0 && turning) { turning = false; ev(t, "Enough pods are ready: nobody is turned away any more."); }
-    if (t > 0 && t % SYNC === 0) {
-      const replicas = ready + starting;
-      const desired = Math.min(MAXR, Math.max(MINR, Math.ceil(replicas * ratio / TARGET)));
-      recs.push({ t, desired });
-      if (desired > replicas) {
-        const add = Math.min(desired - replicas, replicas);                // at most doubling
-        let n = 0; for (let i = 0; i < MAXR && n < add; i++) if (!slots[i]) { slots[i] = { state: 1, since: t }; n++; }
-        if (n) ev(t, "Ratio " + ratio.toFixed(2) + " is above 0.7: the autoscaler asks for " + (replicas + n) + " pods (it wanted " + desired + "; at most double every 15 s). " + n + " new pods start loading.");
-      } else if (desired < replicas) {
-        const hold = Math.max(...recs.filter(r => r.t > t - DOWNWIN).map(r => r.desired));
-        if (hold < replicas && t - lastDown >= DOWNPER) {
-          let rem = Math.min(DOWNPODS, replicas - hold, replicas - MINR), n = 0;
-          for (let i = MAXR - 1; i >= 0 && n < rem; i--) if (slots[i] && slots[i].state === 1) { slots[i] = null; n++; }
-          for (let i = MAXR - 1; i >= 0 && n < rem; i--) if (slots[i] && slots[i].state === 2) { slots[i] = { state: 3, since: t }; n++; }
-          if (n) { lastDown = t; ev(t, "Demand has been low for 5 minutes: " + n + " pods are told to stop. They mark themselves draining; their calls finish first."); }
-        }
-      }
-    }
-    sim.wanted.push(D); sim.cap.push(cap); sim.turned.push(turned); sim.ratio.push(ratio); sim.replicas.push(ready + starting); sim.ready.push(ready);
-    sim.pods.push(slots.map(p => p ? p.state : 0));
-  }
-})();
-
-const W = 720;
-function chart(el, h, series, ymax, extra) {
-  el.innerHTML = "";
-  const x = t => 40 + (W - 50) * t / T, y = v => h - 16 - (h - 26) * Math.min(v, ymax) / ymax;
-  for (let i = 0; i <= 4; i++) { const v = ymax * i / 4; mk("line", { x1: 40, x2: W - 10, y1: y(v), y2: y(v), class: "gridl" }, el); mk("text", { x: 34, y: y(v) + 3, class: "axl", "text-anchor": "end" }, el).textContent = Math.round(v); }
-  for (let m = 0; m <= 45; m += 5) mk("text", { x: x(m * 60), y: h - 3, class: "axl", "text-anchor": m === 45 ? "end" : "middle" }, el).textContent = m + " min";
-  extra && extra(el, x, y);
-  series.forEach(([data, color, wd, dash]) => { mk("polyline", { points: data.map((v, t) => x(t) + "," + y(v)).join(" "), fill: "none", stroke: color, "stroke-width": wd || 1.6, "stroke-dasharray": dash || "" }, el); });
-}
-chart(document.getElementById("c1"), 150, [[sim.wanted, "#3b5bdb"], [sim.cap, "#1D9E75", 2]], 1200, (el, x, y) => {
-  let d = "M" + x(0) + "," + y(0); for (let t = 0; t < T; t++) d += " L" + x(t) + "," + y(sim.wanted[t]); for (let t = T - 1; t >= 0; t--) d += " L" + x(t) + "," + y(Math.min(sim.wanted[t], sim.cap[t])); mk("path", { d: d + " Z", fill: "#D85A30", opacity: ".35" }, el);
-});
-chart(document.getElementById("c2"), 100, [[sim.ratio, "#7F77DD", 1.6]], 4, (el, x, y) => {
-  mk("line", { x1: 40, x2: W - 10, y1: y(TARGET), y2: y(TARGET), stroke: "#1D9E75", "stroke-width": 1.2, "stroke-dasharray": "4 3" }, el);
-  mk("text", { x: W - 12, y: y(TARGET) - 3, class: "axl", "text-anchor": "end" }, el).textContent = "target 0.7";
-});
-const cur1 = mk("line", { y1: 8, y2: 134, stroke: "currentColor", "stroke-width": 1, opacity: ".7" }, document.getElementById("c1"));
-const cur2 = mk("line", { y1: 6, y2: 84, stroke: "currentColor", "stroke-width": 1, opacity: ".7" }, document.getElementById("c2"));
-const podsEl = document.getElementById("pods"); const podDivs = [];
-for (let i = 0; i < MAXR; i++) { const d = document.createElement("div"); d.className = "pod"; podsEl.appendChild(d); podDivs.push(d); }
-let t2 = 0, playing2 = true, speed2 = 60, last = performance.now();
-function render2() {
-  const i = Math.min(T - 1, Math.floor(t2)), cx = 40 + (W - 50) * i / T;
-  cur1.setAttribute("x1", cx); cur1.setAttribute("x2", cx); cur2.setAttribute("x1", cx); cur2.setAttribute("x2", cx);
-  const load = sim.cap[i] ? Math.min(1, sim.wanted[i] / sim.cap[i]) : 1;
-  sim.pods[i].forEach((s, k) => { const d = podDivs[k]; d.className = "pod" + (s === 1 ? " st" : s === 2 ? " rd" : s === 3 ? " dr" : ""); d.style.opacity = s === 2 ? (0.45 + 0.55 * load) : ""; });
-  const pods = sim.replicas[i], ready = sim.ready[i], turned = Math.round(sim.turned[i]);
-  document.getElementById("s1").textContent = pods; document.getElementById("s2").textContent = ready; document.getElementById("s3").textContent = turned; document.getElementById("s4").textContent = sim.ratio[i].toFixed(2);
-  document.getElementById("clk2").textContent = Math.floor(i / 60) + ":" + String(i % 60).padStart(2, "0"); document.getElementById("scrub2").value = i;
-  document.getElementById("now").innerHTML = "<b>" + Math.round(sim.wanted[i]) + "</b> callers want a call. <b>" + ready + "</b> ready pods take up to <b>" + sim.cap[i] + "</b>. " + (turned > 0 ? "<b>" + turned + "</b> are turned away." : "Nobody is turned away.") + " The autoscaler sees a ratio of <b>" + sim.ratio[i].toFixed(2) + "</b> and " + (sim.ratio[i] > TARGET + 0.01 ? "wants more pods." : sim.ratio[i] < TARGET - 0.15 ? "has room to remove pods when it has been this low for 5 minutes." : "is about where it wants to be.");
-  const shown = sim.events.filter(e => e.t <= i).slice(-6);
-  document.getElementById("log").innerHTML = shown.map(e => '<div><span class="t">' + Math.floor(e.t / 60) + ":" + String(e.t % 60).padStart(2, "0") + "</span>" + e.text + "</div>").join("");
-}
-function tick(now) { const dt = (now - last) / 1000; last = now; if (playing2) { t2 += dt * speed2; if (t2 >= T) t2 = 0; render2(); } requestAnimationFrame(tick); }
-function toggle2() { playing2 = !playing2; document.getElementById("pp2").textContent = playing2 ? "Pause" : "Play"; }
-function restart2() { t2 = 0; playing2 = true; document.getElementById("pp2").textContent = "Pause"; render2(); }
-function seek2(v) { t2 = v; render2(); }
-render2(); requestAnimationFrame(tick);
 </script>
 </body>
 </html>

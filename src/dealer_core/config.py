@@ -185,7 +185,7 @@ class DialogueCfg(_Strict):
     reply_max_words: int = 0                     # ask the model for at most this many words (0 = no limit; voice sets one)
     max_reply_tokens: int = 70                   # cap on the model-written reply (the main driver of reply time)
     decision_backend: str | None = "openvino_gpu"   # agent engine: the (smaller, faster) model that picks the tool each turn; None = the reply model
-    quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code (agent/governor.py)
+    quality: str = "auto"                        # agent engine: auto (per turn, from the model's live speed) | full | prefix | code | observe (always full, never sheds, still measures) (agent/governor.py)
     model_budget_ms: float = 700.0               # auto: time to the model's first sentence that still keeps the reply under ~1 s; slower -> prefix
     model_shed_after_ms: float = 450.0           # auto: past this measured decision time a growing share of turns skip the model (load shedding; 0 = never)
     explore_every: int = 0                       # auto: test the model-written level on every Nth caller's turn while stepped down (0 = never; the voice server measures with a background probe instead)
@@ -273,6 +273,7 @@ class VoiceCfg(_Strict):
     greet_if_quiet_secs: float = 3.0              # voice server: the caller speaks first; the greeting is said only after this much quiet at the start (owner, 30 Oct). 0 = greet at once
     still_there_secs: float = 8.0                 # voice server: after the agent has finished, this much quiet gets "Hello? Are you still there?". 0 = never
     hang_up_secs: float = 7.0                     # ...and this much more ends the call, after "I'll end the call here...". The call can be carried on for calls_kept_secs. 0 = never
+    max_call_secs: float = 7200.0                 # voice server: the longest one call may last (5 Nov, the owner: calls go on until the caller stops them, so this only keeps a call that never ends, from holding a place forever). Was a fixed 900 (15 minutes). A quiet call already ends by itself after still_there_secs + hang_up_secs. The call is kept (calls_kept_secs), so the page's reconnect carries on. 0 = no limit
     calls_kept_secs: float = 86400.0              # a call is remembered this long after its last turn: the visitor who comes back carries on where they were, until they close the browser (the page forgets the call then). Was 900 (15 minutes); a day is the ceiling for a browser left open (owner, 3 Nov)
     decide_deadline_ms: float = 1200.0           # agent: the model's tool decision must come within this, else the code decides (was 5 s)
     admission: bool = True                       # voice server: the call cap follows the measured reply times (server/admission.py); --max-calls is the ceiling

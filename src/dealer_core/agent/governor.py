@@ -17,6 +17,10 @@ the result. `explore_every` (testing on a live turn) stays available for the tex
 This is what lets the same code run on any machine: on a fast GPU nearly every turn is `full`; on a laptop or at peak load turns become
 `prefix`, and only an overloaded or failing model pushes them to `code`. Nothing waits on a slow model to finish before speaking.
 
+observe (a fifth mode, for "the model writes every reply, no code or prefix answers"): the governor never changes a turn's level and never sheds a decision. It keeps
+measuring (the probe, the decision time, the first sentence), so `/metrics`, the call cap and the model servers' scaling still see how loaded the model is. What protects
+callers then is turning callers away (the call cap) and adding model capacity, not a different kind of answer.
+
 Load shedding (`shed_after_ms`): the levels only change how the reply is WRITTEN; a turn the code cannot route still asks the model which action
 to take. When the model server is overwhelmed (a GPU fails, a traffic spike) those decisions queue behind each other and every caller waits.
 So once the measured decision time passes `shed_after_ms`, a growing share of turns (up to 90%) skip the model altogether and the code decides
@@ -44,7 +48,7 @@ class GovernorStats:
 class QualityGovernor:
     def __init__(self, mode: str = "auto", budget_ms: float = 700.0, max_in_flight_full: int = 0, max_in_flight_model: int = 0,
                  explore_every: int = 0, alpha: float = 0.3, shed_after_ms: float = 0.0, rng: random.Random | None = None, clock=None) -> None:
-        self.mode = mode                         # auto | full | prefix | code
+        self.mode = mode                         # auto | full | prefix | code | observe (always full, never sheds, still measures)
         self.budget_ms = budget_ms
         self.max_full = max_in_flight_full       # 0 = no cap of its own (the latency estimate decides)
         self.max_model = max_in_flight_model     # 0 = no cap; above it, turns are spoken by code
@@ -62,7 +66,9 @@ class QualityGovernor:
     def choose(self) -> str:
         """The level for the next turn."""
         with self._lock:
-            if self.mode != "auto":
+            if self.mode == "observe":
+                level = "full"
+            elif self.mode != "auto":
                 level = self.mode
             elif self.max_model and self.stats.in_flight >= self.max_model:
                 level = "code"
@@ -102,6 +108,8 @@ class QualityGovernor:
     def has_room(self) -> bool:
         """Can the model take extra work that may be thrown away (a decision made ahead of time)? Not while it is slow or nearly full."""
         with self._lock:
+            if self.mode == "observe":
+                return True
             if self.mode == "code" or (self.max_model and self.stats.in_flight >= max(1, self.max_model // 2)):
                 return False
             return self.stats.full_first_ms is None or self.stats.full_first_ms <= 2 * self.budget_ms
@@ -110,7 +118,7 @@ class QualityGovernor:
         """May this turn ask the model at all? No for a share of turns that grows with how far the decision time is past `shed_after_ms`
         (twice it: 90% shed). The rest keep measuring the model, so shedding stops by itself when it recovers."""
         with self._lock:
-            if not self.shed_after_ms or self.stats.decide_ms is None:
+            if self.mode == "observe" or not self.shed_after_ms or self.stats.decide_ms is None:
                 return True
             share = min(0.9, max(0.0, (self.stats.decide_ms - self.shed_after_ms) / self.shed_after_ms))
             if self._rng.random() < share:
@@ -132,7 +140,7 @@ class QualityGovernor:
             if self.stats.decide_ms is None:
                 return None
             first = self.stats.full_first_ms
-            writing = first if (self.mode in ("auto", "full") and first is not None and first <= self.budget_ms) else 0.0
+            writing = first if (first is not None and (self.mode == "observe" or (self.mode in ("auto", "full") and first <= self.budget_ms))) else 0.0
             return self.stats.decide_ms + writing
 
     @contextmanager
