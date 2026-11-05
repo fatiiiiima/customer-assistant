@@ -1,0 +1,1 @@
+{"version": "0.0.1", "configurations": [{"name": "stock-api", "runtimeExecutable": "uv", "runtimeArgs": ["run", "python", "-m", "dealer_core.inventory", "serve", "--port", "8070", "--db", "sqlite:////Users/fatima/dev/voice-agent/data/stock.db"], "port": 8070}]}
