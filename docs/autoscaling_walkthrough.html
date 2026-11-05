@@ -153,7 +153,7 @@ main{max-width:820px}
 <tr><td>Router</td><td>(reads) the whole worker list</td><td>from Redis</td><td class="t">every 0.5 s</td><td>Kept in memory, so an assignment never waits for Redis</td></tr>
 <tr><td>Worker</td><td>Its own call cap, from its own reply times</td><td>Redis, in the report</td><td class="t">adjusted every 5 s</td><td>Slow answers (90th percentile over 1 s) cut the cap to 75%; fast ones raise it by one, up to 16</td></tr>
 <tr><td>Worker</td><td>Audio to words, and words to a reply</td><td>Whisper and vLLM, shared</td><td class="t">every turn</td><td>If the model is overloaded the quality governor answers some turns with shorter code-written replies</td></tr>
-<tr><td>Prometheus</td><td>(reads) calls in progress, call cap, reply times; callers turned away in the last 30 s</td><td>from every worker and the router</td><td class="t">every scrape</td><td>Callers who were told "busy" are invisible to the workers, so the router counts them</td></tr>
+<tr><td>Prometheus</td><td>(asks for and reads) calls in progress, call cap, reply times; callers turned away in the last 30 s</td><td>from every worker and the router, on their /metrics pages</td><td class="t">every 15 s</td><td>Callers who were told "busy" are invisible to the workers, so the router counts them</td></tr>
 <tr><td>Metrics adapter</td><td>Demand ratio = (calls + turned away) / all caps</td><td>Autoscaler</td><td class="t">on request</td><td>One number for "how full are we, counting those we refused"</td></tr>
 <tr><td>Autoscaler</td><td>A new number of pods</td><td>Kubernetes</td><td class="t">every 15 s</td><td>Target ratio 0.7: add pods above it (at most double every 15 s, up to 72), remove below it (2 a minute, after 5 minutes, down to 8)</td></tr>
 <tr><td>Kubernetes</td><td>Start a pod, or stop one (SIGTERM)</td><td>Workers</td><td class="t">as asked</td><td>A stopping worker marks itself draining, finishes its calls (up to 15 minutes) and exits</td></tr>
@@ -190,8 +190,8 @@ const LINKS = [
   ["l_gov", "M470,225 L375,188", 0, "", 0, 0],
   ["l_model", "M375,160 L608,160", 0, "audio, words", 495, 154],
   ["l_stt", "M375,180 L608,236", 0, "", 0, 0],
-  ["l_sw", "M245,282 L245,330", 0, "/metrics", 252, 310],
-  ["l_sr", "M215,80 L215,104 L150,104 L150,357 L170,357", 1, "turned away, 30 s", 80, 300],
+  ["l_sw", "M385,282 L385,306 L235,306 L235,330", 0, "Prometheus asks /metrics", 392, 296],
+  ["l_sr", "M215,80 L215,104 L150,104 L150,357 L170,357", 1, "router /metrics, 15 s", 78, 300],
   ["l_p2a", "M300,357 L325,357", 0, "", 0, 0],
   ["l_a2h", "M455,357 L480,357", 0, "", 0, 0],
   ["l_h2k", "M610,357 L635,357", 0, "", 0, 0],
@@ -210,6 +210,9 @@ NODES.forEach(([id, x, y, w, h, t, s, kind]) => {
   mk("text", { x: x + 9, y: y + 33, class: "s" }, g).textContent = s;
   nodeEl[id] = g;
 });
+textEl["l_sw"].setAttribute("text-anchor", "start");
+textEl["l_sw2"] = mk("text", { x: 392, y: 306, class: "lt", "text-anchor": "start" }, document.getElementById("links"));
+textEl["l_sw2"].textContent = "every 15 s: calls, cap, times";
 mk("text", { x: 400, y: 168, class: "gl" }, document.getElementById("links")).textContent = "× 8 to 72 copies of this pod";
 
 // every stage: title, from -> to, the text, nodes on, links on, (scaling down = orange nodes)
@@ -232,8 +235,8 @@ const STAGES = [
   { t: "6. What a worker asks the shared services", fl: "<b>Worker → Whisper</b>  the caller's audio   ·   <b>Worker ⇄ vLLM</b>  the question, the reply   ·   every turn",
     d: "Recognition and the model run on GPU servers shared by every worker, not inside the worker. If the model is overloaded, the quality governor answers some turns with shorter, code-written replies instead of waiting, and an alert fires when more than 20% of turns are answered that way.",
     nodes: ["worker", "gov", "model", "stt"], links: ["l_gov", "l_model", "l_stt"] },
-  { t: "7. Prometheus collects the numbers", fl: "<b>Workers → Prometheus</b>  calls in progress, call cap, answer times   ·   <b>Router → Prometheus</b>  callers turned away in the last 30 s",
-    d: "The workers cannot see the callers they refused, because those never reached a worker. The router counts every \"busy\" it answers, and that count is what makes the autoscaler react before callers pile up.",
+  { t: "7. Prometheus collects the numbers", fl: "<b>Prometheus asks every worker and the router for /metrics, every 15 s</b>   ·   the answer: calls in progress, call cap, answer times; from the router, callers turned away in the last 30 s",
+    d: "Nothing is sent to Prometheus: it pulls. Every 15 seconds it makes a plain web request to each pod's /metrics page and stores what comes back with a timestamp. The workers and the router do not know it exists. The workers cannot see the callers they refused, because those never reached a worker. The router counts every \"busy\" it answers, and that count is what makes the autoscaler react before callers pile up.",
     nodes: ["worker", "router", "prom"], links: ["l_sw", "l_sr"] },
   { t: "8. One number: the demand ratio", fl: "<b>Prometheus → Metrics adapter</b>  (calls in progress + callers turned away in 30 s) ÷ (the sum of all call caps)",
     d: "A ratio of 0.5 means half the calls the workers take right now are in use. A ratio of 1 or more means every worker is full and callers are being turned away. The caps shrink when replies get slow, so a slow worker makes the ratio rise even before it is full.",
@@ -258,7 +261,7 @@ function show() {
   const s = STAGES[stage];
   document.getElementById("stage").innerHTML = '<div class="h">' + s.t + '</div><div class="fl">' + s.fl + '</div><div>' + s.d + '</div>';
   for (const id in nodeEl) nodeEl[id].setAttribute("class", "nd" + (["model", "stt"].includes(id) ? " ext" : "") + (s.nodes.includes(id) ? " on" : "") + (s.warn && s.nodes.includes(id) ? " warn" : ""));
-  for (const id in linkEl) { const on = s.links.includes(id); linkEl[id].setAttribute("class", "lk" + (LINKS.find(l => l[0] === id)[2] ? " dash" : "") + (id === "l_k8s" && s.warn ? " warn" : "") + (on ? " on" : "")); if (textEl[id]) textEl[id].setAttribute("class", "lt" + (on ? " on" : "")); }
+  for (const id in linkEl) { const on = s.links.includes(id); linkEl[id].setAttribute("class", "lk" + (LINKS.find(l => l[0] === id)[2] ? " dash" : "") + (id === "l_k8s" && s.warn ? " warn" : "") + (on ? " on" : "")); if (textEl[id]) textEl[id].setAttribute("class", "lt" + (on ? " on" : "")); if (id === "l_sw") textEl["l_sw2"].setAttribute("class", "lt" + (on ? " on" : "")); }
   [...dotsEl.children].forEach((d, i) => d.className = i === stage ? "on" : "");
 }
 function next() { stage = (stage + 1) % STAGES.length; show(); restartTimer(); }
