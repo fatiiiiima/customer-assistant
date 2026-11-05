@@ -25,6 +25,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 
 from ..dialogue import templates as T
+from . import advice as AD
 from . import answers as A
 from . import guards
 from . import wording as W
@@ -242,19 +243,26 @@ _CALLER_VOICE = re.compile(r"\s*(?:tell me|show me|give me|send me|i want|i'd li
                            r"can (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive)|could (?:i|we) (?:see|get|have|book|hear|know|look|try|test|come|drive))\b", re.I)
 
 EXACT_TOOLS = ("prepare_booking", "confirm_booking", "check_slots", "cancel_draft", "handoff", "end_call", "booking_aside")
-TOOLS = ("search_cars", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
+TOOLS = ("search_cars", "advise", "browse_makes", "colours", "fix_booking", "which_car", "get_car", "best_of", "compare_cars", "check_slots", "prepare_booking", "confirm_booking", "cancel_draft", "my_bookings", "cancel_booking",
          "reschedule_booking", "showroom_info", "repeat", "handoff", "end_call", "none")
 
 DECIDE_SYSTEM = """You are the brain of Wazir, the phone assistant of AGMC, a used-car dealership. Read the conversation and choose the ONE next action for the
 customer's last message. Answer with ONLY the tool name, and for get_car, check_slots and prepare_booking the stock id of the car after it (like: get_car AG-101).
 
 search_cars      the customer wants to find cars or narrows a search (make, model, type, colour, budget, year, kilometres). "any budget" / "doesn't matter" / "show me" too.
+                 When they name a make or model, or a type of car (SUV, sedan), it is search_cars; when they describe a need, it is advise.
+advise           the customer describes what they need or use the car for, or asks what you recommend, WITHOUT naming a make or model: "I'm looking for a car", "something for the
+                 family", "something sporty", "good on fuel", "a long road trip", "what do you recommend?". Write advise and one need after it: family, sporty, economy,
+                 luxury, budget, trip, or any. Use the need they actually said: "I'm looking for a car" or "what do you recommend?" is advise any (they have not said what they
+                 need yet); "something for the family" is advise family; "something fast" is advise sporty; "good on fuel" is advise economy; "a long trip" is advise trip.
 get_car          a question about one specific car: price, kilometres, colour, gearbox, fuel, anything.
 check_slots      the customer asks which test-drive times are free.
 prepare_booking  the customer wants a test drive, or gives a booking detail (day, time, name or phone number).
 confirm_booking  the customer says yes to the read-back of the booking.
 cancel_draft     the customer says no or wants to change the booking details while a booking is being read back.
 compare_cars     the customer wants two cars compared ("which is better", "the difference between").
+best_of          the customer asks which car is the cheapest, newest, fastest, most economical or has the lowest kilometres, among the cars discussed or in the whole stock ("the
+                 cheapest one you have", "which is the fastest?").
 colours          the customer asks what colours the cars come in ("what colours do you have?", "what colours are they?").
 my_bookings      the customer asks what they have booked.
 cancel_booking   the customer wants to cancel a test drive they already booked.
@@ -290,17 +298,22 @@ Choosing the action:
 - wants to speak to a person: handoff
 - asks about one car (a detail, "is it ...", "tell me about it"): get_car <id> of that car
 - asks for cars by make, type, seats or budget, or for other or cheaper ones: search_cars
+- describes what they need or what the car is for, or asks what you recommend, without naming a make or model: advise <family|sporty|economy|luxury|budget|trip|any>
 - a greeting, thanks, small talk, or "maybe later": none
 The customer's words come from speech recognition and may be misspelled."""
 
 ONE_CALL_OTHERS = ("check_slots <id> (free test-drive times) | prepare_booking <id> (wants a test drive, or gives a day, time, name or phone) | "
                    "confirm_booking (yes to the booking read-back) | cancel_draft (no, or a change, during the read-back) | compare_cars | "
-                   "best_of (fastest, cheapest, best for ...) | colours | browse_makes | my_bookings | cancel_booking | reschedule_booking | "
+                   "best_of (fastest, cheapest, best for ...) | advise <family|sporty|economy|luxury|budget|trip|any> (a need, no car named) | colours | browse_makes | my_bookings | cancel_booking | reschedule_booking | "
                    "showroom_info (hours, address, contact) | repeat | handoff (wants a person) | end_call (goodbye)")
 _ACTION_LINE = re.compile(r"\s*(?:\*\*)?(?:READY[ \t]*:?[ \t]*)?ACTION[ \t]*:?[ \t]*(?:\*\*)?[ \t]*(?:READY\b[ \t]*:?[ \t]*(?:ACTION[ \t]*:?[ \t]*)?)?([a-z_]+)(?:[ \t]+([A-Za-z0-9-]*\d[A-Za-z0-9-]*))?[^\n]*", re.IGNORECASE)
 
 
-_WRITTEN_AHEAD = ("get_car", "search_cars", "prepare_booking", "check_slots", "end_call", "none")     # the lookups whose reply may be written before the decision is used: they change only the call's own state
+_WRITTEN_AHEAD = ("get_car", "search_cars", "advise", "prepare_booking", "check_slots", "end_call", "none")     # the lookups whose reply may be written before the decision is used: they change only the call's own state
+
+
+_OPEN_ASK = re.compile(r"\b(?:looking for (?:a|an|some) (?:car|vehicle)|(?:want|need) (?:a|an|some) (?:car|vehicle)|recommend|suggest|what (?:do|would) you (?:have|suggest|recommend)|something (?:for|good|nice|cheap|fast|sporty|big|small|reliable)|"
+                       r"best (?:for|car)|any ideas|not sure|help me (?:choose|pick|find|decide))\b")          # an open request for a car: the reply for `advise` is written ahead of the decision
 
 
 _OFFERED_MORE = re.compile(r"\b(?:the rest|keep listing|name the others|hear more about)\b")                 # the agent's last line offered to go on with a list
@@ -693,6 +706,8 @@ class AgentEngine:
         args = self._args_for(s, tool, decision.get("car_id"), tool_text) if tool in ("search_cars", "get_car", "check_slots", "prepare_booking") else {}
         if tool == "booking_aside":
             args = {"kind": decision.get("kind")}
+        if tool == "advise":
+            args = {"need": decision.get("need") or ""}
         if not mo and tool == "search_cars" and not args and s.shown and decision.get("via") != "rules" and not (ex.wants_listing(text) or ex.wants_others(text) or expected.nothing_in_particular(text)):
             tool = "none"                                           # nothing searchable in it ("Bravo!", "throttle"): speech-recognition noise, not a request to list again
         picked = ex.selection(text, s.shown) if decision.get("via") != "rules" and not mo else None      # code's own routing already looked at this
@@ -1482,6 +1497,9 @@ class AgentEngine:
         if raw.strip() in options:                                      # an exact listed answer: "get_car S1042", "search_cars"
             tool, _, car_id = raw.strip().partition(" ")
             return {"tool": tool, "car_id": car_id or None}
+        advised = re.match(r"\s*advise\b[ \t:]*(" + "|".join(AD.NEEDS) + r")?", raw, re.I)
+        if advised:                                                      # "advise family": the need is the word after the tool
+            return {"tool": "advise", "car_id": None, "need": (advised.group(1) or "").lower()}
         data = _json_from(raw)
         tool = data.get("tool") if data else None
         if tool is None:
@@ -1523,6 +1541,9 @@ class AgentEngine:
             wanted.append(("get_car", {"car_id": s.car}))
         if found.get("make") or ex.search_filters(text, self.svc.inventory.vocabulary()) or ex.wants_listing(text) or _CHEAPER.search(" ".join(words)):
             wanted.append(("search_cars", self._args_for(s, "search_cars", None, text)))
+        said = " ".join(words)
+        if not found.get("make") and (AD.need_from_words(said) != "any" or _OPEN_ASK.search(said)):
+            wanted.append(("advise", {}))                                        # a need or an open request: the suggestion is prepared too
         if more:
             joined = " ".join(words)
             if _BOOKING_CUE.search(joined) or parse_when(text, self.svc.clock(), self.svc.slots.tz(self.svc.cfg.branches[0].id)).found:
@@ -1756,9 +1777,10 @@ class AgentEngine:
                 "facts": [f"In stock by make: " + ", ".join(f"{names[mk]} {counts[mk]}" for mk in others)], "awaiting": True}
 
     def _t_best_of(self, s, args, text, dbg) -> dict:
-        pool = list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
+        whole = re.search(r"\b(?:you have|you got|in stock|overall|of all|all your|your (?:cars|stock|inventory|showroom|range|collection)|available|in the showroom|you sell|you offer)\b", " ".join(ex.tokens_of(text)))     # "the cheapest one you have": the stock, not the cars just read out
+        pool = [] if whole else list(s.shown) or ([self.svc.get_car(s.car)] if s.car else [])
         if not pool:                                                      # chosen from the stock, within what was asked for (29 Oct: "a family SUV under 100,000" got the Carnival, a van at 126,000)
-            asked = {**s.filters, **ex.search_filters(text, self.svc.inventory.vocabulary())}
+            asked = {**({} if whole else s.filters), **ex.search_filters(text, self.svc.inventory.vocabulary())}
             wanted = {k: v for k, v in asked.items() if k in SearchFilters.model_fields and v not in (None, "")}
             pool = [self.svc.get_car(c.stock_id) for c in self.svc.inventory.search(SearchFilters(**wanted), 200)]
             if not pool:
@@ -1774,6 +1796,30 @@ class AgentEngine:
             sentence = sentence.replace(" of these", " we have")
         s.car, s.state = winner.stock_id, State.ANSWERING
         return {"core": f"{sentence} Would you like to hear more about it?", "facts": [sentence], "awaiting": True}
+
+    def _t_advise(self, s, args, text, dbg) -> dict:
+        """The customer describes a need, not a car (5 Nov): suggest from the stock by the spec sheets' figures, or ask what they are after. The model says which need; the cars are
+        chosen by code (advice.py), so every figure the model may use is a recorded one."""
+        words = " ".join(ex.tokens_of(text))
+        earlier = [t for who, t in s.history[-6:] if who == "customer"]
+        need = AD.resolve_need(str(args.get("need") or "").lower(), words, earlier)
+        kept = {k: v for k, v in s.filters.items() if k in ("max_price", "min_price", "body_type", "fuel", "color") and v not in (None, "")}      # a price or a type still counts; the make they looked at before does not
+        pool = [c for c in self.svc.inventory.search(SearchFilters(**kept), 200)]
+        if s.filters and not pool:
+            pool = list(self.svc.inventory.search(SearchFilters(), 200))
+        cars = [self.svc.get_car(c.stock_id) for c in pool]
+        cars = [c for c in cars if c is not None and c.stock_id not in s.excluded] or [c for c in cars if c is not None]
+        details = self.svc.details_for(c.stock_id for c in cars)
+        picks = AD.shortlist(cars, details, need, 3)
+        if not picks:
+            return self._t_search_cars(s, {}, text, dbg)
+        lines = [AD.car_line(c, details.get(c.stock_id), self._spec_facts(c), AD.reason(need if need != "any" else AD.kind_of(c, details.get(c.stock_id)), c, details.get(c.stock_id))) for c in picks]
+        names = [T.short_name(c) for c in picks]
+        s.state, s.shown, s.car = State.ANSWERING, list(picks), None
+        if need == "any":
+            return {"core": f"What will you use the car for? For example, the {names[0]} is {picks[0].price:,} dirhams.", "facts": AD.facts_for(need, text, lines), "awaiting": True}
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or the " + names[-1]
+        return {"core": f"For that I'd look at the {listed}. Which one would you like to hear more about?", "facts": AD.facts_for(need, text, lines), "awaiting": True}
 
     def _t_none(self, s, args, text, dbg) -> dict:
         question = "What are you looking for today?" if not s.car and not s.shown else W.anything_else(s)
