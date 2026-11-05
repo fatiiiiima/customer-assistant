@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: how many callers at once?</title>
+<style>
+:root{--text:#1f1e1d;--muted:#5f5e5a;--bg:#ffffff;--panel:#f6f4ee;--line:rgba(31,30,29,.16);--ok:#1D9E75;--warn:#C98A12;--bad:#D85A30;--accent:#3b5bdb;--okbg:#e7f5ef;--warnbg:#fbf1da;--badbg:#fbe9e2}
+@media (prefers-color-scheme: dark){:root{--text:#f1efe8;--muted:#b4b2a9;--bg:#1f1e1d;--panel:#2c2c2a;--line:rgba(241,239,232,.18);--okbg:#17352b;--warnbg:#3a3015;--badbg:#3d2219}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.55;font-size:15px}
+main{max-width:900px;margin:0 auto;padding:28px 18px 48px}
+h1{font-size:26px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:18px;font-weight:600;margin:34px 0 8px;padding-top:10px;border-top:1px solid var(--line)}
+h3{font-size:15px;font-weight:600;margin:18px 0 6px}
+p{margin:6px 0}
+.sub{color:var(--muted);margin:0 0 18px}
+.box{background:var(--panel);border-radius:10px;padding:14px 16px;margin:14px 0}
+.box ul{margin:6px 0 0;padding-left:20px}.box li{margin:5px 0}
+.tw{overflow-x:auto;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:620px}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--muted);font-size:12.5px;background:var(--panel)}
+th:first-child,td:first-child{text-align:left}
+td.l{text-align:left}
+tr.ok td:last-child{background:var(--okbg)}tr.warn td:last-child{background:var(--warnbg)}tr.bad td:last-child{background:var(--badbg)}
+td.s{font-weight:600;text-align:left;white-space:nowrap}
+.ok .s{color:var(--ok)}.warn .s{color:var(--warn)}.bad .s{color:var(--bad)}
+.note{font-size:12.5px;color:var(--muted);margin-top:6px}
+.kv{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}
+.kv div{background:var(--panel);border-radius:10px;padding:10px 12px}
+.kv b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.kv span{font-size:12.5px;color:var(--muted)}
+figure{margin:12px 0}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:4px}
+svg text{fill:var(--text);font-size:11px}svg .m{fill:var(--muted)}
+ol,ul{padding-left:20px}li{margin:4px 0}
+.tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+@media (max-width:640px){.kv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{body{font-size:12px}main{padding:0}h2{break-after:avoid}table,figure,.box{break-inside:avoid}.tw{overflow:visible}table{min-width:0}}
+</style>
+</head>
+<body>
+<main>
+<h1>Voice agent: how many callers at once?</h1>
+<p class="sub">Load test results and capacity forecast for 100 to 200 callers. 3 November 2026.</p>
+
+<div class="box">
+<b>In short</b>
+<ul>
+<li><b>Measured:</b> on one laptop, with synthetic callers talking to the real voice server at the same time, the wait from the end of a sentence to the first sound stays at about 1 second for 1 to 8 callers (median 0.9 to 1.1 s, 90th percentile under 2 s), with no failed calls. At 12 callers the slow turns get slower; with 16 callers all speaking together it degrades (median 2.4 to 2.9 s).</li>
+<li><b>Why 16 fails:</b> the laptop runs out of CPU, and two shared services on it (the voice and the speech recogniser) each handle one request at a time. It is not a fault in the call-handling code: each call costs about the processor budget that the deployment plan assumes (3 to 4 cores for 16 calls).</li>
+<li><b>Forecast:</b> a simulation calibrated on these runs predicts that <b>100 callers</b> hold a median answer of 0.6 s (90th percentile 1.1 s) with 8 voice servers and 5 recognisers, and <b>200 callers</b> the same with 16 voice servers and 9 recognisers.</li>
+<li><b>Not yet done:</b> a real 100 to 200 caller test. It needs rented machines (about 18 processor cores of call handling per 100 callers, plus the voice and recogniser servers and separate machines to generate callers).</li>
+</ul>
+</div>
+
+<h2>1. What was measured, and what it does not show</h2>
+<p>Synthetic callers (three computer voices, five different conversations: searches, a comparison, a booking) speak through the real server the way the website does, with an open microphone. Each caller times, on its own side, how long after its last word the first sound comes back. The server runs the live settings: speech recogniser Qwen3-ASR, the model Nemotron on Amazon Bedrock, voice Pocket-TTS. Everything ran on one Apple M3 Pro laptop (12 cores) in Dubai, talking to Bedrock in the US.</p>
+<p class="note">Limits: the callers' audio is clean (real callers are noisier, so hearing will be worse), 16 is the highest level tried, and the laptop also hosts the speech and voice servers.</p>
+
+<h2>2. Table 1: wait as more callers talk at once (one laptop)</h2>
+<div class="tw"><table>
+<thead><tr><th>Callers at once</th><th>Turns</th><th>Failed calls</th><th>Median wait</th><th>90th percentile</th><th>Slowest</th><th>Over 2 s</th><th>Hearing (median)</th><th>Laptop CPU peak</th><th class="l" style="text-align:left">Verdict</th></tr></thead>
+<tbody>
+<tr class="ok"><td>1</td><td>12</td><td>0</td><td>1.11 s</td><td>1.62 s</td><td>2.36 s</td><td>8%</td><td>0.20 s</td><td>41%</td><td class="s">Holds</td></tr>
+<tr class="ok"><td>2</td><td>28</td><td>0</td><td>0.96 s</td><td>1.79 s</td><td>5.73 s</td><td>7%</td><td>0.21 s</td><td>33%</td><td class="s">Holds</td></tr>
+<tr class="ok"><td>4</td><td>50</td><td>0</td><td>0.92 s</td><td>1.40 s</td><td>2.75 s</td><td>2%</td><td>0.24 s</td><td>68%</td><td class="s">Holds</td></tr>
+<tr class="ok"><td>8</td><td>105</td><td>0</td><td>0.94 s</td><td>1.80 s</td><td>3.28 s</td><td>7%</td><td>0.28 s</td><td>93%</td><td class="s">Holds</td></tr>
+<tr class="warn"><td>12</td><td>71</td><td>0</td><td>1.18 s</td><td>2.24 s</td><td>9.02 s</td><td>15%</td><td>0.38 s</td><td>100%</td><td class="s">Slow tail</td></tr>
+<tr class="bad"><td>16, all speaking together</td><td>95</td><td>0</td><td>2.94 s</td><td>8.44 s</td><td>9.09 s</td><td>64%</td><td>0.93 s</td><td>100%</td><td class="s">Breaks</td></tr>
+<tr class="ok"><td>8, starting 5 s apart</td><td>53</td><td>0</td><td>0.88 s</td><td>1.74 s</td><td>2.61 s</td><td>6%</td><td>0.26 s</td><td>88%</td><td class="s">Holds</td></tr>
+<tr class="warn"><td>16, starting 5 s apart</td><td>101</td><td>0</td><td>1.01 s</td><td>2.12 s</td><td>3.63 s</td><td>13%</td><td>0.36 s</td><td>100%</td><td class="s">Strained</td></tr>
+</tbody></table></div>
+<p class="note">Wait = from the caller's last word to the first sound back. Medians of the turns at each level (levels 1 to 8 were run twice and pooled). "Hearing" is the speech recogniser's time. The 16-caller runs were also the ones where the share of sentences heard word for word fell from about 75% to between 30% and 51%, because the recogniser's queue passed its 3-second limit. Two workers behind the router gave the same picture: 8 callers 0.76 to 0.94 s median, 16 callers 2.4 s.</p>
+
+<figure>
+<svg viewBox="0 0 640 230" width="100%" role="img" aria-label="Median and 90th percentile wait by number of callers: flat near 1 and 1.8 seconds up to 8 callers, rising at 12, and 2.9 and 8.4 seconds at 16">
+<g transform="translate(46,10)">
+<line x1="0" y1="180" x2="560" y2="180" stroke="currentColor" opacity=".3"/>
+<g class="m"><text x="-8" y="184" text-anchor="end">0 s</text><text x="-8" y="140" text-anchor="end">2 s</text><text x="-8" y="96" text-anchor="end">4 s</text><text x="-8" y="52" text-anchor="end">6 s</text><text x="-8" y="8" text-anchor="end">8 s</text></g>
+<g stroke="currentColor" opacity=".12"><line x1="0" y1="136" x2="560" y2="136"/><line x1="0" y1="92" x2="560" y2="92"/><line x1="0" y1="48" x2="560" y2="48"/><line x1="0" y1="4" x2="560" y2="4"/></g>
+<line x1="0" y1="136" x2="560" y2="136" stroke="#D85A30" stroke-dasharray="4 3" opacity=".7"/>
+<!-- 22 px per second -->
+<g>
+<rect x="30" y="155.6" width="26" height="24.4" fill="#1D9E75"/><rect x="58" y="144.4" width="26" height="35.6" fill="#7F77DD"/><text x="57" y="196" text-anchor="middle">1</text>
+<rect x="120" y="158.9" width="26" height="21.1" fill="#1D9E75"/><rect x="148" y="140.6" width="26" height="39.4" fill="#7F77DD"/><text x="147" y="196" text-anchor="middle">2</text>
+<rect x="210" y="159.8" width="26" height="20.2" fill="#1D9E75"/><rect x="238" y="149.2" width="26" height="30.8" fill="#7F77DD"/><text x="237" y="196" text-anchor="middle">4</text>
+<rect x="300" y="159.3" width="26" height="20.7" fill="#1D9E75"/><rect x="328" y="140.4" width="26" height="39.6" fill="#7F77DD"/><text x="327" y="196" text-anchor="middle">8</text>
+<rect x="390" y="154" width="26" height="26" fill="#C98A12"/><rect x="418" y="130.7" width="26" height="49.3" fill="#C98A12" opacity=".65"/><text x="417" y="196" text-anchor="middle">12</text>
+<rect x="480" y="115.3" width="26" height="64.7" fill="#D85A30"/><rect x="508" y="0" width="26" height="180" fill="#D85A30" opacity=".6"/><text x="507" y="196" text-anchor="middle">16</text>
+</g>
+<text x="280" y="214" text-anchor="middle" class="m">callers at once</text>
+</g>
+</svg>
+<figcaption>Left bar: median wait. Right bar: 90th percentile (the 16-caller bar is cut at 8 s; it was 8.4 s). The dashed line is 2 seconds. Green and purple: holds; amber: slow tail; red: breaks.</figcaption>
+</figure>
+
+<h2>3. Why it breaks at 16 on this laptop: the limit is the machine, not the design</h2>
+<p>Which part of the system used the processor (cores of the laptop's 12), measured with 8 and 16 callers together:</p>
+<div class="tw"><table>
+<thead><tr><th>Part</th><th>8 callers: mean / peak</th><th>16 callers: mean / peak</th><th class="l" style="text-align:left">Note</th></tr></thead>
+<tbody>
+<tr><td>Call-handling worker</td><td>1.6 / 8.5</td><td><b>3.6</b> / 8.8</td><td class="l">About 0.2 core per call: the deployment plan budgets 3 to 4 cores for 16 calls, so the worker is as designed</td></tr>
+<tr><td>Voice server</td><td>0.7 / 1.8</td><td>0.9 / 1.8</td><td class="l">Makes one sentence at a time</td></tr>
+<tr><td>Speech recogniser</td><td>0.2 / 0.9</td><td>0.5 / 1.0</td><td class="l">Hears one clip at a time</td></tr>
+<tr><td>The test callers</td><td>0.1 / 0.7</td><td>0.1 / 0.6</td><td class="l">Negligible: they do not distort the result</td></tr>
+</tbody></table></div>
+<p>At 16 callers the voice server could not keep up (its wait grows with every caller queued behind another), so 69% of sentences fell back to a second, built-in voice, and the recogniser's queue made hearing take 0.9 s. In the deployment design these are shared services that are run as several copies; on this laptop there is one copy of each.</p>
+
+<h2>4. Table 2: what one copy of each shared service carries</h2>
+<p>Each service was driven alone with rising numbers of simultaneous requests. "Callers per copy" keeps a copy at 70% of its capacity (the rule the autoscaler uses) with one turn every 15 seconds per caller and the cost of a real turn, counted in the running server: 5.5 s of speech for the voice, 2.7 clips for the recogniser, 1.6 requests for the model.</p>
+<div class="tw"><table>
+<thead><tr><th>One copy of</th><th>What it does at its limit</th><th>Wait: 1 / 4 / 16 at once</th><th>Callers per copy</th><th>Copies for 100</th><th>Copies for 200</th></tr></thead>
+<tbody>
+<tr><td>Voice server (Pocket-TTS)</td><td>7 s of speech a second, one sentence at a time</td><td>0.07 / 1.4 / 7.1 s</td><td><b>13</b></td><td><b>8</b></td><td><b>16</b></td></tr>
+<tr><td>Speech recogniser (Qwen3-ASR, with the car names)</td><td>6 clips a second</td><td>0.15 / 0.66 / 2.7 s</td><td><b>23</b></td><td><b>5</b></td><td><b>9</b></td></tr>
+<tr><td>Speech recogniser (Parakeet, no car names)</td><td>23 clips a second</td><td>0.05 / 0.18 / 0.69 s</td><td>89</td><td>2</td><td>3</td></tr>
+<tr><td>The model (Nemotron on Amazon Bedrock)</td><td>59.6 requests a second reached, no limit found</td><td>0.54 s to first text at 1, 4, 16 and 48 at once</td><td>390 or more</td><td>one key</td><td>one key</td></tr>
+</tbody></table></div>
+<p class="note">Measured on the laptop's own copies; a GPU recogniser would batch requests and carry more. The model figure is over plain HTTP/1.1; over the HTTP/2 connection the call handler uses, about 1% of requests were dropped at 16 callers (none at 8 or fewer), which is being watched.</p>
+
+<h2>5. Table 3: simulation for 100 to 200 callers</h2>
+<p>A real 100 to 200 caller test needs machines this laptop is not. So the project's scale simulation (which runs the real router, call cap and quality governor against modelled servers) was given the measured speeds and per-turn costs above, then checked against the laptop's own results before being used for 100 and 200 callers.</p>
+<h3>Check against what was measured</h3>
+<div class="tw"><table>
+<thead><tr><th>Laptop, callers talking back to back</th><th>Simulated median / 90th percentile</th><th>Measured median / 90th percentile</th><th class="l" style="text-align:left">Agreement</th></tr></thead>
+<tbody>
+<tr class="ok"><td>8 callers</td><td>0.96 / 1.76 s</td><td>0.94 to 1.05 / 1.5 to 2.2 s</td><td class="s">Matches</td></tr>
+<tr class="warn"><td>16 callers</td><td>1.61 / 2.88 s</td><td>2.4 to 2.9 / 8.4 s</td><td class="s">Optimistic</td></tr>
+</tbody></table></div>
+<p class="note">The simulation matches at 8 callers and under-predicts how badly a machine fails once saturated (it does not model the processor being shared between the worker and the servers). So trust it where servers stay around 60% busy; the saturated rows below are lower bounds on the trouble.</p>
+<h3>Prediction</h3>
+<div class="tw"><table>
+<thead><tr><th>Scenario</th><th>Answer: median / 90th percentile</th><th>Over 2 s</th><th>Recogniser busy</th><th>Voice busy</th><th>Workers needed</th><th class="l" style="text-align:left">Verdict</th></tr></thead>
+<tbody>
+<tr class="bad"><td>100 callers: 1 voice server, 1 recogniser (as built)</td><td>36.9 / 38.5 s</td><td>100%</td><td>103%</td><td>97%</td><td>10</td><td class="s">Fails</td></tr>
+<tr class="bad"><td>100 callers: 4 voice servers, 2 recognisers</td><td>10.9 / 11.9 s</td><td>100%</td><td>97%</td><td>75%</td><td>13</td><td class="s">Fails</td></tr>
+<tr class="ok"><td><b>100 callers: 8 voice servers, 5 Qwen3 recognisers</b></td><td><b>0.57 / 1.08 s</b></td><td>0%</td><td>62%</td><td>61%</td><td>14</td><td class="s">Holds</td></tr>
+<tr class="ok"><td>100 callers: 8 voice servers, 2 Parakeet recognisers</td><td>0.41 / 0.95 s</td><td>0%</td><td>40%</td><td>61%</td><td>14</td><td class="s">Holds</td></tr>
+<tr class="bad"><td>200 callers: 8 voice servers, 5 recognisers (half of what is needed)</td><td>5.7 / 6.5 s</td><td>100%</td><td>94%</td><td>91%</td><td>30</td><td class="s">Fails</td></tr>
+<tr class="ok"><td><b>200 callers: 16 voice servers, 9 Qwen3 recognisers</b></td><td><b>0.54 / 1.06 s</b></td><td>0%</td><td>67%</td><td>59%</td><td>28</td><td class="s">Holds</td></tr>
+<tr class="ok"><td>200 callers: 16 voice servers, 3 Parakeet recognisers</td><td>0.40 / 0.93 s</td><td>0%</td><td>52%</td><td>60%</td><td>28</td><td class="s">Holds</td></tr>
+<tr class="warn"><td>200 callers, 20 voice servers, 9 recognisers, a surge to 300 at 5 minutes</td><td>0.87 / 2.43 s</td><td>19%</td><td>75%</td><td>53%</td><td>39</td><td class="s">Strained</td></tr>
+</tbody></table></div>
+<p class="note">"Answer" = from the end of the caller's speech to the answer starting. Callers ramp up over 90 seconds and take a turn about every 15 seconds. "Busy" = the share of time a server copy is working. A call-handling worker carries up to 16 calls and needs 3 to 4 processor cores; the autoscaler asks for more workers than 100 or 200 divided by 16 because it lowers each worker's limit as soon as answers pass 1 second.</p>
+<div class="box">
+<b>What the forecast says</b>
+<ul>
+<li>It is a cliff, not a slope: a server near 90% busy turns a 0.6 s answer into many seconds. Sizing keeps every shared service near 60%.</li>
+<li><b>100 callers:</b> about 14 workers (roughly 50 processor cores), 8 voice servers (about 16 cores) and 5 recognisers (or 2 faster ones without car-name hints). <b>200 callers:</b> about 28 workers, 16 voice servers and 9 recognisers (or 3).</li>
+<li>The model is not the limit: it kept the same 0.5 s to first text up to 48 requests at once.</li>
+<li>A sudden surge from 200 to 300 callers strains the plan until new workers start (about 45 seconds): 6% of callers would be turned away.</li>
+</ul>
+</div>
+
+<h2>6. What is needed for a real 100 to 200 caller test</h2>
+<ol>
+<li><b>Machines:</b> one large Linux machine (or several) for the call-handling workers, machines for the voice and recogniser servers, and separate small machines to generate the callers.</li>
+<li><b>A Linux recogniser server:</b> the two recognisers tested here run only on Apple chips. On cloud machines it would be a GPU server (for example the speech model on vLLM), whose accuracy and speed must be measured on recorded calls first.</li>
+<li><b>The voice servers behind one address:</b> not built yet.</li>
+<li><b>Amazon Bedrock's request quota</b> for this key (no limit was reached up to 60 requests a second).</li>
+<li><b>An approved budget</b> for the rented machines for a day or two.</li>
+</ol>
+
+<h2>7. Open points</h2>
+<ul>
+<li>Real callers are noisier than the synthetic ones: expect lower hearing accuracy and more recogniser retries than measured.</li>
+<li>When a voice server is too slow, a second, built-in voice speaks the sentence. It rescued the wait at 8 callers (25% of sentences) but is a different voice.</li>
+<li>The model connection drops about 1% of requests at 16 callers over HTTP/2; the call handler retries, but this needs watching at larger scale.</li>
+<li>The model runs on Amazon Bedrock in the US for development only (callers' words leave the company). The deployment plan uses the company's own GPU servers instead.</li>
+</ul>
+
+<p class="note" style="margin-top:28px">Method and raw figures: project notes docs/ARCH_REVIEW.md, sections 98 to 103 (load test, cluster run, processor use by part, capacity of one copy, cost of a turn, simulation). Test setup: Apple M3 Pro laptop, five conversations in three computer voices, caller timing measured on the caller's side, 3 November 2026.</p>
+</main>
+</body>
+</html>
